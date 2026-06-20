@@ -16,6 +16,8 @@ struct YoView: View {
     @State private var avatarItem: PhotosPickerItem? = nil
     @State private var isUploadingAvatar = false
     @State private var showLogoutConfirm = false
+    @State private var showDeleteConfirm = false
+    @State private var isDeletingAccount = false
 
     var body: some View {
         NavigationStack {
@@ -70,6 +72,46 @@ struct YoView: View {
 
                             tripsSection
                                 .padding(.top, Spacing.xl)
+
+                            // Zona de cuenta
+                            VStack(spacing: 12) {
+                                Button {
+                                    Haptic.light()
+                                    showLogoutConfirm = true
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                                        Text("Cerrar sesión")
+                                    }
+                                    .font(BT.callout)
+                                    .foregroundStyle(Color.inkMuted)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(Color.surface)
+                                    .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                                }
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    Haptic.medium()
+                                    showDeleteConfirm = true
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "trash")
+                                        Text("Eliminar mi cuenta")
+                                    }
+                                    .font(BT.callout)
+                                    .foregroundStyle(.red)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(Color.red.opacity(0.06))
+                                    .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                                    .overlay(RoundedRectangle(cornerRadius: Radius.md).stroke(Color.red.opacity(0.2), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, Spacing.edge)
+                            .padding(.top, Spacing.xl)
                         }
                         .padding(.bottom, 100)
                     }
@@ -87,6 +129,25 @@ struct YoView: View {
                 Button("Cancelar", role: .cancel) {}
             } message: {
                 Text("Tendrás que volver a verificar tu número de teléfono.")
+            }
+            .confirmationDialog("¿Eliminar tu cuenta?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+                Button("Eliminar cuenta permanentemente", role: .destructive) {
+                    Task { await deleteAccount() }
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("Se eliminarán todos tus datos personales. Esta acción no se puede deshacer.")
+            }
+            .overlay {
+                if isDeletingAccount {
+                    ZStack {
+                        Color.black.opacity(0.4).ignoresSafeArea()
+                        VStack(spacing: 16) {
+                            ProgressView().tint(.white)
+                            Text("Eliminando cuenta…").foregroundStyle(.white).font(BT.callout)
+                        }
+                    }
+                }
             }
             .task { await loadProfile() }
             .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
@@ -385,6 +446,18 @@ struct YoView: View {
     }
 
     // MARK: – Helpers
+
+    private func deleteAccount() async {
+        isDeletingAccount = true
+        defer { isDeletingAccount = false }
+        do {
+            try await APIClient.shared.deleteAccount()
+            AuthService.shared.signOut()
+            authState.isLoggedIn = false
+        } catch {
+            print("[YoView] deleteAccount error:", error.localizedDescription)
+        }
+    }
 
     private func saveBio() {
         guard let userId = AuthService.shared.userId else { return }

@@ -698,12 +698,18 @@ struct ConductStep: View {
                                     .foregroundStyle(Color.sand)
                             }
                         }
-                        (Text("He leído y acepto el ") +
-                         Text("código de conducta").foregroundColor(Color.sand).fontWeight(.semibold) +
-                         Text(" de Buddy."))
-                            .font(BT.callout)
-                            .foregroundStyle(Color.ink)
-                            .multilineTextAlignment(.leading)
+                        Group {
+                            Text("He leído y acepto los ") +
+                            Text("Términos y Condiciones").foregroundColor(Color.sand).fontWeight(.semibold) +
+                            Text(", la ") +
+                            Text("Política de Privacidad").foregroundColor(Color.sand).fontWeight(.semibold) +
+                            Text(" y el ") +
+                            Text("Código de Conducta").foregroundColor(Color.sand).fontWeight(.semibold) +
+                            Text(" de Buddy. Confirmo que tengo 18 años o más.")
+                        }
+                        .font(BT.callout)
+                        .foregroundStyle(Color.ink)
+                        .multilineTextAlignment(.leading)
                     }
                     .padding(Spacing.md)
                     .background(Color.surface)

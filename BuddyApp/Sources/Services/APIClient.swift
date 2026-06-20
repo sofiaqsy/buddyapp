@@ -291,6 +291,17 @@ final class APIClient {
         try await requestVoid(path: "/users/\(userId)", method: "PATCH", body: ["bio": bio])
     }
 
+    func deleteAccount() async throws {
+        try await requestVoid(path: "/users/me", method: "DELETE")
+    }
+
+    func reportUser(reportedUserId: String, reason: String, details: String? = nil, matchId: String? = nil) async throws {
+        var body: [String: Any] = ["reported_user_id": reportedUserId, "reason": reason]
+        if let d = details  { body["details"]  = d }
+        if let m = matchId  { body["match_id"] = m }
+        try await requestVoid(path: "/users/report", method: "POST", body: body)
+    }
+
     func uploadAvatar(userId: String, imageData: Data) async throws -> String {
         let path = "avatars/\(userId).jpg"
         let url = try await uploadToStorage(bucket: "memoir-photos", path: path, data: imageData)

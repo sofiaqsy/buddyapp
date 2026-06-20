@@ -392,6 +392,8 @@ struct BuddyChatView: View {
     @State private var pendingAudioLocalURL: URL? = nil
     /// Card de cierre de ciclo — dismissible si el usuario quiere seguir
     @State private var closeCardDismissed = false
+    @State private var showReportSheet    = false
+    @State private var reportSent         = false
     /// Sheet de feedback antes de cerrar apoyo
     @State private var showCloseSheet = false
     @State private var isSendingLocation = false
@@ -463,6 +465,12 @@ struct BuddyChatView: View {
                         } label: {
                             Label("Cerrar apoyo", systemImage: "checkmark.circle")
                         }
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        showReportSheet = true
+                    } label: {
+                        Label("Reportar usuario", systemImage: "flag")
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -571,6 +579,17 @@ struct BuddyChatView: View {
                 showCloseSheet = false
             }
         }
+        .sheet(isPresented: $showReportSheet) {
+            ReportUserSheet(
+                buddyName: buddyName,
+                matchId: match.id,
+                reportedUserId: match.buddy?.id ?? ""
+            ) {
+                showReportSheet = false
+                reportSent = true
+            }
+        }
+        .toast(isPresented: $reportSent, message: "Reporte enviado. Lo revisaremos pronto.")
         .task {
             matchStatus = match.status
             await loadMessages()
@@ -1529,6 +1548,152 @@ struct CloseCycleCard: View {
         .background(Color.sandLight.opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+    }
+}
+
+// MARK: – TOAST MODIFIER
+
+extension View {
+    func toast(isPresented: Binding<Bool>, message: String) -> some View {
+        self.overlay(alignment: .bottom) {
+            if isPresented.wrappedValue {
+                Text(message)
+                    .font(BT.callout)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.ink.opacity(0.9))
+                    .clipShape(Capsule())
+                    .padding(.bottom, 100)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            withAnimation { isPresented.wrappedValue = false }
+                        }
+                    }
+            }
+        }
+        .animation(.spring(response: 0.4), value: isPresented.wrappedValue)
+    }
+}
+
+// MARK: – REPORT USER SHEET
+
+struct ReportUserSheet: View {
+    let buddyName: String
+    let matchId: String
+    let reportedUserId: String
+    let onDone: () -> Void
+
+    @State private var selectedReason: String? = nil
+    @State private var details = ""
+    @State private var isSending = false
+    @Environment(\.dismiss) private var dismiss
+
+    private let reasons: [(String, String, String)] = [
+        ("harassment",            "Acoso o amenazas",             "exclamationmark.triangle"),
+        ("commercial_pressure",   "Presión comercial",            "dollarsign.circle"),
+        ("fake_profile",          "Perfil falso o suplantación",  "person.fill.questionmark"),
+        ("inappropriate_content", "Contenido inapropiado",        "eye.slash"),
+        ("safety_concern",        "Preocupación de seguridad",    "shield.slash"),
+        ("spam",                  "Spam o publicidad",            "envelope.badge"),
+        ("other",                 "Otro motivo",                  "ellipsis.circle"),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("¿Por qué reportas a \(buddyName)?")
+                        .font(BT.title2)
+                        .foregroundStyle(Color.ink)
+                        .padding(.top, 8)
+
+                    VStack(spacing: 8) {
+                        ForEach(reasons, id: \.0) { key, label, icon in
+                            Button {
+                                selectedReason = key
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: icon)
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(selectedReason == key ? Color.sand : Color.inkMuted)
+                                        .frame(width: 24)
+                                    Text(label)
+                                        .font(BT.callout)
+                                        .foregroundStyle(Color.ink)
+                                    Spacer()
+                                    if selectedReason == key {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(Color.sand)
+                                    }
+                                }
+                                .padding(14)
+                                .background(selectedReason == key ? Color.sand.opacity(0.08) : Color.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                                .overlay(RoundedRectangle(cornerRadius: Radius.md).stroke(
+                                    selectedReason == key ? Color.sand : Color.border, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Detalles adicionales (opcional)")
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                        TextField("Cuéntanos qué ocurrió…", text: $details, axis: .vertical)
+                            .font(BT.callout)
+                            .lineLimit(4, reservesSpace: true)
+                            .padding(12)
+                            .background(Color.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                            .overlay(RoundedRectangle(cornerRadius: Radius.md).stroke(Color.border, lineWidth: 1))
+                    }
+
+                    Text("Tu reporte es confidencial. El equipo de Buddy lo revisará en menos de 24 horas.")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                        .multilineTextAlignment(.leading)
+                }
+                .padding(.horizontal, Spacing.edge)
+            }
+            .background(Color.canvas)
+            .navigationTitle("Reportar usuario")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancelar") { dismiss() }
+                        .foregroundStyle(Color.inkMuted)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await sendReport() }
+                    } label: {
+                        if isSending {
+                            ProgressView().tint(Color.sand)
+                        } else {
+                            Text("Enviar").fontWeight(.semibold).foregroundStyle(Color.sand)
+                        }
+                    }
+                    .disabled(selectedReason == nil || isSending)
+                }
+            }
+        }
+    }
+
+    private func sendReport() async {
+        guard let reason = selectedReason else { return }
+        isSending = true
+        try? await APIClient.shared.reportUser(
+            reportedUserId: reportedUserId,
+            reason: reason,
+            details: details.isEmpty ? nil : details,
+            matchId: matchId
+        )
+        isSending = false
+        onDone()
     }
 }
 
