@@ -21,6 +21,9 @@ struct InicioView: View {
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva
+    @State private var isLoadingRecentHelp = false        // anti re-entrada
+    @State private var recentHelpDestId: String? = nil    // último destino cargado
+    @State private var recentHelpLoadedAt: Date? = nil    // throttle de refetch
     @State private var pendingNavToDetail = false
     @State private var hasLoaded = false
     @State private var skipNextRefresh = false
@@ -157,7 +160,7 @@ struct InicioView: View {
             }
             // Se cerró un apoyo → refresca "Comunidad Viva" + estado del trip
             .onReceive(NotificationCenter.default.publisher(for: .helpCompleted)) { _ in
-                Task { await loadRecentHelp(); await refreshTripState() }
+                Task { await loadRecentHelp(force: true); await refreshTripState() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { _ in
                 skipNextRefresh = true   // evita que .onAppear sobreescriba el estado
@@ -301,7 +304,7 @@ struct InicioView: View {
                 // ChatStore carga y calcula pendingReply reactivamente
                 await chatStore.load()
             }
-            await loadRecentHelp()
+            await loadRecentHelp(force: true)
         } catch { }
         isLoadingData = false
 
@@ -372,23 +375,36 @@ struct InicioView: View {
     }
 
     // MARK: Comunidad viva — ayudas recién terminadas en tu destino
-    private func loadRecentHelp() async {
+    /// - Parameter force: ignora el throttle (para pull-to-refresh / eventos reales)
+    private func loadRecentHelp(force: Bool = false) async {
         let journey = activeJourney ?? pendingJourney
         guard let journey else {
-            print("🔍 [ComunidadViva] no active or planning journey — section hidden")
-            recentHelp = []; return
+            recentHelp = []; recentHelpDestId = nil; return
         }
         guard let destId = journey.destination?.id ?? journey.destinationId else {
-            print("🔍 [ComunidadViva] journey '\(journey.id)' has no destinationId — section hidden")
-            recentHelp = []; return
+            recentHelp = []; recentHelpDestId = nil; return
         }
-        print("🔍 [ComunidadViva] fetching for destinationId=\(destId) (status=\(journey.status ?? "?"))")
+
+        // Anti re-entrada: una sola petición en vuelo a la vez
+        if isLoadingRecentHelp { return }
+
+        // Throttle: no refetchar el mismo destino en < 30 s (salvo force).
+        // Esto corta el loop de llamadas idénticas disparadas por re-renders.
+        if !force,
+           recentHelpDestId == destId,
+           let at = recentHelpLoadedAt,
+           Date().timeIntervalSince(at) < 30 {
+            return
+        }
+
+        isLoadingRecentHelp = true
+        defer { isLoadingRecentHelp = false }
         do {
             let result = try await APIClient.shared.fetchRecentHelp(destinationId: destId)
-            print("🔍 [ComunidadViva] received \(result.count) items")
             recentHelp = result
+            recentHelpDestId = destId
+            recentHelpLoadedAt = Date()
         } catch {
-            print("🔍 [ComunidadViva] fetch error: \(error)")
             recentHelp = []
         }
     }

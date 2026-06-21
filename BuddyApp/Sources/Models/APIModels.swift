@@ -196,6 +196,7 @@ struct APIRecentHelp: Decodable, Identifiable {
 }
 
 struct APIUserRef: Decodable {
+    let id: String?
     let fullName: String?
     let avatarUrl: String?
 }
@@ -238,6 +239,25 @@ struct APIBuddyProfile: Decodable {
     let ratingAvg: Double?
     let ratingCount: Int?
     let totalHelps: Int?
+    let destination: APIDestinationRef?
+}
+
+struct APIBuddyMe: Decodable {
+    let isBuddy: Bool
+    let profile: APIBuddyMeProfile?
+}
+
+struct APIBuddyMeProfile: Decodable {
+    let id: String
+    let isAvailable: Bool
+    let specialties: [String]?
+    let totalHelps: Int?
+    let ratingAvg: Double?
+    let ratingCount: Int?
+    let offersAccepted: Int?
+    let verificationStatus: String?
+    let destinationIds: [String]?
+    let activeZoneIds: [String]?
     let destination: APIDestinationRef?
 }
 

@@ -18,6 +18,10 @@ struct YoView: View {
     @State private var showLogoutConfirm = false
     @State private var showDeleteConfirm = false
     @State private var isDeletingAccount = false
+    @State private var buddyMe: APIBuddyMe? = nil
+    @State private var destinations: [APIDestination] = []
+    @State private var showBecomeBuddyConfirm = false
+    @State private var isBecomingBuddy = false
 
     var body: some View {
         NavigationStack {
@@ -30,7 +34,7 @@ struct YoView: View {
                 } else {
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 0) {
-                            // Apertura editorial — misma firma que Trips y Conexiones
+                            // Apertura editorial
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("TU PERFIL")
@@ -44,74 +48,58 @@ struct YoView: View {
                                     }
                                 }
                                 Spacer()
-                                Button {
-                                    Haptic.light()
-                                    showLogoutConfirm = true
+                                Menu {
+                                    Button {
+                                        Haptic.light()
+                                        showLogoutConfirm = true
+                                    } label: {
+                                        Label("Cerrar sesión", systemImage: "rectangle.portrait.and.arrow.right")
+                                    }
+                                    Button(role: .destructive) {
+                                        Haptic.medium()
+                                        showDeleteConfirm = true
+                                    } label: {
+                                        Label("Eliminar mi cuenta", systemImage: "trash")
+                                    }
                                 } label: {
-                                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                                    Image(systemName: "ellipsis")
                                         .font(.system(size: 16, weight: .regular))
                                         .foregroundStyle(Color.inkMuted)
                                         .frame(width: 36, height: 36)
                                         .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain)
                             }
                             .padding(.horizontal, Spacing.edge)
                             .padding(.top, Spacing.md)
 
+                            // 1 — Identidad
                             profileHeader
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.lg)
 
+                            // 2 — Bio
                             bioSection
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.md)
 
+                            // 3 — Colección (historia del viajero)
                             stickerSection
-                                .padding(.top, Spacing.md)
+                                .padding(.top, Spacing.xl)
 
                             tripsSection
                                 .padding(.top, Spacing.xl)
 
-                            // Zona de cuenta
-                            VStack(spacing: 12) {
-                                Button {
-                                    Haptic.light()
-                                    showLogoutConfirm = true
-                                } label: {
-                                    HStack {
-                                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                                        Text("Cerrar sesión")
-                                    }
-                                    .font(BT.callout)
-                                    .foregroundStyle(Color.inkMuted)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                                    .background(Color.surface)
-                                    .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                                }
-                                .buttonStyle(.plain)
+                            // 4 — Rol buddy: solo una fila de navegación
+                            buddyRow
+                                .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.xl)
 
-                                Button {
-                                    Haptic.medium()
-                                    showDeleteConfirm = true
-                                } label: {
-                                    HStack {
-                                        Image(systemName: "trash")
-                                        Text("Eliminar mi cuenta")
-                                    }
-                                    .font(BT.callout)
-                                    .foregroundStyle(.red)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                                    .background(Color.red.opacity(0.06))
-                                    .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                                    .overlay(RoundedRectangle(cornerRadius: Radius.md).stroke(Color.red.opacity(0.2), lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
+                            // 5 — CTA "Quiero ser Buddy" — solo si NO es buddy, al fondo, tenue
+                            if buddyMe?.isBuddy != true {
+                                becomeBuddyCTA
+                                    .padding(.horizontal, Spacing.edge)
+                                    .padding(.top, Spacing.lg)
                             }
-                            .padding(.horizontal, Spacing.edge)
-                            .padding(.top, Spacing.xl)
                         }
                         .padding(.bottom, 100)
                     }
@@ -138,6 +126,14 @@ struct YoView: View {
             } message: {
                 Text("Se eliminarán todos tus datos personales. Esta acción no se puede deshacer.")
             }
+            .confirmationDialog("¿Convertirte en Buddy?", isPresented: $showBecomeBuddyConfirm, titleVisibility: .visible) {
+                Button("Quiero ser Buddy") {
+                    Task { await becomeBuddy() }
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("Crearemos tu perfil de buddy y lo enviaremos a verificación. Podrás elegir tus zonas y en qué ayudas una vez aprobado.")
+            }
             .overlay {
                 if isDeletingAccount {
                     ZStack {
@@ -153,7 +149,6 @@ struct YoView: View {
             .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
                 Task { await loadProfile() }
             }
-            // El grid solo cambia cuando se publica un trip — no en cada visita
             .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
                 Task { await loadProfile() }
             }
@@ -296,6 +291,52 @@ struct YoView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    // MARK: – Buddy row (fila única de navegación — patrón Settings.app)
+
+    @ViewBuilder
+    private var buddyRow: some View {
+        if let bm = buddyMe, bm.isBuddy, let p = bm.profile {
+            // IS BUDDY — fila navegable hacia BuddyProfileView
+            NavigationLink {
+                BuddyProfileView(profile: p, destinations: destinations) { updated in
+                    buddyMe = updated
+                }
+            } label: {
+                BuddyNavRow(profile: p, destinations: destinations)
+            }
+            .buttonStyle(.plain)
+        }
+        // Si no es buddy no se muestra nada aquí — el CTA está al fondo
+    }
+
+    // MARK: – CTA "Quiero ser Buddy" — al fondo, sin competir con el perfil
+
+    private var becomeBuddyCTA: some View {
+        Button {
+            showBecomeBuddyConfirm = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "hands.sparkles")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.inkMuted)
+                Text("¿Quieres ayudar a viajeros?")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.inkMuted.opacity(0.5))
+            }
+            .padding(.vertical, Spacing.sm)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isBecomingBuddy)
+        .overlay(alignment: .top) {
+            Divider()
         }
     }
 
@@ -506,14 +547,43 @@ struct YoView: View {
         async let userTask     = try? APIClient.shared.fetchUser(id: userId)
         async let stickersTask = try? APIClient.shared.fetchUserStickers(userId: userId)
         async let journeysTask = try? APIClient.shared.fetchUserJourneys(userId: userId)
+        async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
+        async let destsTask    = try? APIClient.shared.fetchDestinations()
 
-        let (u, s, j) = await (userTask, stickersTask, journeysTask)
+        let (u, s, j, b, d) = await (userTask, stickersTask, journeysTask, buddyTask, destsTask)
         user     = u
         stickers = s ?? []
         journeys = (j ?? []).filter { $0.status == "completed" || $0.status == "published" }
+        buddyMe  = b
+        destinations = d ?? []
         isLoading = false
+
+        // Diagnóstico: ¿qué usuario y qué estado de buddy devolvió el backend?
+        print("👤 [YoView] userId=\(userId) name=\(u?.fullName ?? "nil")")
+        if let b {
+            print("🤝 [YoView] is_buddy=\(b.isBuddy) verification=\(b.profile?.verificationStatus ?? "nil") "
+                + "available=\(b.profile?.isAvailable.description ?? "nil") helps=\(b.profile?.totalHelps ?? 0)")
+        } else {
+            print("🤝 [YoView] /buddy/me devolvió nil (error de red o decode)")
+        }
         // Sync collected status onto map pins
         await routeStore.syncCollectedStickers(userStickers: stickers)
+    }
+
+    /// Crea el perfil de buddy del usuario y refresca la sección.
+    private func becomeBuddy() async {
+        guard !isBecomingBuddy else { return }
+        isBecomingBuddy = true
+        defer { isBecomingBuddy = false }
+        do {
+            let result = try await APIClient.shared.becomeBuddy()
+            await MainActor.run {
+                buddyMe = result
+                Haptic.success()
+            }
+        } catch {
+            await MainActor.run { Haptic.error() }
+        }
     }
 
     private func memberSinceLabel(date: Date) -> String {
@@ -652,3 +722,445 @@ struct TripGridCell: View {
         }
     }
 }
+
+// MARK: – BuddyNavRow (fila compacta en el perfil)
+
+private struct BuddyNavRow: View {
+    let profile: APIBuddyMeProfile
+    let destinations: [APIDestination]
+
+    @State private var resolvedZoneName: String? = nil
+
+    private var badgeLabel: String {
+        switch profile.verificationStatus {
+        case "approved": return "Verificado"
+        case "pending":  return "En revisión"
+        default:         return "Revisión"
+        }
+    }
+    private var badgeColor: Color {
+        switch profile.verificationStatus {
+        case "approved": return Color.teal
+        case "pending":  return Color(hex: "#D97706")
+        default:         return Color.inkMuted
+        }
+    }
+    private var sublabel: String {
+        var parts: [String] = []
+        if profile.verificationStatus == "approved" {
+            let n = profile.totalHelps ?? 0
+            parts.append(n == 1 ? "1 ayuda" : "\(n) ayudas")
+        } else {
+            parts.append("Verificaremos tu perfil pronto")
+        }
+        if let zone = resolvedZoneName { parts.append(zone) }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            // Ícono buddy
+            ZStack {
+                Circle()
+                    .fill(badgeColor.opacity(0.1))
+                    .frame(width: 40, height: 40)
+                Image(systemName: "hands.sparkles.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(badgeColor)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Perfil de Buddy")
+                    .font(BT.callout)
+                    .foregroundStyle(Color.ink)
+                Text(sublabel)
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            // Badge de estado
+            Text(badgeLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(badgeColor)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(badgeColor.opacity(0.1))
+                .clipShape(Capsule())
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.inkMuted.opacity(0.5))
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+        .onAppear { resolveZone() }
+    }
+
+    private func resolveZone() {
+        guard let id = profile.activeZoneIds?.first ?? profile.destinationIds?.first else { return }
+        if let local = destinations.first(where: { $0.id == id }) { resolvedZoneName = local.name; return }
+        if let dest = profile.destination, dest.id == id { resolvedZoneName = dest.name; return }
+        Task {
+            let dest = try? await APIClient.shared.fetchDestination(id: id)
+            await MainActor.run { resolvedZoneName = dest?.name }
+        }
+    }
+}
+
+// MARK: – BuddyStatusCard (legacy — reemplazada por BuddyNavRow + BuddyProfileView)
+
+private struct BuddyStatusCard: View {
+    let profile: APIBuddyMeProfile
+    let destinations: [APIDestination]  // lista inicial (puede estar vacía; el picker busca on-demand)
+    let onUpdated: (APIBuddyMe) -> Void
+
+    @State private var specialties: Set<String>
+    @State private var savingSpecs  = false
+    @State private var savingZone   = false
+    @State private var showZonePicker = false
+    // Nombre de la zona seleccionada (se resuelve al mostrar la card)
+    @State private var selectedZoneName: String? = nil
+
+    init(profile: APIBuddyMeProfile, destinations: [APIDestination], onUpdated: @escaping (APIBuddyMe) -> Void) {
+        self.profile      = profile
+        self.destinations = destinations
+        self.onUpdated    = onUpdated
+        _specialties = State(initialValue: Set(profile.specialties ?? []))
+    }
+
+    private static let specialtyOptions: [(key: String, label: String)] = [
+        ("transport", "Cómo llegar"), ("food", "Comer"),
+        ("translation", "Traducir"), ("activities", "Qué hacer"),
+        ("accommodation", "Alojamiento"), ("emergency", "Seguridad"),
+    ]
+
+    private var verificationColor: Color {
+        switch profile.verificationStatus {
+        case "approved": return Color.teal
+        case "pending":  return Color(hex: "#F59E0B")
+        default:         return Color.inkMuted
+        }
+    }
+    private var verificationLabel: String {
+        switch profile.verificationStatus {
+        case "approved": return "Buddy verificado"
+        case "pending":  return "Verificación pendiente"
+        default:         return "En revisión"
+        }
+    }
+    private var verificationIcon: String {
+        switch profile.verificationStatus {
+        case "approved": return "checkmark.seal.fill"
+        case "pending":  return "hourglass"
+        default:         return "shield"
+        }
+    }
+    private var statusSubtitle: String {
+        profile.verificationStatus == "pending"
+            ? "Revisaremos tu perfil pronto"
+            : "\(profile.totalHelps ?? 0) ayudas"
+    }
+
+    private var selectedZoneId: String? {
+        profile.activeZoneIds?.first ?? profile.destinationIds?.first
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            // ── Estado ──
+            HStack(spacing: 10) {
+                Image(systemName: verificationIcon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(verificationColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verificationLabel)
+                        .font(BT.headline)
+                        .foregroundStyle(verificationColor)
+                    Text(statusSubtitle)
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+            }
+            .padding(Spacing.md)
+            .background(verificationColor.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+
+            // ── En qué ayudas (especialidades editables) ──
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("EN QUÉ AYUDAS")
+                        .font(BT.eyebrow).tracking(1.5)
+                        .foregroundStyle(Color.inkMuted)
+                    if savingSpecs { ProgressView().controlSize(.small) }
+                }
+                FlowLayout(spacing: 6) {
+                    ForEach(BuddyStatusCard.specialtyOptions, id: \.key) { opt in
+                        let on = specialties.contains(opt.key)
+                        Button { toggleSpecialty(opt.key) } label: {
+                            Text(opt.label)
+                                .font(BT.caption1)
+                                .fontWeight(on ? .semibold : .regular)
+                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                .background(on ? Color.teal.opacity(0.12) : Color.surface)
+                                .foregroundStyle(on ? Color.teal : Color.inkMuted)
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(on ? Color.teal : Color.border, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            // ── Mi zona — botón que abre sheet de búsqueda ──
+            Button { showZonePicker = true } label: {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.teal.opacity(0.1))
+                            .frame(width: 34, height: 34)
+                        Image(systemName: "location.circle.fill")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Color.teal)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("MI ZONA")
+                            .font(BT.caption1).tracking(1)
+                            .foregroundStyle(Color.inkMuted)
+                        Text(selectedZoneName ?? "Elegir dónde operas")
+                            .font(BT.callout)
+                            .foregroundStyle(selectedZoneName == nil ? Color.inkMuted : Color.ink)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    if savingZone {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.border, lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(savingZone)
+            .sheet(isPresented: $showZonePicker) {
+                DestinationPickerSheet(selectedId: selectedZoneId) { picked in
+                    Task { await saveZone(picked.id, name: picked.name) }
+                }
+            }
+        }
+        .onAppear { resolveZoneName() }
+        .onChange(of: profile.activeZoneIds) { _, _ in resolveZoneName() }
+    }
+
+    // Intenta resolver el nombre desde la lista local; si no está, lo busca en la API.
+    private func resolveZoneName() {
+        guard let id = selectedZoneId else { selectedZoneName = nil; return }
+        if let local = destinations.first(where: { $0.id == id }) {
+            selectedZoneName = local.name; return
+        }
+        if let dest = profile.destination, dest.id == id {
+            selectedZoneName = dest.name; return
+        }
+        Task {
+            let dest = try? await APIClient.shared.fetchDestination(id: id)
+            await MainActor.run { selectedZoneName = dest?.name }
+        }
+    }
+
+    private func toggleSpecialty(_ key: String) {
+        Haptic.select()
+        let previous = specialties
+        if specialties.contains(key) { specialties.remove(key) } else { specialties.insert(key) }
+        Task { await saveSpecialties(revertTo: previous) }
+    }
+
+    private func saveSpecialties(revertTo previous: Set<String>) async {
+        savingSpecs = true
+        defer { savingSpecs = false }
+        do {
+            let updated = try await APIClient.shared.updateBuddyMe(specialties: Array(specialties))
+            onUpdated(updated)
+        } catch {
+            specialties = previous
+            Haptic.error()
+        }
+    }
+
+    private func saveZone(_ id: String, name: String) async {
+        savingZone = true
+        selectedZoneName = name  // optimistic
+        defer { savingZone = false }
+        do {
+            let updated = try await APIClient.shared.updateBuddyMe(destinationIds: [id], activeZoneIds: [id])
+            onUpdated(updated)
+            Haptic.success()
+        } catch {
+            resolveZoneName()  // revertir
+            Haptic.error()
+        }
+    }
+}
+
+// MARK: – DestinationPickerSheet
+
+struct DestinationPickerSheet: View {
+    let selectedId: String?
+    let onSelected: (APIDestination) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query    = ""
+    @State private var results  : [APIDestination] = []
+    @State private var total    = 0
+    @State private var isLoading = false
+    @State private var searchTask: Task<Void, Never>? = nil
+
+    private let pageSize = 20
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Barra de búsqueda
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(Color.inkMuted)
+                        .font(.system(size: 15))
+                    TextField("Buscar ciudad o destino…", text: $query)
+                        .font(BT.callout)
+                        .autocorrectionDisabled()
+                    if !query.isEmpty {
+                        Button { query = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.md)
+                .padding(.bottom, Spacing.sm)
+
+                Divider()
+
+                if isLoading && results.isEmpty {
+                    Spacer()
+                    ProgressView().tint(Color.inkMuted)
+                    Spacer()
+                } else if results.isEmpty {
+                    Spacer()
+                    VStack(spacing: Spacing.sm) {
+                        Image(systemName: "location.slash")
+                            .font(.system(size: 30, weight: .light))
+                            .foregroundStyle(Color.inkMuted)
+                        Text(query.isEmpty ? "Sin destinos disponibles" : "Sin resultados para \"\(query)\"")
+                            .font(BT.callout)
+                            .foregroundStyle(Color.inkMuted)
+                            .multilineTextAlignment(.center)
+                    }
+                    Spacer()
+                } else {
+                    List {
+                        ForEach(results) { dest in
+                            Button {
+                                onSelected(dest)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        Circle().fill(Color.teal.opacity(0.1)).frame(width: 36, height: 36)
+                                        Image(systemName: "location.circle.fill")
+                                            .font(.system(size: 16))
+                                            .foregroundStyle(Color.teal)
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(dest.name)
+                                            .font(BT.callout)
+                                            .foregroundStyle(Color.ink)
+                                        if dest.city != dest.name {
+                                            Text(dest.city)
+                                                .font(BT.caption1)
+                                                .foregroundStyle(Color.inkMuted)
+                                        }
+                                    }
+                                    Spacer()
+                                    if dest.id == selectedId {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(Color.teal)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            // Carga más al llegar al final
+                            .onAppear {
+                                if dest.id == results.last?.id && results.count < total {
+                                    loadMore()
+                                }
+                            }
+                        }
+                        if isLoading {
+                            HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+                                .listRowSeparator(.hidden)
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle("Elegir zona")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancelar") { dismiss() }
+                }
+            }
+        }
+        .onAppear { search() }
+        .onChange(of: query) { _, _ in scheduleSearch() }
+    }
+
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)  // debounce 300ms
+            guard !Task.isCancelled else { return }
+            await MainActor.run { search() }
+        }
+    }
+
+    private func search() {
+        Task {
+            isLoading = true
+            let (items, t) = (try? await APIClient.shared.searchDestinations(query: query, limit: pageSize, offset: 0)) ?? ([], 0)
+            results = items
+            total   = t
+            isLoading = false
+        }
+    }
+
+    private func loadMore() {
+        guard !isLoading, results.count < total else { return }
+        Task {
+            isLoading = true
+            let (items, t) = (try? await APIClient.shared.searchDestinations(query: query, limit: pageSize, offset: results.count)) ?? ([], total)
+            results.append(contentsOf: items)
+            total   = t
+            isLoading = false
+        }
+    }
+}
+
+

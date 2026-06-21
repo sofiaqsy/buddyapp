@@ -95,8 +95,24 @@ final class APIClient {
 
     // MARK: – Destinations
 
+    // Respuesta paginada del backend { items, total, limit, offset }
+    private struct DestinationsPage: Decodable {
+        let items: [APIDestination]
+        let total: Int
+    }
+
+    // Carga inicial: primeras 50 destinaciones (suficiente para pickers rápidos)
     func fetchDestinations() async throws -> [APIDestination] {
-        try await request(path: "/destinations")
+        let page: DestinationsPage = try await request(path: "/destinations?limit=50")
+        return page.items
+    }
+
+    // Búsqueda paginada — usada por el DestinationPickerSheet
+    func searchDestinations(query: String, limit: Int = 20, offset: Int = 0) async throws -> (items: [APIDestination], total: Int) {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let path = "/destinations?q=\(encoded)&limit=\(limit)&offset=\(offset)"
+        let page: DestinationsPage = try await request(path: path)
+        return (page.items, page.total)
     }
 
     func fetchDestination(id: String) async throws -> APIDestination {
@@ -267,6 +283,28 @@ final class APIClient {
 
     func fetchUser(id: String) async throws -> APIUser {
         try await request(path: "/users/\(id)")
+    }
+
+    func fetchBuddyMe() async throws -> APIBuddyMe {
+        try await request(path: "/buddy/me")
+    }
+
+    /// El usuario se convierte en buddy (crea su perfil en verificación).
+    func becomeBuddy() async throws -> APIBuddyMe {
+        try await request(path: "/buddy/me", method: "POST", body: [:])
+    }
+
+    /// Actualiza preferencias del buddy (especialidades y/o zona).
+    func updateBuddyMe(specialties: [String]? = nil,
+                       destinationIds: [String]? = nil,
+                       activeZoneIds: [String]? = nil,
+                       isAvailable: Bool? = nil) async throws -> APIBuddyMe {
+        var body: [String: Any] = [:]
+        if let specialties    { body["specialties"]     = specialties }
+        if let destinationIds { body["destination_ids"] = destinationIds }
+        if let activeZoneIds  { body["active_zone_ids"]  = activeZoneIds }
+        if let isAvailable    { body["is_available"]    = isAvailable }
+        return try await request(path: "/buddy/me", method: "PATCH", body: body)
     }
 
     func fetchUserStickers(userId: String) async throws -> [APIUserSticker] {

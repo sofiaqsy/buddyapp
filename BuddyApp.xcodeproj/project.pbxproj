@@ -51,6 +51,7 @@
 		F47B6C814587AC55947EA053 /* TripListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14058650597585CE747ECECB /* TripListView.swift */; };
 		F54F0D6BE451B311AD40C151 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84154B0F926E18D1C654A29F /* OnboardingView.swift */; };
 		F63B1229581DC121E84CE61A /* YoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B836978B401B0B9D6162E18 /* YoView.swift */; };
+		AA1B2C3D4E5F6A7B8C9D0E1F /* BuddyProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB2C3D4E5F6A7B8C9D0E1F2A /* BuddyProfileView.swift */; };
 		FA1D59F90452DED91CDBA41C /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 615406876C9A70F1BC6163BC /* APIModels.swift */; };
 		FC6B09C37551B5F75A60983D /* Place.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54CD87BE2DCFF144A757CB35 /* Place.swift */; };
 		FF2360DB68BACBA792C40FCC /* HostProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDF4715224A85FF8A7487615 /* HostProfile.swift */; };
@@ -79,6 +80,7 @@
 		615406876C9A70F1BC6163BC /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		670E157765E203EABD5FBA3A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6B836978B401B0B9D6162E18 /* YoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YoView.swift; sourceTree = "<group>"; };
+		BB2C3D4E5F6A7B8C9D0E1F2A /* BuddyProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuddyProfileView.swift; sourceTree = "<group>"; };
 		70667ADBB4611F842AC0CB15 /* CanvasViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CanvasViewModel.swift; sourceTree = "<group>"; };
 		7090B942F35EFCFB8E850B82 /* TripBookContainerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TripBookContainerView.swift; sourceTree = "<group>"; };
 		8183A716C5CBC6684963ADE4 /* MemoirPersistence.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MemoirPersistence.swift; sourceTree = "<group>"; };
@@ -207,6 +209,7 @@
 				14058650597585CE747ECECB /* TripListView.swift */,
 				FA7237947F0CFF86BB760D14 /* TripsView.swift */,
 				6B836978B401B0B9D6162E18 /* YoView.swift */,
+				BB2C3D4E5F6A7B8C9D0E1F2A /* BuddyProfileView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -366,6 +369,7 @@
 				F47B6C814587AC55947EA053 /* TripListView.swift in Sources */,
 				8BB04F916CB3FA0622651384 /* TripsView.swift in Sources */,
 				F63B1229581DC121E84CE61A /* YoView.swift in Sources */,
+				AA1B2C3D4E5F6A7B8C9D0E1F /* BuddyProfileView.swift in Sources */,
 				BE22F7579D75D31BC077A14D /* CollagePage.swift in Sources */,
 				8AAFD8633C1F1B064B73CD5C /* CollageItem.swift in Sources */,
 				E8B4382315209A7B4ABEEEBA /* PhotoEdgeShape.swift in Sources */,
