@@ -72,6 +72,9 @@ final class ChatStore: ObservableObject {
     @Published var offers: [APIBuddyOffer] = []
     @Published var totalUnread: Int = 0
     @Published var isLoading = false
+    /// Match cerrado por el buddy cuya encuesta el viajero aún no respondió.
+    /// Presentado globalmente (cualquier tab) por RootView en tiempo real.
+    @Published var pendingFeedbackMatch: APIMatch? = nil
     /// true tras la primera carga (con o sin resultados) — el spinner de
     /// pantalla completa solo se muestra antes de este punto
     @Published var hasLoadedOnce = false
@@ -198,6 +201,16 @@ final class ChatStore: ObservableObject {
                 recomputeBadge()
                 isLoading = false
                 hasLoadedOnce = true
+                // Encuesta pendiente: un apoyo donde YO era viajero quedó cerrado
+                // y no lo he calificado. Se presenta globalmente en tiempo real.
+                if pendingFeedbackMatch == nil,
+                   let pending = items.first(where: {
+                       $0.match.status == "completed" && !$0.isBuddyRole
+                           && !($0.match.feedbackSubmitted ?? false)
+                           && !FeedbackTracker.isSubmitted($0.match.id)
+                   }) {
+                    pendingFeedbackMatch = pending.match
+                }
             }
         } catch {
             await MainActor.run { isLoading = false; hasLoadedOnce = true }

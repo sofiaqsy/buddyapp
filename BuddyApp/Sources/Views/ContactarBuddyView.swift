@@ -31,8 +31,6 @@ struct ContactarBuddyView: View {
     @State private var sseMatchTask: Task<Void, Never>? = nil
     @State private var buddyCount: Int = 0
     @State private var activeRequestId: String? = nil   // solicitud en curso (para cancelarla)
-    /// Match cerrado por el buddy cuya encuesta el viajero aún no respondió.
-    @State private var pendingFeedbackMatch: APIMatch? = nil
 
     enum Phase: Equatable {
         case loading, selectCategory, searching, matched, error(String)
@@ -73,21 +71,6 @@ struct ContactarBuddyView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .pushNotificationTapped)) { _ in
             if phase == .searching { Task { await pollForMatch() } }
-        }
-        // Encuesta pendiente de un apoyo que cerró el buddy
-        .sheet(item: $pendingFeedbackMatch) { m in
-            let buddyName = m.buddy?.fullName?.components(separatedBy: " ").first?.lowercased() ?? "buddy"
-            CloseFeedbackSheet(buddyName: buddyName, buddyAvatarUrl: m.buddy?.avatarUrl) { feeling, pressure in
-                Task {
-                    try? await APIClient.shared.submitFeedback(matchId: m.id, feeling: feeling, commercialPressure: pressure)
-                    FeedbackTracker.markSubmitted(m.id)
-                    await MainActor.run { pendingFeedbackMatch = nil }
-                }
-            } onDismiss: {
-                // Aunque cierre sin responder, no bloqueamos pedir otro buddy.
-                FeedbackTracker.markSubmitted(m.id)
-                pendingFeedbackMatch = nil
-            }
         }
     }
 
@@ -140,16 +123,8 @@ struct ContactarBuddyView: View {
                 match = active; phase = .matched; return
             }
             print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
-            // Encuesta pendiente: el buddy cerró un apoyo y el viajero no respondió.
-            // Antes de dejarle pedir otro buddy, mostramos las dos preguntas.
-            if let pending = matches.first(where: {
-                $0.status == "completed" && $0.travelerId == userId
-                    && !($0.feedbackSubmitted ?? false)        // verdad del servidor
-                    && !FeedbackTracker.isSubmitted($0.id)      // optimista local
-            }) {
-                print("📝 [checkStatus] encuesta pendiente match=\(pending.id) → mostrando antes de permitir otro buddy")
-                pendingFeedbackMatch = pending
-            }
+            // La encuesta pendiente la presenta RootView globalmente (en cualquier
+            // tab y en tiempo real), así que aquí no hace falta detectarla.
             let destIdOpt: String? = journey.destination?.id ?? journey.destinationId
             guard let destId = destIdOpt else { phase = .selectCategory; return }
             let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
@@ -1094,6 +1069,11 @@ struct BuddyChatView: View {
             try? await APIClient.shared.submitFeedback(matchId: match.id, feeling: feeling, commercialPressure: pressure)
         }
         FeedbackTracker.markSubmitted(match.id)   // viajero ya respondió → no volver a preguntar
+        await MainActor.run {
+            if ChatStore.shared.pendingFeedbackMatch?.id == match.id {
+                ChatStore.shared.pendingFeedbackMatch = nil
+            }
+        }
         Haptic.success()
         Task { await ChatStore.shared.load() }
         NotificationCenter.default.post(name: .helpCompleted, object: nil)
@@ -1886,14 +1866,18 @@ struct CloseFeedbackSheet: View {
             .padding(.bottom, 20)
 
             Group {
-                Text("Antes de cerrar, ")
+                Text("Tu momento con ")
                     .font(BT.title2)
-                + Text("dos cosas.")
+                + Text(buddyName.capitalized)
                     .font(BT.title2)
                     .foregroundColor(Color.sand)
             }
             .multilineTextAlignment(.center)
-            .padding(.bottom, 28)
+            Text("Dos cosas rápidas antes de cerrar.")
+                .font(BT.footnote)
+                .foregroundStyle(Color.inkMuted)
+                .padding(.top, 4)
+                .padding(.bottom, 24)
 
             // Feeling question
             VStack(spacing: 14) {
@@ -1977,21 +1961,9 @@ struct CloseFeedbackSheet: View {
             Spacer(minLength: 20)
         }
         .padding(.horizontal, 24)
-        .onAppear { selectedFeeling = nil; selectedPressure = nil }
+        // Sin reset: mantenemos los valores preseleccionados (cómoda / nunca).
         .presentationDetents([.large])
         .presentationDragIndicator(.hidden)
-        .overlay(alignment: .topTrailing) {
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.ink)
-                    .frame(width: 32, height: 32)
-                    .background(Color.canvas)
-                    .clipShape(Circle())
-                    .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-            }
-            .padding(.top, 16)
-            .padding(.trailing, 20)
-        }
+        .interactiveDismissDisabled(true)   // encuesta obligatoria — sin escape
     }
 }

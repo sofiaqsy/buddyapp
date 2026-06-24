@@ -123,6 +123,21 @@ struct RootView: View {
                     .ignoresSafeArea()
             }
         }
+        // Encuesta de cierre — GLOBAL y en tiempo real: si el buddy cerró un
+        // apoyo, el viajero la responde sin importar en qué tab esté.
+        .sheet(item: $chatStore.pendingFeedbackMatch) { m in
+            let name = m.buddy?.fullName?.components(separatedBy: " ").first?.lowercased() ?? "tu buddy"
+            CloseFeedbackSheet(buddyName: name, buddyAvatarUrl: m.buddy?.avatarUrl) { feeling, pressure in
+                Task {
+                    try? await APIClient.shared.submitFeedback(matchId: m.id, feeling: feeling, commercialPressure: pressure)
+                    FeedbackTracker.markSubmitted(m.id)
+                    await MainActor.run { chatStore.pendingFeedbackMatch = nil }
+                }
+            } onDismiss: {
+                // Obligatoria: interactiveDismissDisabled evita el swipe; este
+                // closure no se usa, pero lo dejamos por compatibilidad.
+            }
+        }
     }
 }
 
