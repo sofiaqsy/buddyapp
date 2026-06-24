@@ -240,7 +240,7 @@ struct CategoryPickerView: View {
     }
 
     private let categories: [BuddyCategory] = [
-        .init(icon: "map",              label: "Llegar",      apiKey: "transport"),
+        .init(icon: "map",              label: "Cómo llegar", apiKey: "transport"),
         .init(icon: "cup.and.saucer",   label: "Comer",       apiKey: "food"),
         .init(icon: "bubble.left",      label: "Traducir",    apiKey: "translation"),
         .init(icon: "sparkles",         label: "Qué hacer",   apiKey: "activities"),
@@ -262,22 +262,18 @@ struct CategoryPickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Title
-            VStack(alignment: .leading, spacing: 4) {
-                Text("AYUDA DE UN BUDDY")
-                    .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
-                    .padding(.bottom, 4)
+            // Title — sin etiqueta redundante; el título ya explica la sección.
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 0) {
                     Text("¿En qué ").font(BT.title1).foregroundStyle(Color.ink)
                     Text("te ayudamos?").font(BT.displayLarge).foregroundStyle(Color.sand)
                 }
-                Text("Pregunta lo que sea — un buddy te responde en minutos.")
+                Text("Un local te responde en minutos.")
                     .font(BT.callout).foregroundStyle(Color.inkMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 4)
             }
             .padding(.horizontal, Spacing.edge)
-            .padding(.top, Spacing.lg)
+            .padding(.top, Spacing.md)
 
             Spacer().frame(height: Spacing.xl)
 
@@ -317,7 +313,7 @@ struct CategoryPickerView: View {
             Spacer().frame(height: Spacing.md)
 
             // Free text
-            TextField("O pregúntalo con tus palabras…", text: $customText, axis: .vertical)
+            TextField("Cuéntanos qué necesitas…", text: $customText, axis: .vertical)
                 .font(BT.callout).lineLimit(3).focused($fieldFocused)
                 .onChange(of: customText) { _, v in if !v.isEmpty { selected = nil } }
                 .padding(.horizontal, 16).padding(.vertical, 14)
@@ -337,7 +333,7 @@ struct CategoryPickerView: View {
                     let desc = customText.trimmingCharacters(in: .whitespaces)
                     Task { await onRequest(cat, desc.isEmpty ? nil : desc) }
                 } label: {
-                    Text("Hablar con un buddy")
+                    Text("Pedir ayuda")
                         .font(BT.headline).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .background(canRequest ? Color.teal : Color.teal.opacity(0.35))
@@ -345,9 +341,15 @@ struct CategoryPickerView: View {
                 }
                 .disabled(!canRequest)
 
-                HStack(spacing: 5) {
-                    Circle().fill(buddyCount > 0 ? Color.onlineGreen : Color.sand).frame(width: 6, height: 6)
-                    Text(availabilityText).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                VStack(spacing: 2) {
+                    HStack(spacing: 5) {
+                        Circle().fill(buddyCount > 0 ? Color.onlineGreen : Color.sand).frame(width: 6, height: 6)
+                        Text(availabilityText).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    }
+                    if buddyCount > 0 {
+                        Text("Suelen responder en pocos minutos")
+                            .font(BT.caption2).foregroundStyle(Color.inkMuted.opacity(0.7))
+                    }
                 }
             }
             .padding(.horizontal, Spacing.edge)
