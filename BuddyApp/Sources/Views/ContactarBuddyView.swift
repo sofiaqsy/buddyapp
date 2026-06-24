@@ -23,6 +23,10 @@ enum FeedbackTracker {
 struct ContactarBuddyView: View {
     let journey: APIJourney
     var preselectedCategory: String? = nil
+    /// Si viene seteado, se crea la solicitud de inmediato (la Home ya eligió
+    /// categoría/texto) → el usuario aterriza directo en "buscando", sin repetir
+    /// la pantalla de categorías.
+    var initialRequest: (category: String, description: String?)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .loading
@@ -42,7 +46,7 @@ struct ContactarBuddyView: View {
                 Color.canvas.ignoresSafeArea()
                 switch phase {
                 case .loading:        loadingView
-                case .selectCategory: CategoryPickerView(journey: journey, buddyCount: buddyCount, preselectedCategory: preselectedCategory, onRequest: handleRequest)
+                case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, onRequest: handleRequest)
                 case .searching:      SearchingView(buddyCount: buddyCount, onCancel: cancelSearch)
                 case .matched:        chatView
                 case .error(let m):   errorView(m)
@@ -132,6 +136,10 @@ struct ContactarBuddyView: View {
                 print("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) → searching")
                 activeRequestId = open.id
                 phase = .searching; startPolling(); startSSEMatch(requestId: open.id)
+            } else if let seed = initialRequest {
+                // La Home ya eligió → crear la solicitud directamente.
+                print("⚡️ [checkStatus] initialRequest=\(seed.category) → solicitando directo")
+                await handleRequest(category: seed.category, description: seed.description)
             } else {
                 print("📋 [checkStatus] sin match ni solicitud → mostrando selector de categoría")
                 phase = .selectCategory
@@ -215,9 +223,10 @@ struct ContactarBuddyView: View {
 
 // MARK: – CATEGORY PICKER
 
-private struct CategoryPickerView: View {
-    let journey: APIJourney
-    let buddyCount: Int
+// Reutilizable: el mismo composer del modal se embebe en la Home para iniciar
+// el flujo de ayuda sin pasos intermedios.
+struct CategoryPickerView: View {
+    var buddyCount: Int = 0
     var preselectedCategory: String? = nil
     let onRequest: (String, String?) async -> Void
 

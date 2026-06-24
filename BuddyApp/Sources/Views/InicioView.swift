@@ -11,6 +11,8 @@ struct InicioView: View {
     @State private var showContactSheet         = false
     @State private var showPendingContactSheet  = false
     @State private var isFindingBuddy           = false   // creando/reusando trip en background
+    @State private var homeBuddyCount           = 0       // buddies cerca, para el composer de la Home
+    @State private var homeHelpSeed: (category: String, description: String?)? = nil  // categoría elegida en Home
     /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
     @State private var locationPromptDestination: APIDestination? = nil
     @State private var dismissedPromptDestId: String? = nil   // "Ahora no" → no re-preguntar
@@ -88,16 +90,27 @@ struct InicioView: View {
                                 }
                             )
                         } else {
-                            VStack(alignment: .leading, spacing: Spacing.md) {
-                                // CTA principal — pedir ayuda sin crear un trip a mano.
-                                // El Trip se crea/reusa automáticamente al tocar.
-                                FindBuddyPrimaryCTA(
-                                    destinationName: nearestDestination?.city,
-                                    isLoading: isFindingBuddy
-                                ) {
-                                    Task { await findABuddy() }
+                            VStack(alignment: .leading, spacing: Spacing.lg) {
+                                // 1. Contexto — ubicación detectada (si la hay), sin pedir permiso.
+                                if let city = nearestDestination?.city {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "location.fill")
+                                            .font(.system(size: 10, weight: .semibold))
+                                        Text("ESTÁS EN \(city.uppercased())")
+                                            .font(BT.eyebrow).tracking(1.5)
+                                    }
+                                    .foregroundStyle(Color.sand)
                                 }
-                                // Registro manual (elegir destino/fecha) como alternativa.
+                                // 2. Ayuda — el composer ES la Home: "¿En qué te ayudamos?".
+                                // El Trip se crea/reusa automáticamente al enviar.
+                                CategoryPickerView(buddyCount: homeBuddyCount) { cat, desc in
+                                    await submitHelpFromHome(category: cat, description: desc)
+                                }
+                                .padding(.horizontal, -Spacing.edge)   // el composer maneja su propio margen
+                                .opacity(isFindingBuddy ? 0.5 : 1)
+                                .disabled(isFindingBuddy)
+
+                                // 5. Planear un viaje — secundario, opcional.
                                 RegisterCTACard(destinations: destinations) {
                                     navPath.append("register")
                                 }
@@ -213,9 +226,9 @@ struct InicioView: View {
                                             userInfo: ["tab": AppTab.inicio.rawValue])
             navPath.append("tripDetail")
         }
-        .sheet(isPresented: $showContactSheet) {
+        .sheet(isPresented: $showContactSheet, onDismiss: { homeHelpSeed = nil }) {
             if let journey = activeJourney {
-                ContactarBuddyView(journey: journey)
+                ContactarBuddyView(journey: journey, initialRequest: homeHelpSeed)
             }
         }
         .sheet(isPresented: $showPendingContactSheet) {
@@ -225,7 +238,10 @@ struct InicioView: View {
         }
         // GPS cambió y el destino detectado difiere del trip activo → prompt ligero.
         // NUNCA se crea un trip en silencio: solo si el usuario confirma.
-        .onChange(of: locationService.userLocation) { _, _ in evaluateLocationPrompt() }
+        .onChange(of: locationService.userLocation) { _, _ in
+            evaluateLocationPrompt()
+            Task { await refreshHomeBuddyCount() }
+        }
         .alert(
             locationPromptDestination.map { "Parece que estás en \($0.city)" } ?? "",
             isPresented: Binding(
@@ -295,6 +311,37 @@ struct InicioView: View {
         } catch {
             // Fallback seguro: registro manual si algo falla
             await MainActor.run { navPath.append("register") }
+        }
+    }
+
+    /// El usuario eligió categoría/texto DIRECTO en la Home → asegura el Trip y
+    /// abre el flujo de ayuda ya en "buscando" (sin repetir el selector).
+    private func submitHelpFromHome(category: String, description: String?) async {
+        guard let dest = nearestDestination else {
+            await MainActor.run { navPath.append("register") }   // sin GPS → registro manual
+            return
+        }
+        await MainActor.run { isFindingBuddy = true }
+        defer { Task { @MainActor in isFindingBuddy = false } }
+        do {
+            let journey = try await APIClient.shared.ensureActiveTrip(destinationId: dest.id)
+            await MainActor.run {
+                activeJourney  = journey
+                pendingJourney = nil
+                homeHelpSeed   = (category, description)
+                showContactSheet = true
+            }
+        } catch {
+            await MainActor.run { navPath.append("register") }
+        }
+    }
+
+    /// Cuenta de buddies cerca, para el composer de la Home.
+    private func refreshHomeBuddyCount() async {
+        guard activeJourney == nil, pendingJourney == nil,
+              let dest = nearestDestination else { return }
+        if let count = try? await APIClient.shared.fetchBuddyCount(destinationId: dest.id) {
+            await MainActor.run { homeBuddyCount = count }
         }
     }
 
@@ -405,6 +452,9 @@ struct InicioView: View {
         // Feed de trips publicados — con un reintento: un timeout puntual
         // no puede dejar la comunidad vacía en silencio
         await loadFeed()
+
+        // Buddies cerca para el composer de la Home (si no hay trip)
+        await refreshHomeBuddyCount()
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
