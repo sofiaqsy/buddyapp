@@ -796,12 +796,22 @@ struct FindBuddyPrimaryCTA: View {
     let onTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(destinationName == nil ? "¿Necesitas ayuda?" : "Estás en \(destinationName!)")
-                    .font(BT.title2)
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            VStack(alignment: .leading, spacing: 6) {
+                // Contexto: ubicación detectada (si la hay) — sin pedir permiso.
+                if let city = destinationName {
+                    HStack(spacing: 4) {
+                        Image(systemName: "location.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("ESTÁS EN \(city.uppercased())")
+                            .font(BT.eyebrow).tracking(1.5)
+                    }
+                    .foregroundStyle(Color.sand)
+                }
+                Text("¿Necesitas ayuda?")
+                    .font(BT.title1)
                     .foregroundStyle(Color.ink)
-                Text("Un buddy te responde en minutos.")
+                Text("Un buddy local te ayuda en minutos.")
                     .font(BT.callout)
                     .foregroundStyle(Color.inkMuted)
             }
@@ -824,62 +834,48 @@ struct FindBuddyPrimaryCTA: View {
             }
             .disabled(isLoading)
         }
-        .padding(Spacing.md)
+        .padding(Spacing.lg)
         .background(Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
     }
 }
 
+// Tarjeta SECUNDARIA: planear un viaje es opcional, no compite con pedir ayuda.
+// Fila compacta, plana (sin sombra), con acción terciaria.
 struct RegisterCTACard: View {
-    let destinations: [APIDestination]
+    let destinations: [APIDestination]   // conservado por compatibilidad
     let onTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-
-            // Headline
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Cuéntanos a dónde vas")
-                    .font(BT.title2)
-                    .foregroundStyle(Color.ink)
-                Text("y cuándo llegas.")
-                    .font(BT.displayMedium)
-                    .foregroundStyle(Color.sand)
-            }
-
-            // Body
-            Text("Un buddy estará listo para darte el primer apoyo desde el primer minuto de tu llegada.")
-                .font(BT.callout)
-                .foregroundStyle(Color.inkMuted)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // Destination photo cards
-            if !destinations.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(destinations) { dest in
-                            DestinationThumbCard(destination: dest)
-                        }
-                    }
-                    .padding(.horizontal, 1)
-                    .padding(.vertical, 2)
+        Button(action: { Haptic.light(); onTap() }) {
+            HStack(spacing: Spacing.md) {
+                ZStack {
+                    Circle().fill(Color.sandLight).frame(width: 40, height: 40)
+                    Image(systemName: "map")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.sand)
                 }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("¿Planeas un viaje?")
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                    Text("Regístralo y prepara tu llegada.")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted.opacity(0.5))
             }
-
-            // CTA button
-            Button(action: { Haptic.medium(); onTap() }) {
-                Label("Registrar trip", systemImage: "plus")
-                    .font(BT.footnoteBold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                    .background(Color.ink)
-                    .foregroundStyle(Color.inkInverse)
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, Spacing.md)
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+            .overlay(RoundedRectangle(cornerRadius: Radius.lg).stroke(Color.border, lineWidth: 1))
         }
-        .padding(Spacing.md)
-        .background(Color.surface)
+        .buttonStyle(.pressable)
     }
 }
 
