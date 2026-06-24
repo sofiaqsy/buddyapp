@@ -176,7 +176,13 @@ struct ContactarBuddyView: View {
             Task { try? await APIClient.shared.cancelHelpRequest(requestId: rid) }
             activeRequestId = nil
         }
-        phase = .selectCategory
+        // Si vino de la Home (sin pasar por el selector) → cerrar y volver al
+        // inicio. Si vino del selector → volver a elegir categoría.
+        if initialRequest != nil {
+            dismiss()
+        } else {
+            phase = .selectCategory
+        }
     }
 
     private func startPolling() {
