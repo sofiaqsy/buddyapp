@@ -250,7 +250,11 @@ struct ConexionesView: View {
 
                     VStack(spacing: Spacing.sm) {
                         ForEach(chatStore.offers) { offer in
-                            OfferCard(offer: offer) {
+                            OfferCard(offer: offer, onAccepted: { match in
+                                // Al aceptar → abrir el chat con el viajero
+                                let item = ChatStore.ConnectionItem(match: match, lastMessage: nil, unreadCount: 0)
+                                chatTarget = item
+                            }) {
                                 Task { await chatStore.load() }
                             }
                             .transition(.move(edge: .top).combined(with: .opacity))
@@ -356,6 +360,7 @@ struct ConexionesView: View {
 
 struct OfferCard: View {
     let offer: APIBuddyOffer
+    var onAccepted: (APIMatch) -> Void = { _ in }
     let onHandled: () -> Void
 
     @State private var isAccepting = false
@@ -487,8 +492,9 @@ struct OfferCard: View {
               let requestId = offer.helpRequest?.id else { return }
         isAccepting = true
         do {
-            _ = try await APIClient.shared.acceptRequest(requestId: requestId, buddyId: userId)
+            let match = try await APIClient.shared.acceptRequest(requestId: requestId, buddyId: userId)
             Haptic.success()
+            onAccepted(match)
             onHandled()
         } catch {
             Haptic.error()
