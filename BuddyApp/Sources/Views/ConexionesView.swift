@@ -70,6 +70,45 @@ final class ChatStore: ObservableObject {
     /// pantalla completa solo se muestra antes de este punto
     @Published var hasLoadedOnce = false
 
+    /// SSE global de ofertas — vive mientras el usuario está logueado, en
+    /// cualquier tab, para que el badge rojo de Conexiones sea en tiempo real.
+    private var offersSSETask: Task<Void, Never>? = nil
+
+    func startOffersSSE() {
+        stopOffersSSE()
+        guard let token = AuthService.shared.accessToken,
+              let url = URL(string: "\(APIClient.shared.baseURL)/matching/offers/stream") else { return }
+
+        offersSSETask = Task {
+            while !Task.isCancelled {
+                var request = URLRequest(url: url)
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.timeoutInterval = 600
+
+                guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    continue
+                }
+                do {
+                    for try await line in stream.lines {
+                        guard !Task.isCancelled else { break }
+                        if line.hasPrefix("event: offer") || line.hasPrefix("data:") {
+                            await load()
+                        }
+                    }
+                } catch { }
+                // Conexión cerrada → reintentar tras breve pausa
+                if !Task.isCancelled { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+            }
+        }
+    }
+
+    func stopOffersSSE() {
+        offersSSETask?.cancel()
+        offersSSETask = nil
+    }
+
     func load() async {
         guard let userId = AuthService.shared.userId else {
             // Sin sesión todavía: no dejar el spinner colgado para siempre
@@ -128,7 +167,6 @@ final class ChatStore: ObservableObject {
 struct ConexionesView: View {
     @EnvironmentObject var chatStore: ChatStore
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
-    @State private var sseTask: Task<Void, Never>? = nil
 
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["accepted","active"].contains($0.match.status) }
@@ -178,8 +216,6 @@ struct ConexionesView: View {
             .background(Color.canvas)
         }
         .task { await chatStore.load() }
-        .onAppear { startSSE() }
-        .onDisappear { stopSSE() }
         // Recarga ofertas en tiempo real cuando el matching elige a este buddy
         .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
             Task {
@@ -280,35 +316,6 @@ struct ConexionesView: View {
                 Text("· \(count)").font(BT.eyebrow).foregroundStyle(Color.inkMuted.opacity(0.7))
             }
         }
-    }
-
-    private func startSSE() {
-        stopSSE()
-        guard let token = AuthService.shared.accessToken,
-              let url = URL(string: "\(APIClient.shared.baseURL)/matching/offers/stream") else { return }
-
-        sseTask = Task {
-            var request = URLRequest(url: url)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-            request.timeoutInterval = 300
-
-            guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else { return }
-
-            do {
-                for try await line in stream.lines {
-                    guard !Task.isCancelled else { break }
-                    if line.hasPrefix("event: offer") || line.hasPrefix("data:") {
-                        await chatStore.load()
-                    }
-                }
-            } catch { }
-        }
-    }
-
-    private func stopSSE() {
-        sseTask?.cancel()
-        sseTask = nil
     }
 
     private var emptyState: some View {

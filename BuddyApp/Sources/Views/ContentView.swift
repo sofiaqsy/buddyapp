@@ -57,7 +57,12 @@ struct RootView: View {
         }
         .ignoresSafeArea(edges: .bottom)
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await chatStore.load() } }
+            if phase == .active {
+                Task { await chatStore.load() }
+                chatStore.startOffersSSE()
+            } else if phase == .background {
+                chatStore.stopOffersSSE()
+            }
         }
         .onChange(of: selectedTab) { _, tab in
             if tab == .conexiones { Task { await chatStore.load() } }
@@ -85,6 +90,9 @@ struct RootView: View {
         .onAppear {
             // Remove native tab bar — replaced by GlassTabBar
             UITabBar.appearance().isHidden = true
+
+            // SSE global de ofertas → badge rojo en tiempo real en cualquier tab
+            chatStore.startOffersSSE()
 
             locationService.requestPermission()
             locationService.onRegionEnter = { id in
