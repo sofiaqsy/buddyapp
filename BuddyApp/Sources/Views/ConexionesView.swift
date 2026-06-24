@@ -247,6 +247,15 @@ final class ChatStore: ObservableObject {
             .filter { Self.activeStatuses.contains($0.match.status) && $0.pendingReply }
             .count + offers.count
     }
+
+    /// No leídos SOLO del rol viajero (me están ayudando). Para el botón
+    /// "contactar a mi buddy" en Tu trip — no debe contar ofertas/chats donde
+    /// YO soy el buddy ayudando a otros.
+    var travelerUnread: Int {
+        connections
+            .filter { !$0.isBuddyRole && Self.activeStatuses.contains($0.match.status) && $0.pendingReply }
+            .count
+    }
 }
 
 // MARK: – CONEXIONES VIEW
@@ -257,6 +266,14 @@ struct ConexionesView: View {
 
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["pending","accepted","active"].contains($0.match.status) }
+    }
+    /// Activos donde YO soy el buddy (estoy ayudando) → Acompañamiento abierto
+    private var activeAsBuddy: [ChatStore.ConnectionItem] {
+        active.filter { $0.isBuddyRole }
+    }
+    /// Activos donde YO soy el viajero (me ayudan) → Vínculo abierto
+    private var activeAsTraveler: [ChatStore.ConnectionItem] {
+        active.filter { !$0.isBuddyRole }
     }
     private var past: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { $0.match.status == "completed" }
@@ -350,25 +367,14 @@ struct ConexionesView: View {
                     .padding(.horizontal, Spacing.edge)
                 }
 
-                // VÍNCULO ABIERTO — la persona que te ayuda ahora: tarjeta cálida y viva
-                if !active.isEmpty {
-                    listHeader("VÍNCULO ABIERTO", count: active.count > 1 ? active.count : 0, color: Color.teal)
-                        .padding(.horizontal, Spacing.edge)
-                        .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
+                // ACOMPAÑAMIENTO ABIERTO — viajeros a los que YO ayudo ahora
+                if !activeAsBuddy.isEmpty {
+                    activeSection("ACOMPAÑAMIENTO ABIERTO", items: activeAsBuddy, color: Color(hex: "#2B8A7A"))
+                }
 
-                    VStack(spacing: Spacing.md) {
-                        ForEach(active) { item in
-                            Button { chatTarget = item } label: {
-                                ConnectionRow(item: item, isActive: true)
-                                    .padding(Spacing.md)
-                                    .background(Color.surface)
-                                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-                                    .cardShadow()
-                            }
-                            .buttonStyle(.pressable)
-                        }
-                    }
-                    .padding(.horizontal, Spacing.edge)
+                // VÍNCULO ABIERTO — la persona que ME ayuda ahora
+                if !activeAsTraveler.isEmpty {
+                    activeSection("VÍNCULO ABIERTO", items: activeAsTraveler, color: Color.teal)
                 }
 
                 // ENCUENTROS ANTERIORES — recuerdos: filas planas, quietas, sin cajas
@@ -397,6 +403,27 @@ struct ConexionesView: View {
         }
         .background(Color.canvas)
         .refreshable { await chatStore.load() }
+    }
+
+    @ViewBuilder
+    private func activeSection(_ title: String, items: [ChatStore.ConnectionItem], color: Color) -> some View {
+        listHeader(title, count: items.count > 1 ? items.count : 0, color: color)
+            .padding(.horizontal, Spacing.edge)
+            .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
+
+        VStack(spacing: Spacing.md) {
+            ForEach(items) { item in
+                Button { chatTarget = item } label: {
+                    ConnectionRow(item: item, isActive: true)
+                        .padding(Spacing.md)
+                        .background(Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                        .cardShadow()
+                }
+                .buttonStyle(.pressable)
+            }
+        }
+        .padding(.horizontal, Spacing.edge)
     }
 
     @ViewBuilder

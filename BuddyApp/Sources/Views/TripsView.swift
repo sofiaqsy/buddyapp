@@ -342,7 +342,7 @@ struct TripFeedCard: View {
                                 .font(.system(size: 14, weight: .medium)).foregroundStyle(Color.teal)
                         }
                         .overlay(alignment: .topTrailing) {
-                            let count = chatStore.totalUnread
+                            let count = chatStore.travelerUnread
                             if count > 0 {
                                 Text("\(min(count, 99))")
                                     .font(.system(size: 10, weight: .bold))
@@ -716,7 +716,7 @@ struct PlanningHubCard: View {
                                     .foregroundStyle(.white)
                             }
                             .overlay(alignment: .topTrailing) {
-                                let count = chatStore.totalUnread
+                                let count = chatStore.travelerUnread
                                 if count > 0 {
                                     Text("\(min(count, 99))")
                                         .font(.system(size: 11, weight: .bold))
