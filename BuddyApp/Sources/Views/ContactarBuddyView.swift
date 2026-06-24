@@ -94,20 +94,28 @@ struct ContactarBuddyView: View {
         guard let userId = AuthService.shared.userId else { phase = .error("Sin sesión."); return }
         do {
             let matches = try await APIClient.shared.fetchMatches(userId: userId)
+            print("🔎 [checkStatus] userId=\(userId) — \(matches.count) match(es) recibidos")
+            for m in matches {
+                print("   • match id=\(m.id) status=\(m.status ?? "nil") travelerId=\(m.travelerId) buddyId=\(m.buddyId ?? "nil")")
+            }
             // 'pending' = buddy recién asignado (el backend crea el match así).
             // Si ya hay un buddy vinculado, abrimos ESE chat en vez de permitir
             // pedir otro buddy.
             let activeStatuses = ["pending", "accepted", "active"]
             if let active = matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
+                print("✅ [checkStatus] match activo encontrado id=\(active.id) status=\(active.status ?? "nil") → abriendo chat")
                 match = active; phase = .matched; return
             }
+            print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
             let destIdOpt: String? = journey.destination?.id ?? journey.destinationId
             guard let destId = destIdOpt else { phase = .selectCategory; return }
             let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
             if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
+                print("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) → searching")
                 activeRequestId = open.id
                 phase = .searching; startPolling(); startSSEMatch(requestId: open.id)
             } else {
+                print("📋 [checkStatus] sin match ni solicitud → mostrando selector de categoría")
                 phase = .selectCategory
             }
         } catch { phase = .error(error.localizedDescription) }
