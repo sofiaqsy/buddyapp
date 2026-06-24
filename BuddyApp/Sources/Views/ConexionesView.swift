@@ -656,10 +656,7 @@ struct ConnectionRow: View {
 
                 HStack(alignment: .center, spacing: 4) {
                     if item.lastMessage != nil && item.isLastFromMe {
-                        // Mensaje propio → doble check + "Tú:" estilo WhatsApp
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color.teal)
+                        // Mensaje propio → "Tú:" estilo WhatsApp
                         Text("Tú:")
                             .font(BT.footnote)
                             .foregroundStyle(Color.inkMuted.opacity(0.8))
