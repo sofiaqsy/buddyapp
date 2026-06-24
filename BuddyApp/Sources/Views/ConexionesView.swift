@@ -295,12 +295,14 @@ struct ConexionesView: View {
 
             guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else { return }
 
-            for try await line in stream.lines {
-                guard !Task.isCancelled else { break }
-                if line.hasPrefix("event: offer") || line.hasPrefix("data:") {
-                    await chatStore.load()
+            do {
+                for try await line in stream.lines {
+                    guard !Task.isCancelled else { break }
+                    if line.hasPrefix("event: offer") || line.hasPrefix("data:") {
+                        await chatStore.load()
+                    }
                 }
-            }
+            } catch { }
         }
     }
 
