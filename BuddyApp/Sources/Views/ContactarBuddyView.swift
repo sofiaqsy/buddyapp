@@ -556,7 +556,9 @@ struct BuddyChatView: View {
             .overlay(alignment: .bottom) { Divider() }
 
             // ── Dedicated banner ─────────────────────────────────────
-            Text("\(buddyName) está dedicado solo a ti. Cierra el ciclo cuando termines para que pueda ayudar a otro viajero.")
+            Text(isCurrentUserBuddy
+                 ? "Estás acompañando a \(buddyName). Respóndele con calma; cuando todo esté resuelto, cierra el apoyo."
+                 : "\(buddyName) está dedicado solo a ti. Cierra el ciclo cuando termines para que pueda ayudar a otro viajero.")
                 .font(BT.caption1)
                 .foregroundStyle(Color.inkMuted)
                 .fixedSize(horizontal: false, vertical: true)
