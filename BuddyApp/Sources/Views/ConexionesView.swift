@@ -78,20 +78,42 @@ final class ChatStore: ObservableObject {
 
     func startEventStream() {
         stopEventStream()
-        guard let token = AuthService.shared.accessToken,
-              let url = URL(string: "\(APIClient.shared.baseURL)/stream") else { return }
+        guard let url = URL(string: "\(APIClient.shared.baseURL)/stream") else { return }
 
         eventStreamTask = Task {
+            var attempt = 0
             while !Task.isCancelled {
+                // Token fresco en CADA intento — evita el bucle de 401 con un
+                // access token expirado en sesiones largas.
+                guard let token = AuthService.shared.accessToken else {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000); continue
+                }
                 var request = URLRequest(url: url)
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                 request.timeoutInterval = 600
 
-                guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else {
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let (stream, response) = try? await URLSession.shared.bytes(for: request) else {
+                    await backoff(&attempt)
                     continue
                 }
+                // 401 → token expirado: refrescar y reintentar sin contar como fallo
+                if let http = response as? HTTPURLResponse, http.statusCode == 401 {
+                    _ = await AuthService.shared.tryRefresh()
+                    await backoff(&attempt)
+                    continue
+                }
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    await backoff(&attempt)
+                    continue
+                }
+
+                // ── Reconexión exitosa: reconciliar estado ──
+                // Cualquier evento perdido durante el gap se recupera con una
+                // recarga completa (matches + inbox + ofertas).
+                attempt = 0
+                await load()
+
                 var currentEvent = ""
                 do {
                     for try await line in stream.lines {
@@ -118,10 +140,20 @@ final class ChatStore: ObservableObject {
                         }
                     }
                 } catch { }
-                // Conexión cerrada → reintentar tras breve pausa
-                if !Task.isCancelled { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+                // Conexión cerrada → reintentar con backoff
+                await backoff(&attempt)
             }
         }
+    }
+
+    /// Backoff exponencial con tope y jitter — evita thundering herd cuando un
+    /// reinicio de dyno desconecta a todos los clientes a la vez.
+    private func backoff(_ attempt: inout Int) async {
+        guard !Task.isCancelled else { return }
+        attempt += 1
+        let capped = min(Double(attempt) * 2.0, 20.0)          // 2,4,6…20s tope
+        let jitter = Double.random(in: 0...1.5)
+        try? await Task.sleep(nanoseconds: UInt64((capped + jitter) * 1_000_000_000))
     }
 
     func stopEventStream() {
