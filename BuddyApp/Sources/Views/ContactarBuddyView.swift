@@ -21,12 +21,20 @@ enum FeedbackTracker {
 // MARK: – CONTACTAR BUDDY SHEET
 
 struct ContactarBuddyView: View {
-    let journey: APIJourney
+    /// Opcional: en el flujo de la Home aún NO existe un Trip (se crea recién
+    /// cuando un buddy acepta). Cuando hay Trip se pasa; si no, basta el destino.
+    var journey: APIJourney? = nil
+    var destinationId: String? = nil
     var preselectedCategory: String? = nil
     /// Si viene seteado, se crea la solicitud de inmediato (la Home ya eligió
     /// categoría/texto) → el usuario aterriza directo en "buscando", sin repetir
     /// la pantalla de categorías.
     var initialRequest: (category: String, description: String?)? = nil
+
+    /// Destino efectivo: del Trip si existe, o el pasado directamente.
+    private var resolvedDestinationId: String? {
+        journey?.destination?.id ?? journey?.destinationId ?? destinationId
+    }
 
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .loading
@@ -102,7 +110,7 @@ struct ContactarBuddyView: View {
     // MARK: Logic
 
     private func loadBuddyCount() async {
-        let destIdOpt: String? = journey.destination?.id ?? journey.destinationId
+        let destIdOpt: String? = resolvedDestinationId
         guard let destId = destIdOpt else { return }
         if let count = try? await APIClient.shared.fetchBuddyCount(destinationId: destId) {
             buddyCount = count
@@ -129,7 +137,7 @@ struct ContactarBuddyView: View {
             print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
             // La encuesta pendiente la presenta RootView globalmente (en cualquier
             // tab y en tiempo real), así que aquí no hace falta detectarla.
-            let destIdOpt: String? = journey.destination?.id ?? journey.destinationId
+            let destIdOpt: String? = resolvedDestinationId
             guard let destId = destIdOpt else { phase = .selectCategory; return }
             let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
             if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
@@ -149,13 +157,13 @@ struct ContactarBuddyView: View {
 
     func handleRequest(category: String, description: String?) async {
         guard let userId = AuthService.shared.userId else { return }
-        let destIdOpt2: String? = journey.destination?.id ?? journey.destinationId
+        let destIdOpt2: String? = resolvedDestinationId
         guard let destId = destIdOpt2 else { return }
         phase = .searching
         do {
             let req = try await APIClient.shared.createHelpRequest(
-                travelerId: userId, destinationId: destId, journeyId: journey.id,
-                category: category, description: description, arrivalAt: journey.arrivalAt)
+                travelerId: userId, destinationId: destId, journeyId: journey?.id,
+                category: category, description: description, arrivalAt: journey?.arrivalAt)
             activeRequestId = req.id
             startPolling(); startSSEMatch(requestId: req.id)
         } catch { phase = .error(error.localizedDescription) }
@@ -442,7 +450,7 @@ private struct SearchingView: View {
 
 struct BuddyChatView: View {
     let match: APIMatch
-    let journey: APIJourney
+    var journey: APIJourney? = nil
     var onDismiss: (() -> Void)? = nil
 
     @EnvironmentObject private var locationService: LocationService
@@ -964,7 +972,7 @@ struct BuddyChatView: View {
                 .font(BT.title3).foregroundStyle(Color.ink)
             Text(isCurrentUserBuddy
                  ? "Puedes ayudar a \(buddyName) con lo que necesite al llegar."
-                 : "Tu buddy te ayudará con todo en \(journey.destination?.name ?? "tu destino").")
+                 : "Tu buddy te ayudará con todo en \(journey?.destination?.name ?? "tu destino").")
                 .font(BT.callout).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
         }
         .padding(Spacing.edge)

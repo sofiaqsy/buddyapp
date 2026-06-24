@@ -15,6 +15,8 @@ struct InicioView: View {
     @State private var isFindingBuddy           = false   // creando/reusando trip en background
     @State private var homeBuddyCount           = 0       // buddies cerca, para el composer de la Home
     @State private var homeHelpSeed: (category: String, description: String?)? = nil  // categoría elegida en Home
+    @State private var homeHelpDestId: String?  = nil     // destino del flujo de ayuda sin trip
+    @State private var showHomeHelpSheet        = false
     /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
     @State private var locationPromptDestination: APIDestination? = nil
     @State private var dismissedPromptDestId: String? = nil   // "Ahora no" → no re-preguntar
@@ -212,9 +214,20 @@ struct InicioView: View {
                                             userInfo: ["tab": AppTab.inicio.rawValue])
             navPath.append("tripDetail")
         }
-        .sheet(isPresented: $showContactSheet, onDismiss: { homeHelpSeed = nil }) {
+        .sheet(isPresented: $showContactSheet) {
             if let journey = activeJourney {
-                ContactarBuddyView(journey: journey, initialRequest: homeHelpSeed)
+                ContactarBuddyView(journey: journey)
+            }
+        }
+        // Flujo de la Home SIN trip previo: se pide ayuda solo con el destino.
+        // El Trip se crea recién cuando un buddy ACEPTA (backend). Si se cancela
+        // y nadie acepta, no queda ningún trip huérfano.
+        .sheet(isPresented: $showHomeHelpSheet, onDismiss: {
+            homeHelpSeed = nil; homeHelpDestId = nil
+            Task { await refreshTripState() }   // si hubo match, el trip ya existe
+        }) {
+            if let destId = homeHelpDestId {
+                ContactarBuddyView(destinationId: destId, initialRequest: homeHelpSeed)
             }
         }
         .sheet(isPresented: $showPendingContactSheet) {
@@ -323,42 +336,27 @@ struct InicioView: View {
         await openHelp(forDestinationId: dest.id)
     }
 
-    /// Asegura el Trip para el destino y presenta el flujo de ayuda.
+    /// Abre el flujo de ayuda para un destino — SIN crear trip todavía.
+    /// El trip se crea recién cuando un buddy acepta.
     private func openHelp(forDestinationId destId: String) async {
-        await MainActor.run { isFindingBuddy = true }
-        defer { Task { @MainActor in isFindingBuddy = false } }
-        do {
-            let journey = try await APIClient.shared.ensureActiveTrip(destinationId: destId)
-            await MainActor.run {
-                activeJourney = journey
-                pendingJourney = nil
-                showContactSheet = true
-            }
-        } catch {
-            // Fallback seguro: registro manual si algo falla
-            await MainActor.run { navPath.append("register") }
+        await MainActor.run {
+            homeHelpDestId = destId
+            homeHelpSeed = nil
+            showHomeHelpSheet = true
         }
     }
 
-    /// El usuario eligió categoría/texto DIRECTO en la Home → asegura el Trip y
-    /// abre el flujo de ayuda ya en "buscando" (sin repetir el selector).
+    /// El usuario eligió categoría/texto DIRECTO en la Home → abre el flujo de
+    /// ayuda ya en "buscando" SIN crear trip (se crea al aceptar un buddy).
     private func submitHelpFromHome(category: String, description: String?) async {
         guard let dest = nearestDestination else {
             await MainActor.run { navPath.append("register") }   // sin GPS → registro manual
             return
         }
-        await MainActor.run { isFindingBuddy = true }
-        defer { Task { @MainActor in isFindingBuddy = false } }
-        do {
-            let journey = try await APIClient.shared.ensureActiveTrip(destinationId: dest.id)
-            await MainActor.run {
-                activeJourney  = journey
-                pendingJourney = nil
-                homeHelpSeed   = (category, description)
-                showContactSheet = true
-            }
-        } catch {
-            await MainActor.run { navPath.append("register") }
+        await MainActor.run {
+            homeHelpDestId = dest.id
+            homeHelpSeed   = (category, description)
+            showHomeHelpSheet = true
         }
     }
 
