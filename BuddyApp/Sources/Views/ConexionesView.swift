@@ -12,10 +12,21 @@ final class ChatStore: ObservableObject {
         let unreadCount: Int
         var id: String { match.id }
 
-        var buddyName: String {
-            match.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Buddy"
+        // When the current user is the buddy, the "other person" is the traveler
+        var isBuddyRole: Bool {
+            guard let userId = AuthService.shared.userId else { return false }
+            return match.buddyId == userId
         }
-        var buddyAvatarUrl: String? { match.buddy?.avatarUrl }
+
+        var buddyName: String {
+            if isBuddyRole {
+                return match.traveler?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Viajero"
+            }
+            return match.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Buddy"
+        }
+        var buddyAvatarUrl: String? {
+            isBuddyRole ? match.traveler?.avatarUrl : match.buddy?.avatarUrl
+        }
 
         /// El buddy respondió y el viajero aún no ha contestado
         var pendingReply: Bool {
@@ -52,6 +63,7 @@ final class ChatStore: ObservableObject {
     }
 
     @Published var connections: [ConnectionItem] = []
+    @Published var offers: [APIBuddyOffer] = []
     @Published var totalUnread: Int = 0
     @Published var isLoading = false
     /// true tras la primera carga (con o sin resultados) — el spinner de
@@ -87,13 +99,17 @@ final class ChatStore: ObservableObject {
                 let bDate = $1.lastMessage?.createdAt ?? $1.match.createdAt ?? .distantPast
                 return aDate > bDate
             }
+            // Load buddy offers in parallel with matches
+            let fetchedOffers = (try? await APIClient.shared.fetchMyOffers()) ?? []
+
             await MainActor.run {
                 connections = items
+                offers = fetchedOffers
                 // Solo contar no leídos de matches activos (no de encuentros pasados)
                 // Badge = conexiones activas donde el viajero espera respuesta del buddy
                 totalUnread = items
                     .filter { ["accepted", "active"].contains($0.match.status) && $0.pendingReply }
-                    .count
+                    .count + fetchedOffers.count
                 isLoading = false
                 hasLoadedOnce = true
             }
@@ -150,7 +166,7 @@ struct ConexionesView: View {
                     // significa empty state y las recargas son silenciosas
                     if !chatStore.hasLoadedOnce && chatStore.connections.isEmpty {
                         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if chatStore.connections.isEmpty {
+                    } else if chatStore.connections.isEmpty && chatStore.offers.isEmpty {
                         emptyState
                     } else {
                         connectionList
@@ -161,6 +177,20 @@ struct ConexionesView: View {
             .background(Color.canvas)
         }
         .task { await chatStore.load() }
+        // Recarga ofertas en tiempo real cuando el matching elige a este buddy
+        .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
+            Task {
+                let fresh = (try? await APIClient.shared.fetchMyOffers()) ?? []
+                await MainActor.run {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        chatStore.offers = fresh
+                        chatStore.totalUnread = chatStore.connections
+                            .filter { ["accepted", "active"].contains($0.match.status) && $0.pendingReply }
+                            .count + fresh.count
+                    }
+                }
+            }
+        }
         .sheet(item: $chatTarget, onDismiss: { Task { await chatStore.load() } }) { item in
             if let journey = SyntheticJourney.make(for: item.match) {
                 BuddyChatView(match: item.match, journey: journey) {
@@ -173,6 +203,23 @@ struct ConexionesView: View {
     private var connectionList: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
+                // ALGUIEN LLEGA — ofertas pendientes para buddies
+                if !chatStore.offers.isEmpty {
+                    listHeader("ALGUIEN LLEGA", count: chatStore.offers.count, color: Color(hex: "#B45309"))
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
+
+                    VStack(spacing: Spacing.sm) {
+                        ForEach(chatStore.offers) { offer in
+                            OfferCard(offer: offer) {
+                                Task { await chatStore.load() }
+                            }
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .padding(.horizontal, Spacing.edge)
+                }
+
                 // VÍNCULO ABIERTO — la persona que te ayuda ahora: tarjeta cálida y viva
                 if !active.isEmpty {
                     listHeader("VÍNCULO ABIERTO", count: active.count > 1 ? active.count : 0, color: Color.teal)
@@ -263,6 +310,172 @@ struct ConexionesView: View {
         }
         .padding(.horizontal, Spacing.xl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: – Offer Card (buddy recibe solicitud de un viajero)
+
+struct OfferCard: View {
+    let offer: APIBuddyOffer
+    let onHandled: () -> Void
+
+    @State private var isAccepting = false
+    @State private var isDeclining = false
+
+    private static let categoryLabels: [String: String] = [
+        "transport": "Cómo llegar", "food": "Comer", "translation": "Traducir",
+        "activities": "Qué hacer", "accommodation": "Alojamiento",
+        "emergency": "Seguridad", "general": "Ayuda",
+    ]
+
+    private var travelerName: String {
+        offer.helpRequest?.users?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Viajero"
+    }
+    private var categoryLabel: String {
+        let key = offer.helpRequest?.category ?? ""
+        return Self.categoryLabels[key] ?? key.capitalized
+    }
+    private var destinationName: String { offer.helpRequest?.destination?.name ?? "" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header — traveler + context
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(Color(hex: "#FFF3E0"))
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        Text(String(travelerName.prefix(1)))
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(Color(hex: "#B45309"))
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(travelerName)
+                        .font(BT.headline).foregroundStyle(Color.ink)
+                    HStack(spacing: 4) {
+                        if !destinationName.isEmpty {
+                            Text(destinationName)
+                                .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                            Text("·")
+                                .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                        }
+                        Text(categoryLabel)
+                            .font(BT.caption1).foregroundStyle(Color(hex: "#B45309"))
+                    }
+                }
+
+                Spacer()
+
+                if let arrival = offer.helpRequest?.arrivalAt {
+                    Text(relativeArrival(arrival))
+                        .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                }
+            }
+            .padding(Spacing.md)
+
+            // Message if present
+            if let desc = offer.helpRequest?.description, !desc.isEmpty {
+                Text("\"\(desc)\"")
+                    .font(BT.callout).foregroundStyle(Color.ink)
+                    .lineLimit(2)
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.bottom, Spacing.md)
+            }
+
+            Divider().padding(.horizontal, Spacing.md)
+
+            // CTAs
+            HStack(spacing: 8) {
+                Button {
+                    Task { await accept() }
+                } label: {
+                    Group {
+                        if isAccepting {
+                            ProgressView().tint(.white).controlSize(.small)
+                        } else {
+                            Text("Acompañar")
+                                .font(BT.footnoteBold).foregroundStyle(.white)
+                        }
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 40)
+                    .background(Color(hex: "#2B8A7A"))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .disabled(isAccepting || isDeclining)
+
+                Button {
+                    Task { await decline() }
+                } label: {
+                    Group {
+                        if isDeclining {
+                            ProgressView().tint(Color.inkMuted).controlSize(.small)
+                        } else {
+                            Text("Ahora no")
+                                .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                        }
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 40)
+                    .background(Color.canvas)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.border, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(isAccepting || isDeclining)
+            }
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, 12)
+        }
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.lg)
+                .stroke(Color(hex: "#B45309").opacity(0.35), lineWidth: 1)
+        )
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color(hex: "#B45309").opacity(0.6))
+                .frame(width: 3)
+                .padding(.vertical, 1)
+                .clipShape(Capsule())
+        }
+        .cardShadow()
+    }
+
+    private func accept() async {
+        guard let userId = AuthService.shared.userId,
+              let requestId = offer.helpRequest?.id else { return }
+        isAccepting = true
+        do {
+            _ = try await APIClient.shared.acceptRequest(requestId: requestId, buddyId: userId)
+            Haptic.success()
+            onHandled()
+        } catch {
+            Haptic.error()
+        }
+        isAccepting = false
+    }
+
+    private func decline() async {
+        isDeclining = true
+        do {
+            try await APIClient.shared.declineBuddyOffer(requestId: offer.requestId)
+            Haptic.light()
+            onHandled()
+        } catch {
+            Haptic.error()
+        }
+        isDeclining = false
+    }
+
+    private func relativeArrival(_ date: Date) -> String {
+        let days = Calendar.current.dateComponents([.day], from: Date(), to: date).day ?? 0
+        switch days {
+        case 0:  return "Llega hoy"
+        case 1:  return "Llega mañana"
+        default: return "En \(days) días"
+        }
     }
 }
 
