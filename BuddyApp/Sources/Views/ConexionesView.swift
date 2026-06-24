@@ -128,7 +128,7 @@ final class ChatStore: ObservableObject {
 struct ConexionesView: View {
     @EnvironmentObject var chatStore: ChatStore
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
-    @State private var pollTimer: Timer? = nil
+    @State private var sseTask: Task<Void, Never>? = nil
 
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["accepted","active"].contains($0.match.status) }
@@ -178,9 +178,8 @@ struct ConexionesView: View {
             .background(Color.canvas)
         }
         .task { await chatStore.load() }
-        .onAppear { startPollingIfNeeded() }
-        .onDisappear { stopPolling() }
-        .onChange(of: chatStore.offers.count) { _, _ in startPollingIfNeeded() }
+        .onAppear { startSSE() }
+        .onDisappear { stopSSE() }
         // Recarga ofertas en tiempo real cuando el matching elige a este buddy
         .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
             Task {
@@ -283,16 +282,31 @@ struct ConexionesView: View {
         }
     }
 
-    private func startPollingIfNeeded() {
-        guard !chatStore.offers.isEmpty, pollTimer == nil else { return }
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { _ in
-            Task { await chatStore.load() }
+    private func startSSE() {
+        stopSSE()
+        guard let token = AuthService.shared.accessToken,
+              let url = URL(string: "\(APIClient.shared.baseURL)/matching/offers/stream") else { return }
+
+        sseTask = Task {
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            request.timeoutInterval = 300
+
+            guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else { return }
+
+            for try await line in stream.lines {
+                guard !Task.isCancelled else { break }
+                if line.hasPrefix("event: offer") || line.hasPrefix("data:") {
+                    await chatStore.load()
+                }
+            }
         }
     }
 
-    private func stopPolling() {
-        pollTimer?.invalidate()
-        pollTimer = nil
+    private func stopSSE() {
+        sseTask?.cancel()
+        sseTask = nil
     }
 
     private var emptyState: some View {
