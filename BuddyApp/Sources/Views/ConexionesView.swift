@@ -70,16 +70,18 @@ final class ChatStore: ObservableObject {
     /// pantalla completa solo se muestra antes de este punto
     @Published var hasLoadedOnce = false
 
-    /// SSE global de ofertas — vive mientras el usuario está logueado, en
-    /// cualquier tab, para que el badge rojo de Conexiones sea en tiempo real.
-    private var offersSSETask: Task<Void, Never>? = nil
+    /// UN solo SSE multiplexado (offer + message + match) que vive mientras el
+    /// usuario está logueado, en cualquier tab. Reemplaza los dos streams previos
+    /// → 1 conexión por usuario en vez de 2, y el backend usa 1 canal Realtime
+    /// global compartido para todos (escala a miles de conexiones).
+    private var eventStreamTask: Task<Void, Never>? = nil
 
-    func startOffersSSE() {
-        stopOffersSSE()
+    func startEventStream() {
+        stopEventStream()
         guard let token = AuthService.shared.accessToken,
-              let url = URL(string: "\(APIClient.shared.baseURL)/matching/offers/stream") else { return }
+              let url = URL(string: "\(APIClient.shared.baseURL)/stream") else { return }
 
-        offersSSETask = Task {
+        eventStreamTask = Task {
             while !Task.isCancelled {
                 var request = URLRequest(url: url)
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -90,11 +92,29 @@ final class ChatStore: ObservableObject {
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     continue
                 }
+                var currentEvent = ""
                 do {
                     for try await line in stream.lines {
                         guard !Task.isCancelled else { break }
-                        if line.hasPrefix("event: offer") || line.hasPrefix("data:") {
-                            await load()
+                        if line.hasPrefix("event:") {
+                            currentEvent = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+                        } else if line.hasPrefix("data:") {
+                            let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                            let obj = (json.data(using: .utf8)).flatMap {
+                                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+                            }
+                            switch currentEvent {
+                            case "message":
+                                // Refresca solo esa conversación (1 llamada, no N+1)
+                                if let matchId = obj?["match_id"] as? String {
+                                    await refreshOne(matchId: matchId)
+                                }
+                            case "match", "offer":
+                                // Nueva conexión / cambio de oferta → recarga completa
+                                await load()
+                            default:
+                                break
+                            }
                         }
                     }
                 } catch { }
@@ -104,52 +124,9 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func stopOffersSSE() {
-        offersSSETask?.cancel()
-        offersSSETask = nil
-    }
-
-    /// SSE global de mensajes entrantes — refresca la lista de conexiones y el
-    /// badge cuando llega un mensaje en cualquier match del usuario.
-    private var inboxSSETask: Task<Void, Never>? = nil
-
-    func startInboxSSE() {
-        stopInboxSSE()
-        guard let token = AuthService.shared.accessToken,
-              let url = URL(string: "\(APIClient.shared.baseURL)/messages/inbox/stream") else { return }
-
-        inboxSSETask = Task {
-            while !Task.isCancelled {
-                var request = URLRequest(url: url)
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                request.timeoutInterval = 600
-
-                guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else {
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    continue
-                }
-                do {
-                    for try await line in stream.lines {
-                        guard !Task.isCancelled else { break }
-                        guard line.hasPrefix("data:") else { continue }
-                        let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        if let data = json.data(using: .utf8),
-                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let matchId = obj["match_id"] as? String {
-                            // Refresca solo esa conversación (1 llamada, no N+1)
-                            await refreshOne(matchId: matchId)
-                        }
-                    }
-                } catch { }
-                if !Task.isCancelled { try? await Task.sleep(nanoseconds: 3_000_000_000) }
-            }
-        }
-    }
-
-    func stopInboxSSE() {
-        inboxSSETask?.cancel()
-        inboxSSETask = nil
+    func stopEventStream() {
+        eventStreamTask?.cancel()
+        eventStreamTask = nil
     }
 
     func load() async {
