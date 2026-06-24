@@ -39,6 +39,7 @@ struct RootView: View {
     @EnvironmentObject var authState: AuthState
     @StateObject private var chatStore = ChatStore.shared
     @State private var selectedTab: AppTab = .inicio
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -55,6 +56,15 @@ struct RootView: View {
             GlassTabBar(selection: $selectedTab, unreadChats: chatStore.totalUnread)
         }
         .ignoresSafeArea(edges: .bottom)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await chatStore.load() } }
+        }
+        .onChange(of: selectedTab) { _, tab in
+            if tab == .conexiones { Task { await chatStore.load() } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
+            Task { await chatStore.load() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .switchToTab)) { note in
             if let raw = note.userInfo?["tab"] as? Int, let tab = AppTab(rawValue: raw) {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
