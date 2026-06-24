@@ -2,6 +2,22 @@ import SwiftUI
 import AVFoundation
 import MapKit
 
+// MARK: – FEEDBACK TRACKER
+// Registra localmente qué matches ya respondieron la encuesta de cierre, para
+// no volver a pedirla al viajero (incluso si fue el buddy quien cerró).
+enum FeedbackTracker {
+    private static let key = "buddy.feedbackSubmittedMatchIds"
+    static func isSubmitted(_ matchId: String) -> Bool {
+        (UserDefaults.standard.array(forKey: key) as? [String])?.contains(matchId) ?? false
+    }
+    static func markSubmitted(_ matchId: String) {
+        var ids = (UserDefaults.standard.array(forKey: key) as? [String]) ?? []
+        guard !ids.contains(matchId) else { return }
+        ids.append(matchId)
+        UserDefaults.standard.set(ids, forKey: key)
+    }
+}
+
 // MARK: – CONTACTAR BUDDY SHEET
 
 struct ContactarBuddyView: View {
@@ -15,6 +31,8 @@ struct ContactarBuddyView: View {
     @State private var sseMatchTask: Task<Void, Never>? = nil
     @State private var buddyCount: Int = 0
     @State private var activeRequestId: String? = nil   // solicitud en curso (para cancelarla)
+    /// Match cerrado por el buddy cuya encuesta el viajero aún no respondió.
+    @State private var pendingFeedbackMatch: APIMatch? = nil
 
     enum Phase: Equatable {
         case loading, selectCategory, searching, matched, error(String)
@@ -55,6 +73,21 @@ struct ContactarBuddyView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .pushNotificationTapped)) { _ in
             if phase == .searching { Task { await pollForMatch() } }
+        }
+        // Encuesta pendiente de un apoyo que cerró el buddy
+        .sheet(item: $pendingFeedbackMatch) { m in
+            let buddyName = m.buddy?.fullName?.components(separatedBy: " ").first?.lowercased() ?? "buddy"
+            CloseFeedbackSheet(buddyName: buddyName, buddyAvatarUrl: m.buddy?.avatarUrl) { feeling, pressure in
+                Task {
+                    try? await APIClient.shared.submitFeedback(matchId: m.id, feeling: feeling, commercialPressure: pressure)
+                    FeedbackTracker.markSubmitted(m.id)
+                    await MainActor.run { pendingFeedbackMatch = nil }
+                }
+            } onDismiss: {
+                // Aunque cierre sin responder, no bloqueamos pedir otro buddy.
+                FeedbackTracker.markSubmitted(m.id)
+                pendingFeedbackMatch = nil
+            }
         }
     }
 
@@ -107,6 +140,14 @@ struct ContactarBuddyView: View {
                 match = active; phase = .matched; return
             }
             print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
+            // Encuesta pendiente: el buddy cerró un apoyo y el viajero no respondió.
+            // Antes de dejarle pedir otro buddy, mostramos las dos preguntas.
+            if let pending = matches.first(where: {
+                $0.status == "completed" && $0.travelerId == userId && !FeedbackTracker.isSubmitted($0.id)
+            }) {
+                print("📝 [checkStatus] encuesta pendiente match=\(pending.id) → mostrando antes de permitir otro buddy")
+                pendingFeedbackMatch = pending
+            }
             let destIdOpt: String? = journey.destination?.id ?? journey.destinationId
             guard let destId = destIdOpt else { phase = .selectCategory; return }
             let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
@@ -433,8 +474,10 @@ struct BuddyChatView: View {
     @State private var closeCardDismissed = false
     @State private var showReportSheet    = false
     @State private var reportSent         = false
-    /// Sheet de feedback antes de cerrar apoyo
+    /// Sheet de feedback antes de cerrar apoyo (solo viajero)
     @State private var showCloseSheet = false
+    /// Modal de confirmación simple (solo buddy — no responde encuesta)
+    @State private var showCloseConfirm = false
     @State private var isSendingLocation = false
     @State private var showAttachSheet   = false
     // Pagination
@@ -511,7 +554,7 @@ struct BuddyChatView: View {
                 Menu {
                     if matchStatus != "completed" {
                         Button(role: .destructive) {
-                            showCloseSheet = true
+                            requestClose()
                         } label: {
                             Label("Cerrar apoyo", systemImage: "checkmark.circle")
                         }
@@ -574,8 +617,7 @@ struct BuddyChatView: View {
                         // Card de cierre de ciclo
                         if shouldShowCloseCard {
                             CloseCycleCard(buddyName: buddyName, isHelper: isCurrentUserBuddy) {
-                                // "sí, gracias" — mostrar encuesta de cierre antes de cerrar
-                                showCloseSheet = true
+                                requestClose()
                             } onKeepOpen: {
                                 // "tengo otra pregunta" — dismiss card
                                 withAnimation { closeCardDismissed = true }
@@ -646,18 +688,40 @@ struct BuddyChatView: View {
             startSSE()
             await APIClient.shared.markMessagesRead(matchId: match.id)
             await ChatStore.shared.load()
+            // Si el buddy ya cerró el apoyo y el viajero aún no respondió la
+            // encuesta, mostrarla al abrir el chat.
+            if matchStatus == "completed", !isCurrentUserBuddy, !FeedbackTracker.isSubmitted(match.id) {
+                showCloseSheet = true
+            }
         }
         .onDisappear { sseTask?.cancel() }
         // Re-evalúa la card cada 60s (por si el tiempo supera los 10 min mientras el chat está abierto)
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
             if shouldShowCloseCard { closeCardDismissed = false }
         }
-        // El buddy cerró el match → mostrar encuesta de cierre al viajero inmediatamente
+        // El buddy cerró el match → mostrar encuesta de cierre SOLO al viajero
         .onReceive(NotificationCenter.default.publisher(for: .matchCompleted)) { notif in
             let matchId = notif.userInfo?["match_id"] as? String
             guard matchId == nil || matchId == match.id else { return }
+            guard !isCurrentUserBuddy, !FeedbackTracker.isSubmitted(match.id) else { return }
             if !showCloseSheet { showCloseSheet = true }
         }
+        // Confirmación simple para el buddy (no responde encuesta)
+        .alert("¿Cerrar acompañamiento?", isPresented: $showCloseConfirm) {
+            Button("Cancelar", role: .cancel) {}
+            Button("Cerrar", role: .destructive) {
+                Task { await closeAsHelper() }
+            }
+        } message: {
+            Text("\(buddyName) quedará libre para acompañar a otro viajero.")
+        }
+    }
+
+    /// Enruta el cierre según el rol: el buddy confirma; el viajero responde la
+    /// encuesta de cierre.
+    private func requestClose() {
+        if isCurrentUserBuddy { showCloseConfirm = true }
+        else                  { showCloseSheet = true }
     }
 
     // ── Conexión cerrada ─────────────────────────────────────────────
@@ -1026,6 +1090,16 @@ struct BuddyChatView: View {
         Task {
             try? await APIClient.shared.submitFeedback(matchId: match.id, feeling: feeling, commercialPressure: pressure)
         }
+        FeedbackTracker.markSubmitted(match.id)   // viajero ya respondió → no volver a preguntar
+        Haptic.success()
+        Task { await ChatStore.shared.load() }
+        NotificationCenter.default.post(name: .helpCompleted, object: nil)
+        onDismiss?()
+    }
+
+    /// Cierre del buddy (quien ayuda): sin encuesta, solo marca completado.
+    private func closeAsHelper() async {
+        try? await APIClient.shared.updateMatchStatus(matchId: match.id, status: "completed")
         Haptic.success()
         Task { await ChatStore.shared.load() }
         NotificationCenter.default.post(name: .helpCompleted, object: nil)
