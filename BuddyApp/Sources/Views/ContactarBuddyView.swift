@@ -12,6 +12,7 @@ struct ContactarBuddyView: View {
     @State private var phase: Phase = .loading
     @State private var match: APIMatch?
     @State private var pollTimer: Timer?
+    @State private var sseMatchTask: Task<Void, Never>? = nil
     @State private var buddyCount: Int = 0
     @State private var activeRequestId: String? = nil   // solicitud en curso (para cancelarla)
 
@@ -102,7 +103,7 @@ struct ContactarBuddyView: View {
             let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
             if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
                 activeRequestId = open.id
-                phase = .searching; startPolling()
+                phase = .searching; startPolling(); startSSEMatch(requestId: open.id)
             } else {
                 phase = .selectCategory
             }
@@ -119,13 +120,13 @@ struct ContactarBuddyView: View {
                 travelerId: userId, destinationId: destId,
                 category: category, description: description, arrivalAt: journey.arrivalAt)
             activeRequestId = req.id
-            startPolling()
+            startPolling(); startSSEMatch(requestId: req.id)
         } catch { phase = .error(error.localizedDescription) }
     }
 
     private func cancelSearch() {
         pollTimer?.invalidate()
-        // Cancela la solicitud en el backend (deja de notificar/mostrar a buddies)
+        stopSSEMatch()
         if let rid = activeRequestId {
             Task { try? await APIClient.shared.cancelHelpRequest(requestId: rid) }
             activeRequestId = nil
@@ -135,11 +136,37 @@ struct ContactarBuddyView: View {
 
     private func startPolling() {
         pollTimer?.invalidate()
-        // Red de seguridad (5s). El camino feliz es instantáneo vía push;
-        // este timer solo cubre el caso raro de que el push no llegue.
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             Task { await pollForMatch() }
         }
+    }
+
+    private func startSSEMatch(requestId: String) {
+        sseMatchTask?.cancel()
+        guard let token = AuthService.shared.accessToken,
+              let url = URL(string: "\(APIClient.shared.baseURL)/matching/request/\(requestId)/stream") else { return }
+
+        sseMatchTask = Task {
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            request.timeoutInterval = 300
+
+            guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else { return }
+            do {
+                for try await line in stream.lines {
+                    guard !Task.isCancelled else { break }
+                    if line.hasPrefix("event: matched") || line.hasPrefix("data:") {
+                        await pollForMatch()
+                    }
+                }
+            } catch { }
+        }
+    }
+
+    private func stopSSEMatch() {
+        sseMatchTask?.cancel()
+        sseMatchTask = nil
     }
 
     private func pollForMatch() async {
@@ -149,6 +176,7 @@ struct ContactarBuddyView: View {
             let acceptedStatuses = ["accepted", "active"]
             if let active = matches.first(where: { acceptedStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
                 pollTimer?.invalidate()
+                stopSSEMatch()
                 match = active
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
             }
@@ -413,10 +441,21 @@ struct BuddyChatView: View {
         return isFromBuddy && tenMinPassed
     }
 
-    private var buddyName: String   { match.buddy?.fullName?.components(separatedBy: " ").first?.lowercased() ?? "buddy" }
+    // When the current user is the buddy, show traveler info (not their own)
+    private var isCurrentUserBuddy: Bool {
+        AuthService.shared.userId == match.buddyId
+    }
+    private var buddyName: String {
+        let person = isCurrentUserBuddy ? match.traveler : match.buddy
+        return person?.fullName?.components(separatedBy: " ").first?.lowercased() ?? (isCurrentUserBuddy ? "viajero" : "buddy")
+    }
     private var buddyInitials: String {
-        let name = match.buddy?.fullName ?? "B"
+        let person = isCurrentUserBuddy ? match.traveler : match.buddy
+        let name = person?.fullName ?? "?"
         return name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined()
+    }
+    private var buddyAvatarUrl: String? {
+        isCurrentUserBuddy ? match.traveler?.avatarUrl : match.buddy?.avatarUrl
     }
 
     var body: some View {
@@ -572,7 +611,7 @@ struct BuddyChatView: View {
         .navigationBarHidden(true)
         .background(KeyboardPrewarmer())
         .sheet(isPresented: $showCloseSheet) {
-            CloseFeedbackSheet(buddyName: buddyName, buddyAvatarUrl: match.buddy?.avatarUrl) { feeling, pressure in
+            CloseFeedbackSheet(buddyName: buddyName, buddyAvatarUrl: buddyAvatarUrl) { feeling, pressure in
                 showCloseSheet = false
                 Task { await closeMatch(feeling: feeling, pressure: pressure) }
             } onDismiss: {
@@ -583,7 +622,7 @@ struct BuddyChatView: View {
             ReportUserSheet(
                 buddyName: buddyName,
                 matchId: match.id,
-                reportedUserId: match.buddy?.id ?? ""
+                reportedUserId: (isCurrentUserBuddy ? match.traveler?.id : match.buddy?.id) ?? ""
             ) {
                 showReportSheet = false
                 reportSent = true
@@ -852,7 +891,7 @@ struct BuddyChatView: View {
                 .fill(Color.sandLight)
                 .frame(width: 64, height: 64)
                 .overlay {
-                    if let urlStr = match.buddy?.avatarUrl, let url = URL(string: urlStr) {
+                    if let urlStr = buddyAvatarUrl, let url = URL(string: urlStr) {
                         AsyncImage(url: url) { img in img.resizable().scaledToFill() }
                             placeholder: { Color.sandLight }
                             .clipShape(Circle())
@@ -866,8 +905,11 @@ struct BuddyChatView: View {
                     Circle().fill(Color.onlineGreen).frame(width: 14, height: 14)
                         .overlay(Circle().stroke(Color.canvas, lineWidth: 2))
                 }
-            Text("Conectado con \(buddyName)").font(BT.title3).foregroundStyle(Color.ink)
-            Text("Tu buddy te ayudará con todo en \(journey.destination?.name ?? "tu destino").")
+            Text(isCurrentUserBuddy ? "Acompañando a \(buddyName)" : "Conectado con \(buddyName)")
+                .font(BT.title3).foregroundStyle(Color.ink)
+            Text(isCurrentUserBuddy
+                 ? "Puedes ayudar a \(buddyName) con lo que necesite al llegar."
+                 : "Tu buddy te ayudará con todo en \(journey.destination?.name ?? "tu destino").")
                 .font(BT.callout).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
         }
         .padding(Spacing.edge)
