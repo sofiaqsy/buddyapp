@@ -127,7 +127,7 @@ struct RootView: View {
         // apoyo, el viajero la responde sin importar en qué tab esté.
         .sheet(item: $chatStore.pendingFeedbackMatch) { m in
             let name = m.buddy?.fullName?.components(separatedBy: " ").first?.lowercased() ?? "tu buddy"
-            CloseFeedbackSheet(buddyName: name, buddyAvatarUrl: m.buddy?.avatarUrl) { feeling, pressure in
+            CloseFeedbackSheet(buddyName: name, buddyAvatarUrl: m.buddy?.avatarUrl, isMandatory: true) { feeling, pressure in
                 Task {
                     try? await APIClient.shared.submitFeedback(matchId: m.id, feeling: feeling, commercialPressure: pressure)
                     FeedbackTracker.markSubmitted(m.id)

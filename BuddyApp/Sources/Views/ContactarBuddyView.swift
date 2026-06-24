@@ -664,25 +664,14 @@ struct BuddyChatView: View {
             await loadMessages()
             startSSE()
             await APIClient.shared.markMessagesRead(matchId: match.id)
+            // La encuesta obligatoria (buddy cerró) la presenta RootView de forma
+            // global; aquí solo manejamos el cierre iniciado por el viajero.
             await ChatStore.shared.load()
-            // Si el buddy ya cerró el apoyo y el viajero aún no respondió la
-            // encuesta, mostrarla al abrir el chat.
-            if matchStatus == "completed", !isCurrentUserBuddy,
-               !(match.feedbackSubmitted ?? false), !FeedbackTracker.isSubmitted(match.id) {
-                showCloseSheet = true
-            }
         }
         .onDisappear { sseTask?.cancel() }
         // Re-evalúa la card cada 60s (por si el tiempo supera los 10 min mientras el chat está abierto)
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
             if shouldShowCloseCard { closeCardDismissed = false }
-        }
-        // El buddy cerró el match → mostrar encuesta de cierre SOLO al viajero
-        .onReceive(NotificationCenter.default.publisher(for: .matchCompleted)) { notif in
-            let matchId = notif.userInfo?["match_id"] as? String
-            guard matchId == nil || matchId == match.id else { return }
-            guard !isCurrentUserBuddy, !FeedbackTracker.isSubmitted(match.id) else { return }
-            if !showCloseSheet { showCloseSheet = true }
         }
         // Confirmación simple para el buddy (no responde encuesta)
         .alert("¿Cerrar acompañamiento?", isPresented: $showCloseConfirm) {
@@ -1825,6 +1814,9 @@ struct ReportUserSheet: View {
 struct CloseFeedbackSheet: View {
     let buddyName: String
     let buddyAvatarUrl: String?
+    /// true → encuesta obligatoria (el buddy cerró): sin X ni swipe.
+    /// false → el viajero la inició: puede descartarla.
+    var isMandatory: Bool = false
     let onClose: (_ feeling: String, _ pressure: String) -> Void
     let onDismiss: () -> Void
 
@@ -1963,7 +1955,23 @@ struct CloseFeedbackSheet: View {
         .padding(.horizontal, 24)
         // Sin reset: mantenemos los valores preseleccionados (cómoda / nunca).
         .presentationDetents([.large])
-        .presentationDragIndicator(.hidden)
-        .interactiveDismissDisabled(true)   // encuesta obligatoria — sin escape
+        .presentationDragIndicator(isMandatory ? .hidden : .visible)
+        .interactiveDismissDisabled(isMandatory)
+        // El viajero que inicia el cierre puede descartar con la X.
+        .overlay(alignment: .topTrailing) {
+            if !isMandatory {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 32, height: 32)
+                        .background(Color.canvas)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+                }
+                .padding(.top, 16)
+                .padding(.trailing, 20)
+            }
+        }
     }
 }
