@@ -132,8 +132,13 @@ final class ChatStore: ObservableObject {
                 do {
                     for try await line in stream.lines {
                         guard !Task.isCancelled else { break }
-                        if line.hasPrefix("event: message") || line.hasPrefix("data:") {
-                            await load()
+                        guard line.hasPrefix("data:") else { continue }
+                        let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        if let data = json.data(using: .utf8),
+                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let matchId = obj["match_id"] as? String {
+                            // Refresca solo esa conversación (1 llamada, no N+1)
+                            await refreshOne(matchId: matchId)
                         }
                     }
                 } catch { }
@@ -168,25 +173,14 @@ final class ChatStore: ObservableObject {
                 }
                 for await item in group { if let item { items.append(item) } }
             }
-            items.sort {
-                let aActive = ["pending","accepted","active"].contains($0.match.status)
-                let bActive = ["pending","accepted","active"].contains($1.match.status)
-                if aActive != bActive { return aActive }
-                let aDate = $0.lastMessage?.createdAt ?? $0.match.createdAt ?? .distantPast
-                let bDate = $1.lastMessage?.createdAt ?? $1.match.createdAt ?? .distantPast
-                return aDate > bDate
-            }
+            items = Self.sorted(items)
             // Load buddy offers in parallel with matches
             let fetchedOffers = (try? await APIClient.shared.fetchMyOffers()) ?? []
 
             await MainActor.run {
                 connections = items
                 offers = fetchedOffers
-                // Solo contar no leídos de matches activos (no de encuentros pasados)
-                // Badge = conexiones activas donde el viajero espera respuesta del buddy
-                totalUnread = items
-                    .filter { ["pending", "accepted", "active"].contains($0.match.status) && $0.pendingReply }
-                    .count + fetchedOffers.count
+                recomputeBadge()
                 isLoading = false
                 hasLoadedOnce = true
             }
@@ -197,6 +191,46 @@ final class ChatStore: ObservableObject {
                 print("❌ ChatStore.load: \(error)")
             }
         }
+    }
+
+    /// Refresca SOLO una conexión (1 llamada) en vez de recargar toda la lista.
+    /// Es el camino caliente del chat en tiempo real — evita el storm N+1.
+    func refreshOne(matchId: String) async {
+        guard let userId = AuthService.shared.userId else { return }
+        // Si el match no está en la lista aún (conexión nueva) → carga completa
+        guard connections.contains(where: { $0.match.id == matchId }) else {
+            await load(); return
+        }
+        let msgs   = try? await APIClient.shared.fetchMessages(matchId: matchId)
+        let last   = msgs?.last
+        let unread = msgs?.filter { $0.senderId != userId && $0.readAt == nil }.count ?? 0
+
+        await MainActor.run {
+            guard let idx = connections.firstIndex(where: { $0.match.id == matchId }) else { return }
+            let old = connections[idx]
+            connections[idx] = ConnectionItem(match: old.match, lastMessage: last, unreadCount: unread)
+            connections = Self.sorted(connections)
+            recomputeBadge()
+        }
+    }
+
+    private static let activeStatuses = ["pending", "accepted", "active"]
+
+    static func sorted(_ items: [ConnectionItem]) -> [ConnectionItem] {
+        items.sorted {
+            let aActive = activeStatuses.contains($0.match.status)
+            let bActive = activeStatuses.contains($1.match.status)
+            if aActive != bActive { return aActive }
+            let aDate = $0.lastMessage?.createdAt ?? $0.match.createdAt ?? .distantPast
+            let bDate = $1.lastMessage?.createdAt ?? $1.match.createdAt ?? .distantPast
+            return aDate > bDate
+        }
+    }
+
+    private func recomputeBadge() {
+        totalUnread = connections
+            .filter { Self.activeStatuses.contains($0.match.status) && $0.pendingReply }
+            .count + offers.count
     }
 }
 
