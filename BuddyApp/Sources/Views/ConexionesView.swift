@@ -128,6 +128,7 @@ final class ChatStore: ObservableObject {
 struct ConexionesView: View {
     @EnvironmentObject var chatStore: ChatStore
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
+    @State private var pollTimer: Timer? = nil
 
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["accepted","active"].contains($0.match.status) }
@@ -177,6 +178,9 @@ struct ConexionesView: View {
             .background(Color.canvas)
         }
         .task { await chatStore.load() }
+        .onAppear { startPollingIfNeeded() }
+        .onDisappear { stopPolling() }
+        .onChange(of: chatStore.offers.count) { _, _ in startPollingIfNeeded() }
         // Recarga ofertas en tiempo real cuando el matching elige a este buddy
         .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
             Task {
@@ -277,6 +281,18 @@ struct ConexionesView: View {
                 Text("· \(count)").font(BT.eyebrow).foregroundStyle(Color.inkMuted.opacity(0.7))
             }
         }
+    }
+
+    private func startPollingIfNeeded() {
+        guard !chatStore.offers.isEmpty, pollTimer == nil else { return }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { _ in
+            Task { await chatStore.load() }
+        }
+    }
+
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     private var emptyState: some View {
