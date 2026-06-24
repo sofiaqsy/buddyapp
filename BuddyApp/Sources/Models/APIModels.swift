@@ -286,6 +286,25 @@ struct APIMatch: Decodable, Identifiable {
     let createdAt: Date?
     let traveler: APIUserRef?
     let buddy: APIUserRef?
+    /// Anotado por el backend: ¿ya existe encuesta de cierre para este match?
+    let feedbackSubmitted: Bool?
+}
+
+// MARK: Buddy Offer (matching_queue entry directed at this buddy)
+
+struct APIBuddyOffer: Decodable, Identifiable {
+    let id: String
+    let requestId: String
+    let helpRequest: OfferRequest?
+
+    struct OfferRequest: Decodable {
+        let id: String
+        let category: String?
+        let description: String?
+        let arrivalAt: Date?
+        let destination: APIDestinationRef?
+        let users: APIUserRef?  // traveler
+    }
 }
 
 // MARK: Message

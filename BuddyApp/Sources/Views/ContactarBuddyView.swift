@@ -143,7 +143,9 @@ struct ContactarBuddyView: View {
             // Encuesta pendiente: el buddy cerró un apoyo y el viajero no respondió.
             // Antes de dejarle pedir otro buddy, mostramos las dos preguntas.
             if let pending = matches.first(where: {
-                $0.status == "completed" && $0.travelerId == userId && !FeedbackTracker.isSubmitted($0.id)
+                $0.status == "completed" && $0.travelerId == userId
+                    && !($0.feedbackSubmitted ?? false)        // verdad del servidor
+                    && !FeedbackTracker.isSubmitted($0.id)      // optimista local
             }) {
                 print("📝 [checkStatus] encuesta pendiente match=\(pending.id) → mostrando antes de permitir otro buddy")
                 pendingFeedbackMatch = pending
@@ -690,7 +692,8 @@ struct BuddyChatView: View {
             await ChatStore.shared.load()
             // Si el buddy ya cerró el apoyo y el viajero aún no respondió la
             // encuesta, mostrarla al abrir el chat.
-            if matchStatus == "completed", !isCurrentUserBuddy, !FeedbackTracker.isSubmitted(match.id) {
+            if matchStatus == "completed", !isCurrentUserBuddy,
+               !(match.feedbackSubmitted ?? false), !FeedbackTracker.isSubmitted(match.id) {
                 showCloseSheet = true
             }
         }
@@ -1848,8 +1851,9 @@ struct CloseFeedbackSheet: View {
     private let feelings = ["cómoda", "bienvenida", "inspirada", "segura", "neutral", "incómoda"]
     private let pressures = ["nunca", "un poco", "mucha"]
 
-    @State private var selectedFeeling: String? = nil
-    @State private var selectedPressure: String? = nil
+    // Preseleccionados para facilitar: la mayoría cierra sin fricción.
+    @State private var selectedFeeling: String? = "cómoda"
+    @State private var selectedPressure: String? = "nunca"
 
     var body: some View {
         VStack(spacing: 0) {
