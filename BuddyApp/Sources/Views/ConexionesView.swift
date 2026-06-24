@@ -131,8 +131,8 @@ final class ChatStore: ObservableObject {
                 for await item in group { if let item { items.append(item) } }
             }
             items.sort {
-                let aActive = ["accepted","active"].contains($0.match.status)
-                let bActive = ["accepted","active"].contains($1.match.status)
+                let aActive = ["pending","accepted","active"].contains($0.match.status)
+                let bActive = ["pending","accepted","active"].contains($1.match.status)
                 if aActive != bActive { return aActive }
                 let aDate = $0.lastMessage?.createdAt ?? $0.match.createdAt ?? .distantPast
                 let bDate = $1.lastMessage?.createdAt ?? $1.match.createdAt ?? .distantPast
@@ -147,7 +147,7 @@ final class ChatStore: ObservableObject {
                 // Solo contar no leídos de matches activos (no de encuentros pasados)
                 // Badge = conexiones activas donde el viajero espera respuesta del buddy
                 totalUnread = items
-                    .filter { ["accepted", "active"].contains($0.match.status) && $0.pendingReply }
+                    .filter { ["pending", "accepted", "active"].contains($0.match.status) && $0.pendingReply }
                     .count + fetchedOffers.count
                 isLoading = false
                 hasLoadedOnce = true
@@ -169,7 +169,7 @@ struct ConexionesView: View {
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
 
     private var active: [ChatStore.ConnectionItem] {
-        chatStore.connections.filter { ["accepted","active"].contains($0.match.status) }
+        chatStore.connections.filter { ["pending","accepted","active"].contains($0.match.status) }
     }
     private var past: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { $0.match.status == "completed" }
@@ -224,7 +224,7 @@ struct ConexionesView: View {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         chatStore.offers = fresh
                         chatStore.totalUnread = chatStore.connections
-                            .filter { ["accepted", "active"].contains($0.match.status) && $0.pendingReply }
+                            .filter { ["pending", "accepted", "active"].contains($0.match.status) && $0.pendingReply }
                             .count + fresh.count
                     }
                 }
