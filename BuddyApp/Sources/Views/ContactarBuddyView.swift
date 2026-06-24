@@ -94,8 +94,11 @@ struct ContactarBuddyView: View {
         guard let userId = AuthService.shared.userId else { phase = .error("Sin sesión."); return }
         do {
             let matches = try await APIClient.shared.fetchMatches(userId: userId)
-            let acceptedStatuses = ["accepted", "active"]
-            if let active = matches.first(where: { acceptedStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
+            // 'pending' = buddy recién asignado (el backend crea el match así).
+            // Si ya hay un buddy vinculado, abrimos ESE chat en vez de permitir
+            // pedir otro buddy.
+            let activeStatuses = ["pending", "accepted", "active"]
+            if let active = matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
                 match = active; phase = .matched; return
             }
             let destIdOpt: String? = journey.destination?.id ?? journey.destinationId
@@ -173,8 +176,8 @@ struct ContactarBuddyView: View {
         guard let userId = AuthService.shared.userId else { return }
         do {
             let matches = try await APIClient.shared.fetchMatches(userId: userId)
-            let acceptedStatuses = ["accepted", "active"]
-            if let active = matches.first(where: { acceptedStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
+            let activeStatuses = ["pending", "accepted", "active"]
+            if let active = matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
                 pollTimer?.invalidate()
                 stopSSEMatch()
                 match = active
