@@ -109,6 +109,44 @@ final class ChatStore: ObservableObject {
         offersSSETask = nil
     }
 
+    /// SSE global de mensajes entrantes — refresca la lista de conexiones y el
+    /// badge cuando llega un mensaje en cualquier match del usuario.
+    private var inboxSSETask: Task<Void, Never>? = nil
+
+    func startInboxSSE() {
+        stopInboxSSE()
+        guard let token = AuthService.shared.accessToken,
+              let url = URL(string: "\(APIClient.shared.baseURL)/messages/inbox/stream") else { return }
+
+        inboxSSETask = Task {
+            while !Task.isCancelled {
+                var request = URLRequest(url: url)
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.timeoutInterval = 600
+
+                guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    continue
+                }
+                do {
+                    for try await line in stream.lines {
+                        guard !Task.isCancelled else { break }
+                        if line.hasPrefix("event: message") || line.hasPrefix("data:") {
+                            await load()
+                        }
+                    }
+                } catch { }
+                if !Task.isCancelled { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+            }
+        }
+    }
+
+    func stopInboxSSE() {
+        inboxSSETask?.cancel()
+        inboxSSETask = nil
+    }
+
     func load() async {
         guard let userId = AuthService.shared.userId else {
             // Sin sesión todavía: no dejar el spinner colgado para siempre

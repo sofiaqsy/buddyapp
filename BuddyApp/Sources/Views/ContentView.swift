@@ -60,8 +60,10 @@ struct RootView: View {
             if phase == .active {
                 Task { await chatStore.load() }
                 chatStore.startOffersSSE()
+                chatStore.startInboxSSE()
             } else if phase == .background {
                 chatStore.stopOffersSSE()
+                chatStore.stopInboxSSE()
             }
         }
         .onChange(of: selectedTab) { _, tab in
@@ -91,8 +93,9 @@ struct RootView: View {
             // Remove native tab bar — replaced by GlassTabBar
             UITabBar.appearance().isHidden = true
 
-            // SSE global de ofertas → badge rojo en tiempo real en cualquier tab
+            // SSE global de ofertas + mensajes → badge y lista en tiempo real
             chatStore.startOffersSSE()
+            chatStore.startInboxSSE()
 
             locationService.requestPermission()
             locationService.onRegionEnter = { id in
