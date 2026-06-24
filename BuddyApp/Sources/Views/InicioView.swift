@@ -1,10 +1,12 @@
 import SwiftUI
 import CoreLocation
+import UIKit
 
 // MARK: – INICIO
 // Calm, trustworthy dashboard. The user's home base between adventures.
 
 struct InicioView: View {
+    @Environment(\.openURL) private var openURL
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var locationService: LocationService
     @State private var navPath = NavigationPath()
@@ -91,16 +93,8 @@ struct InicioView: View {
                             )
                         } else {
                             VStack(alignment: .leading, spacing: Spacing.lg) {
-                                // 1. Contexto — ubicación detectada (si la hay), sin pedir permiso.
-                                if let city = nearestDestination?.city {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "location.fill")
-                                            .font(.system(size: 10, weight: .semibold))
-                                        Text("ESTÁS EN \(city.uppercased())")
-                                            .font(BT.eyebrow).tracking(1.5)
-                                    }
-                                    .foregroundStyle(Color.sand)
-                                }
+                                // 1. Contexto — ubicación detectada, o invitación a activarla.
+                                locationContext
                                 // 2. Ayuda — el composer ES la Home: "¿En qué te ayudamos?".
                                 // El Trip se crea/reusa automáticamente al enviar.
                                 CategoryPickerView(buddyCount: homeBuddyCount) { cat, desc in
@@ -272,6 +266,46 @@ struct InicioView: View {
               !showContactSheet
         else { return }
         locationPromptDestination = near
+    }
+
+    // MARK: – Contexto de ubicación
+
+    /// Muestra "ESTÁS EN {ciudad}" si hay ubicación; si no, ofrece activarla.
+    @ViewBuilder
+    private var locationContext: some View {
+        if let city = nearestDestination?.city {
+            HStack(spacing: 4) {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("ESTÁS EN \(city.uppercased())")
+                    .font(BT.eyebrow).tracking(1.5)
+            }
+            .foregroundStyle(Color.sand)
+        } else {
+            // Sin ubicación → invitación discreta a activarla (no bloquea pedir ayuda).
+            Button {
+                Haptic.light()
+                switch locationService.authorizationStatus {
+                case .denied, .restricted:
+                    // Ya negado: solo se puede reactivar desde Ajustes.
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                default:
+                    locationService.requestPermission()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "location.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Activa tu ubicación para ver ayuda cerca de ti")
+                        .font(BT.caption1)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.sand.opacity(0.6))
+                }
+                .foregroundStyle(Color.sand)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // MARK: – Find a Buddy (trip automático)
