@@ -167,6 +167,32 @@ final class APIClient {
         return try await request(path: "/journeys", method: "POST", body: body)
     }
 
+    /// Garantiza que exista un Trip para el destino dado — reusa uno activo/en
+    /// planificación o lo crea automáticamente. El Trip deja de ser una tarea
+    /// del usuario: pedir ayuda nunca exige crearlo a mano.
+    /// Reusa fetchUserJourneys / createJourney / updateJourneyStatus.
+    func ensureActiveTrip(destinationId: String) async throws -> APIJourney {
+        guard let userId = AuthService.shared.userId else { throw APIError.unknown }
+        let journeys = (try? await fetchUserJourneys(userId: userId)) ?? []
+
+        // 1-2. Reusar un Trip existente para ese destino (activo o en planificación)
+        if let existing = journeys.first(where: {
+            ($0.destination?.id ?? $0.destinationId) == destinationId
+                && ["active", "planning"].contains($0.status)
+        }) {
+            if existing.status != "active" {
+                try? await updateJourneyStatus(journeyId: existing.id, status: "active")
+            }
+            return existing
+        }
+
+        // 3. Crear automáticamente en background y activarlo
+        let created = try await createJourney(userId: userId, destinationId: destinationId,
+                                              title: nil, arrivalAt: nil)
+        try? await updateJourneyStatus(journeyId: created.id, status: "active")
+        return created
+    }
+
     func updateJourney(journeyId: String, arrivalAt: Date? = nil, knowsHowToGet: Bool? = nil, hasLodging: Bool? = nil) async throws -> APIJourney {
         var body: [String: Any] = [:]
         if let arrivalAt { body["arrival_at"] = ISO8601DateFormatter().string(from: arrivalAt) }
@@ -361,12 +387,13 @@ final class APIClient {
 
     // MARK: – Matching
 
-    func createHelpRequest(travelerId: String, destinationId: String, category: String, description: String?, arrivalAt: Date?) async throws -> APIHelpRequest {
+    func createHelpRequest(travelerId: String, destinationId: String, journeyId: String? = nil, category: String, description: String?, arrivalAt: Date?) async throws -> APIHelpRequest {
         var body: [String: Any] = [
             "traveler_id": travelerId,
             "destination_id": destinationId,
             "category": category
         ]
+        if let journeyId { body["journey_id"] = journeyId }   // liga la ayuda al Trip (historial)
         if let description { body["description"] = description }
         if let arrivalAt { body["arrival_at"] = ISO8601DateFormatter().string(from: arrivalAt) }
         return try await request(path: "/matching/request", method: "POST", body: body)
@@ -414,6 +441,19 @@ final class APIClient {
 
     func fetchMatches(userId: String) async throws -> [APIMatch] {
         try await request(path: "/matching/matches/\(userId)")
+    }
+
+    func fetchMyOffers() async throws -> [APIBuddyOffer] {
+        try await request(path: "/matching/my-offers")
+    }
+
+    func declineBuddyOffer(requestId: String) async throws {
+        guard let userId = AuthService.shared.userId else { return }
+        try await requestVoid(
+            path: "/matching/decline",
+            method: "POST",
+            body: ["request_id": requestId, "buddy_id": userId]
+        )
     }
 
     /// Envía la encuesta de cierre (feeling + presión comercial) al motor de reputación.

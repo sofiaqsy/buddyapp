@@ -146,7 +146,7 @@ struct ContactarBuddyView: View {
         phase = .searching
         do {
             let req = try await APIClient.shared.createHelpRequest(
-                travelerId: userId, destinationId: destId,
+                travelerId: userId, destinationId: destId, journeyId: journey.id,
                 category: category, description: description, arrivalAt: journey.arrivalAt)
             activeRequestId = req.id
             startPolling(); startSSEMatch(requestId: req.id)

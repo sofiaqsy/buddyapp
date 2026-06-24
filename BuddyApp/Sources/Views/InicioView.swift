@@ -10,6 +10,10 @@ struct InicioView: View {
     @State private var navPath = NavigationPath()
     @State private var showContactSheet         = false
     @State private var showPendingContactSheet  = false
+    @State private var isFindingBuddy           = false   // creando/reusando trip en background
+    /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
+    @State private var locationPromptDestination: APIDestination? = nil
+    @State private var dismissedPromptDestId: String? = nil   // "Ahora no" → no re-preguntar
     @State private var destinations: [APIDestination] = []
     @State private var pendingJourney: APIJourney? = nil
     @State private var activeJourney: APIJourney? = nil
@@ -84,8 +88,19 @@ struct InicioView: View {
                                 }
                             )
                         } else {
-                            RegisterCTACard(destinations: destinations) {
-                                navPath.append("register")
+                            VStack(alignment: .leading, spacing: Spacing.md) {
+                                // CTA principal — pedir ayuda sin crear un trip a mano.
+                                // El Trip se crea/reusa automáticamente al tocar.
+                                FindBuddyPrimaryCTA(
+                                    destinationName: nearestDestination?.city,
+                                    isLoading: isFindingBuddy
+                                ) {
+                                    Task { await findABuddy() }
+                                }
+                                // Registro manual (elegir destino/fecha) como alternativa.
+                                RegisterCTACard(destinations: destinations) {
+                                    navPath.append("register")
+                                }
                             }
                         }
                     }
@@ -207,6 +222,79 @@ struct InicioView: View {
             if let journey = pendingJourney {
                 ContactarBuddyView(journey: journey, preselectedCategory: "transport")
             }
+        }
+        // GPS cambió y el destino detectado difiere del trip activo → prompt ligero.
+        // NUNCA se crea un trip en silencio: solo si el usuario confirma.
+        .onChange(of: locationService.userLocation) { _, _ in evaluateLocationPrompt() }
+        .alert(
+            locationPromptDestination.map { "Parece que estás en \($0.city)" } ?? "",
+            isPresented: Binding(
+                get: { locationPromptDestination != nil },
+                set: { if !$0 { locationPromptDestination = nil } }
+            )
+        ) {
+            Button("Buscar ayuda aquí") {
+                if let d = locationPromptDestination {
+                    locationPromptDestination = nil
+                    Task { await openHelp(forDestinationId: d.id) }
+                }
+            }
+            Button("Ahora no", role: .cancel) {
+                dismissedPromptDestId = locationPromptDestination?.id
+                locationPromptDestination = nil
+            }
+        }
+    }
+
+    /// Decide si mostrar el prompt de cambio de ubicación (sin crear nada).
+    private func evaluateLocationPrompt() {
+        guard let near = nearestDestination, let active = activeJourney else { return }
+        let activeDestId = active.destination?.id ?? active.destinationId
+        guard near.id != activeDestId,                 // destino distinto al trip activo
+              near.id != dismissedPromptDestId,         // no descartado ya
+              locationPromptDestination == nil,
+              !showContactSheet
+        else { return }
+        locationPromptDestination = near
+    }
+
+    // MARK: – Find a Buddy (trip automático)
+
+    /// Destino conocido más cercano a la ubicación actual, dentro de su radio.
+    /// nil si no hay GPS o estás fuera de cobertura de cualquier destino.
+    private var nearestDestination: APIDestination? {
+        guard let loc = locationService.userLocation else { return nil }
+        return destinations
+            .map { ($0, loc.distance(from: CLLocation(latitude: $0.lat, longitude: $0.lng))) }
+            .filter { $0.1 <= Double($0.0.radiusMeters ?? 50_000) }
+            .min(by: { $0.1 < $1.1 })?
+            .0
+    }
+
+    /// CTA principal: el usuario toca "Buscar un buddy" sin crear un trip a mano.
+    /// Resuelve el destino por GPS, asegura el Trip (reusa o crea) y abre el flujo
+    /// de ayuda. Si no hay destino detectable, cae al registro manual existente.
+    private func findABuddy() async {
+        guard let dest = nearestDestination else {
+            navPath.append("register"); return
+        }
+        await openHelp(forDestinationId: dest.id)
+    }
+
+    /// Asegura el Trip para el destino y presenta el flujo de ayuda.
+    private func openHelp(forDestinationId destId: String) async {
+        await MainActor.run { isFindingBuddy = true }
+        defer { Task { @MainActor in isFindingBuddy = false } }
+        do {
+            let journey = try await APIClient.shared.ensureActiveTrip(destinationId: destId)
+            await MainActor.run {
+                activeJourney = journey
+                pendingJourney = nil
+                showContactSheet = true
+            }
+        } catch {
+            // Fallback seguro: registro manual si algo falla
+            await MainActor.run { navPath.append("register") }
         }
     }
 
@@ -697,6 +785,51 @@ struct ActiveVisitCard: View {
 }
 
 // MARK: – REGISTER CTA CARD
+
+// MARK: – FIND A BUDDY PRIMARY CTA
+// Tarjeta principal de la home: pedir ayuda en un toque. El Trip se crea o
+// reusa automáticamente — el usuario nunca ve una pantalla de "crear trip".
+
+struct FindBuddyPrimaryCTA: View {
+    let destinationName: String?     // ciudad detectada por GPS (si la hay)
+    let isLoading: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(destinationName == nil ? "¿Necesitas ayuda?" : "Estás en \(destinationName!)")
+                    .font(BT.title2)
+                    .foregroundStyle(Color.ink)
+                Text("Un buddy te responde en minutos.")
+                    .font(BT.callout)
+                    .foregroundStyle(Color.inkMuted)
+            }
+
+            Button(action: { Haptic.medium(); onTap() }) {
+                HStack(spacing: 8) {
+                    if isLoading {
+                        ProgressView().tint(.white).controlSize(.small)
+                    } else {
+                        Image(systemName: "person.wave.2.fill")
+                        Text("Buscar un buddy")
+                    }
+                }
+                .font(BT.footnoteBold)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(Color(hex: "#2B8A7A"))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+            }
+            .disabled(isLoading)
+        }
+        .padding(Spacing.md)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+        .cardShadow()
+    }
+}
 
 struct RegisterCTACard: View {
     let destinations: [APIDestination]
