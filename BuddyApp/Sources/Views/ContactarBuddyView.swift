@@ -565,7 +565,7 @@ struct BuddyChatView: View {
                         }
                         // Card de cierre de ciclo
                         if shouldShowCloseCard {
-                            CloseCycleCard(buddyName: buddyName) {
+                            CloseCycleCard(buddyName: buddyName, isHelper: isCurrentUserBuddy) {
                                 // "sí, gracias" — mostrar encuesta de cierre antes de cerrar
                                 showCloseSheet = true
                             } onKeepOpen: {
@@ -1548,16 +1548,29 @@ private struct KeyboardPrewarmer: UIViewRepresentable {
 
 struct CloseCycleCard: View {
     let buddyName: String
+    /// true si el usuario actual es quien AYUDA (buddy). Cambia el tono del copy.
+    var isHelper: Bool = false
     let onClose: () -> Void
     let onKeepOpen: () -> Void
+
+    private var title: String {
+        isHelper ? "¿Pudiste ayudar a \(buddyName)?"
+                 : "¿pudimos cerrar tu duda?"
+    }
+    private var subtitle: String {
+        isHelper ? "Si ya resolviste su duda, cierra el apoyo para quedar libre y acompañar a otro viajero."
+                 : "Si todo está resuelto, cierra la ayuda para que \(buddyName) pueda apoyar a otro viajero."
+    }
+    private var closeLabel: String { isHelper ? "Sí, resuelto" : "Sí, gracias" }
+    private var keepLabel:  String { isHelper ? "Seguimos en eso" : "Tengo otra pregunta" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("¿pudimos cerrar tu duda?")
+                Text(title)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.ink)
-                Text("Si todo está resuelto, cierra la ayuda para que \(buddyName) pueda apoyar a otro viajero.")
+                Text(subtitle)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.inkMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1565,7 +1578,7 @@ struct CloseCycleCard: View {
 
             HStack(spacing: 10) {
                 Button(action: onClose) {
-                    Text("Sí, gracias")
+                    Text(closeLabel)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -1576,7 +1589,7 @@ struct CloseCycleCard: View {
                 .buttonStyle(.plain)
 
                 Button(action: onKeepOpen) {
-                    Text("Tengo otra pregunta")
+                    Text(keepLabel)
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(Color.ink)
                         .multilineTextAlignment(.center)

@@ -34,6 +34,12 @@ final class ChatStore: ObservableObject {
             return last.senderId != userId
         }
 
+        /// El último mensaje lo envié yo (para mostrar "Tú:" estilo WhatsApp)
+        var isLastFromMe: Bool {
+            guard let last = lastMessage, let userId = AuthService.shared.userId else { return false }
+            return last.senderId == userId
+        }
+
         var lastText: String {
             guard let msg = lastMessage else { return "Nueva conexión" }
             switch msg.type {
@@ -648,10 +654,21 @@ struct ConnectionRow: View {
                         .foregroundStyle(Color.inkMuted)
                 }
 
-                HStack(alignment: .center) {
+                HStack(alignment: .center, spacing: 4) {
+                    if item.lastMessage != nil && item.isLastFromMe {
+                        // Mensaje propio → doble check + "Tú:" estilo WhatsApp
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.teal)
+                        Text("Tú:")
+                            .font(BT.footnote)
+                            .foregroundStyle(Color.inkMuted.opacity(0.8))
+                    }
                     Text(item.lastText)
                         .font(BT.footnote)
-                        .foregroundStyle(Color.inkMuted)
+                        // Mensaje entrante sin leer → más oscuro y con peso
+                        .foregroundStyle(item.unreadCount > 0 ? Color.ink : Color.inkMuted)
+                        .fontWeight(item.unreadCount > 0 ? .medium : .regular)
                         .lineLimit(1)
                     Spacer()
                     if item.unreadCount > 0 {
