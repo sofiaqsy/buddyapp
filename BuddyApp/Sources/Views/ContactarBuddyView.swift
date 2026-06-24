@@ -268,7 +268,7 @@ struct CategoryPickerView: View {
                     Text("¿En qué ").font(BT.title1).foregroundStyle(Color.ink)
                     Text("te ayudamos?").font(BT.displayLarge).foregroundStyle(Color.sand)
                 }
-                Text("Un local te responde en minutos.")
+                Text("Pregunta lo que sea, un buddy te responde en minutos.")
                     .font(BT.callout).foregroundStyle(Color.inkMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -333,7 +333,7 @@ struct CategoryPickerView: View {
                     let desc = customText.trimmingCharacters(in: .whitespaces)
                     Task { await onRequest(cat, desc.isEmpty ? nil : desc) }
                 } label: {
-                    Text("Pedir ayuda")
+                    Text("Hablar con un buddy")
                         .font(BT.headline).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .background(canRequest ? Color.teal : Color.teal.opacity(0.35))

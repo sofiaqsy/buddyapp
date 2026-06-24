@@ -59,14 +59,6 @@ struct InicioView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear.frame(height: 0).id("inicioTop")   // ancla para volver arriba
 
-                    // Header — solo la fecha; el saludo no aporta información
-                    Text(dateLabel)
-                        .font(BT.eyebrow)
-                        .tracking(2)
-                        .foregroundStyle(Color.inkMuted)
-                        .padding(.horizontal, Spacing.edge)
-                        .padding(.top, Spacing.sm)
-
                     Group {
                         if isLoadingData {
                             SkeletonBox(cornerRadius: 20)
