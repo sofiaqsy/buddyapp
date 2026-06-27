@@ -145,6 +145,7 @@ struct APIJourney: Decodable, Identifiable, Hashable {
     let journeyPlace: [APIJourneyPlace]?
     let buddyCount: Int?
     let destinationId: String?
+    let tripId: String?          // contenedor: varios lugares = un viaje
     let knowsHowToGet: Bool?
     let hasLodging: Bool?
     // Agregados del feed "Historias de viajeros"
@@ -224,7 +225,7 @@ struct APIUser: Decodable, Identifiable {
     let id: String
     let fullName: String?
     var avatarUrl: String?
-    let role: String
+    let role: String?
     let nationality: String?
     let languages: [String]?
     let bio: String?

@@ -56,14 +56,42 @@ final class AuthService {
             if let rtoken = json["refresh_token"]  as? String { UserDefaults.standard.set(rtoken, forKey: "buddy.refreshToken") }
             profileComplete = json["has_profile"] as? Bool ?? false
             if profileComplete {
-                // Mark onboarding done locally so next launch uses ReAuthView
                 UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
+            }
+            // Hydrate TravelerService with the Traveler identity resolved at auth time.
+            if let tid   = json["traveler_id"]     as? String,
+               let ttok  = json["traveler_token"]  as? String {
+                let tstatus = json["traveler_status"] as? String ?? "verified"
+                TravelerService.shared.hydrate(travelerId: tid, token: ttok, status: tstatus)
             }
         }
         return profileComplete
     }
 
-    // MARK: – Complete profile
+    // MARK: – Complete profile (minimal — progressive registration)
+    /// Crea el perfil mínimo con solo el nombre: usado en el flujo de registro
+    /// progresivo donde el usuario se identifica en el momento de pedir ayuda.
+    /// doc/DOB/nationality quedan en null y pueden completarse más tarde en el perfil.
+    func completeProfileMinimal(fullName: String) async throws {
+        guard let token = accessToken else { throw AuthError.noSession }
+
+        let url = URL(string: "\(coreURL)/complete-profile")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)",  forHTTPHeaderField: "Authorization")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["full_name": fullName])
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
+        print("👤 completeProfileMinimal → status: \(status), body: \(bodyStr)")
+
+        guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
+        UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
+    }
+
+    // MARK: – Complete profile (full — onboarding clásico)
     /// Saves identity data to buddy-core after onboarding completes.
     func completeProfile(fullName: String, docType: String, docNumber: String, birthDate: String, nationality: String) async throws {
         guard let token = accessToken else { throw AuthError.noSession }
@@ -161,6 +189,13 @@ final class AuthService {
                 if let t  = json["access_token"]  as? String { UserDefaults.standard.set(t,  forKey: "buddy.accessToken")  }
                 if let rt = json["refresh_token"] as? String { UserDefaults.standard.set(rt, forKey: "buddy.refreshToken") }
                 if let id = json["user_id"]       as? String { UserDefaults.standard.set(id, forKey: "buddy.userId")       }
+                // Refresh response now includes Traveler identity — hydrate so
+                // TravelerService.travelerId is always set after any auth lifecycle event.
+                if let tid  = json["traveler_id"]    as? String,
+                   let ttok = json["traveler_token"] as? String {
+                    let tstatus = json["traveler_status"] as? String ?? "verified"
+                    TravelerService.shared.hydrate(travelerId: tid, token: ttok, status: tstatus)
+                }
                 print("🔄 session refreshed silently")
                 return true
             } else {
@@ -197,11 +232,14 @@ final class AuthService {
     }
 
     // MARK: – Sign out
+    /// Cierra la sesión intencionalmente: elimina tokens y notifica a la app.
+    /// Distinto de `.sessionExpired` (que es un error de token, no una acción del usuario).
     func signOut() {
         UserDefaults.standard.removeObject(forKey: "buddy.accessToken")
         UserDefaults.standard.removeObject(forKey: "buddy.userId")
         UserDefaults.standard.removeObject(forKey: "buddy.refreshToken")
         UserDefaults.standard.set(false, forKey: "buddy.isLoggedIn")
+        NotificationCenter.default.post(name: .userDidLogOut, object: nil)
     }
 }
 
