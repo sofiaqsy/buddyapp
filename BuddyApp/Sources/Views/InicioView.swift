@@ -1323,10 +1323,12 @@ struct StoryViewerSheet: View {
                             img.resizable().scaledToFit()
                         } placeholder: { Color.sandLight }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
                         .tag(i)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                .clipped()
                 .overlay(alignment: .bottom) {
                     if thumbs.count > 1 {
                         HStack(spacing: 7) {
