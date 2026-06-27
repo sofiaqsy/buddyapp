@@ -228,7 +228,7 @@ struct APIUser: Decodable, Identifiable {
     let role: String?
     let nationality: String?
     let languages: [String]?
-    let bio: String?
+    var bio: String?
     let memberSince: Date?
     let buddyProfile: APIBuddyProfile?
 }

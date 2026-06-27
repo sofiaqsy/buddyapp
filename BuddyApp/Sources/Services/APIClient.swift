@@ -475,9 +475,13 @@ final class APIClient {
     }
 
     /// Publicaciones del perfil AGRUPADAS por viaje (una por trip, con momentos
-    /// y lugares agregados). Decodifica con el mismo shape que el feed.
-    func fetchUserTrips(userId: String) async throws -> [APIJourney] {
-        try await request(path: "/users/\(userId)/trips")
+    /// y lugares agregados). Devuelve una página cursor-based (max 12 por página).
+    func fetchUserTrips(userId: String, cursor: String? = nil) async throws -> FeedPage {
+        var path = "/users/\(userId)/trips"
+        if let cursor, let encoded = cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            path += "?cursor=\(encoded)"
+        }
+        return try await request(path: path)
     }
 
     func updateUserBio(userId: String, bio: String) async throws {

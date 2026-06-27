@@ -14,6 +14,9 @@ struct YoView: View {
     @State private var user: APIUser? = nil
     @State private var stickers: [APIUserSticker] = []
     @State private var journeys: [APIJourney] = []
+    @State private var tripsNextCursor: String? = nil
+    @State private var tripsHasMore: Bool = false
+    @State private var isLoadingMoreTrips: Bool = false
     @State private var selectedStory: APIJourney? = nil   // detalle de publicación
     @State private var isLoading = true
     @State private var editingBio = false
@@ -31,6 +34,8 @@ struct YoView: View {
     @State private var identityMode: IdentityMode? = nil
     // Guardia de logout: si hay apoyo activo no se puede cerrar sesión sin confirmar
     @State private var showActiveHelpLogoutAlert = false
+    // Caché en memoria: evita recargar el perfil en cada cambio de tab
+    @State private var lastFetchedAt: Date? = nil
 
     var body: some View {
         NavigationStack {
@@ -114,7 +119,7 @@ struct YoView: View {
                         }
                         .padding(.bottom, 100)
                     }
-                    .refreshable { await loadProfile() }
+                    .refreshable { await loadProfile(forceRefresh: true) }
                     .background(Color.canvas)
                 }
             }
@@ -139,7 +144,7 @@ struct YoView: View {
                 Text("Hay un buddy ayudándote ahora mismo. Si cierras sesión puedes regresar verificando el mismo número de teléfono.")
             }
             .sheet(item: $identityMode) { mode in
-                IdentitySheet(skipName: mode == .login) { Task { await loadProfile() } }
+                IdentitySheet(skipName: mode == .login) { Task { await loadProfile(forceRefresh: true) } }
                     .environmentObject(authState)
             }
             .confirmationDialog("¿Eliminar tu cuenta?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
@@ -171,10 +176,10 @@ struct YoView: View {
             }
             .task { await loadProfile() }
             .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
-                Task { await loadProfile() }
+                Task { await loadProfile(forceRefresh: true) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
-                Task { await loadProfile() }
+                Task { await loadProfile(forceRefresh: true) }
             }
         }
     }
@@ -377,15 +382,13 @@ struct YoView: View {
                                 Circle()
                                     .fill(Color.sandLight)
                                     .frame(width: 64, height: 64)
-                                if let urlStr = s.stickerCatalog?.imageUrl, let url = URL(string: urlStr) {
-                                    AsyncImage(url: url) { phase in
-                                        if case .success(let img) = phase {
-                                            img.resizable().scaledToFill()
-                                        } else {
-                                            Image(systemName: "star.fill")
-                                                .foregroundStyle(Color.sand)
-                                                .font(.system(size: 24))
-                                        }
+                                if let urlStr = s.stickerCatalog?.imageUrl {
+                                    CachedImage(urlString: urlStr) { img in
+                                        img.resizable().scaledToFill()
+                                    } placeholder: {
+                                        Image(systemName: "star.fill")
+                                            .foregroundStyle(Color.sand)
+                                            .font(.system(size: 24))
                                     }
                                     .frame(width: 64, height: 64)
                                     .clipShape(Circle())
@@ -509,6 +512,31 @@ struct YoView: View {
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
+
+                // Cargar más páginas cuando hay resultados adicionales en el servidor
+                if tripsHasMore {
+                    Button {
+                        Haptic.light()
+                        Task { await loadMoreTrips() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isLoadingMoreTrips {
+                                ProgressView().scaleEffect(0.8)
+                            }
+                            Text(isLoadingMoreTrips ? "Cargando…" : "Ver más trips")
+                                .font(BT.footnoteBold)
+                                .foregroundStyle(Color.ink)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Spacing.md)
+                        .background(Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, Spacing.edge)
+                    .disabled(isLoadingMoreTrips)
+                }
             }
         }
     }
@@ -693,8 +721,8 @@ struct YoView: View {
         Task {
             do {
                 try await APIClient.shared.updateUserBio(userId: userId, bio: bioText)
-                await loadProfile()
                 await MainActor.run {
+                    user = user.map { u in var copy = u; copy.bio = bioText; return copy }
                     editingBio = false
                     isSavingBio = false
                     Haptic.success()
@@ -736,45 +764,72 @@ struct YoView: View {
         }
     }
 
-    private func loadProfile() async {
+    private func loadProfile(forceRefresh: Bool = false) async {
         let tid  = TravelerService.shared.travelerId?.prefix(8) ?? "nil"
         let ttok = TravelerService.shared.token.map { String($0.prefix(16)) + "…" } ?? "nil"
         let atok = AuthService.shared.accessToken.map { String($0.prefix(16)) + "…" } ?? "nil"
-        print("👤 [YoView] loadProfile — travelerId=\(tid) travelerToken=\(ttok) authToken=\(atok) hasSession=\(Session.hasSession) isVerified=\(Session.isVerified)")
+        print("👤 [YoView] loadProfile — travelerId=\(tid) travelerToken=\(ttok) authToken=\(atok) hasSession=\(Session.hasSession) isVerified=\(Session.isVerified) forceRefresh=\(forceRefresh)")
 
         guard Session.hasSession else {
             print("👤 [YoView] sin sesión — saliendo")
             isLoading = false; return
         }
+
+        // Cache: si los datos tienen menos de 60 s y no hay forzado, no recargar.
+        if !forceRefresh, let fetchedAt = lastFetchedAt,
+           Date().timeIntervalSince(fetchedAt) < 60, user != nil {
+            print("👤 [YoView] perfil en caché (\(Int(Date().timeIntervalSince(fetchedAt)))s) — omitiendo recarga")
+            isLoading = false; return
+        }
+
         if user == nil { isLoading = true }
 
-        // /users/me resuelve la identidad desde el JWT — válido para Traveler JWT
-        // y Supabase JWT (auth_user_id → travelers.id en el backend).
+        // ── Fase 1: header ─────────────────────────────────────────────────────
+        // Carga /users/me primero y muestra el header inmediatamente.
+        // El contenido inferior (stickers, trips) se carga en fase 2.
         print("👤 [YoView] fetchCurrentUser → /users/me…")
         guard let me = try? await APIClient.shared.fetchCurrentUser() else {
             print("👤 [YoView] ❌ fetchCurrentUser falló — token inválido, sin red, o sin perfil en DB")
             isLoading = false; return
         }
-        print("👤 [YoView] fetchCurrentUser ✅ → id=\(me.id.prefix(8)) name=\(me.fullName ?? "nil") role=\(me.role ?? "nil") TravelerService.id ahora=\(TravelerService.shared.travelerId?.prefix(8) ?? "nil")")
+        print("👤 [YoView] fetchCurrentUser ✅ → id=\(me.id.prefix(8)) name=\(me.fullName ?? "nil") role=\(me.role ?? "nil")")
 
-        // Identity is owned by TravelerService — hydrated at authentication time.
-        // Views must not write to identity storage. Use me.id only for display/API calls.
-        print("👤 [YoView] cargando stickers/journeys/buddy para id=\(me.id.prefix(8))…")
+        // Header visible: el usuario ve nombre, avatar y buddy card antes de que
+        // terminen de cargar los stickers y los trips.
+        user      = me
+        isLoading = false
+
+        // ── Fase 2: contenido inferior (paralelo) ──────────────────────────────
+        print("👤 [YoView] cargando stickers/trips/buddy para id=\(me.id.prefix(8))…")
         async let stickersTask = try? APIClient.shared.fetchUserStickers(userId: me.id)
-        async let journeysTask = try? APIClient.shared.fetchUserTrips(userId: me.id)
+        async let tripsTask    = try? APIClient.shared.fetchUserTrips(userId: me.id)
         async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
         async let destsTask    = try? APIClient.shared.fetchDestinations()
 
-        let (s, j, b, d) = await (stickersTask, journeysTask, buddyTask, destsTask)
-        print("👤 [YoView] datos cargados — nombre=\(me.fullName ?? "nil") stickers=\(s?.count ?? 0) journeys=\(j?.count ?? 0) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
-        user         = me
-        stickers     = s ?? []
-        journeys     = j ?? []
-        buddyMe      = b
-        destinations = d ?? []
-        isLoading    = false
+        let (s, tp, b, d) = await (stickersTask, tripsTask, buddyTask, destsTask)
+        print("👤 [YoView] datos cargados — stickers=\(s?.count ?? 0) trips=\(tp?.items.count ?? 0) hasMore=\(tp?.hasMore ?? false) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
+
+        stickers        = s ?? []
+        journeys        = tp?.items ?? []
+        tripsNextCursor = tp?.nextCursor
+        tripsHasMore    = tp?.hasMore ?? false
+        buddyMe         = b
+        destinations    = d ?? []
+        lastFetchedAt   = Date()
 
         await routeStore.syncCollectedStickers(userStickers: stickers)
+    }
+
+    private func loadMoreTrips() async {
+        guard tripsHasMore, !isLoadingMoreTrips, let userId = user?.id else { return }
+        print("👤 [YoView] loadMoreTrips — cursor=\(tripsNextCursor ?? "nil")")
+        isLoadingMoreTrips = true
+        defer { isLoadingMoreTrips = false }
+        guard let page = try? await APIClient.shared.fetchUserTrips(userId: userId, cursor: tripsNextCursor) else { return }
+        journeys        += page.items
+        tripsNextCursor  = page.nextCursor
+        tripsHasMore     = page.hasMore
+        print("👤 [YoView] loadMoreTrips ✅ — +\(page.items.count) trips totalNow=\(journeys.count)")
     }
 
     /// Crea el perfil de buddy del usuario y refresca la sección.
@@ -920,23 +975,16 @@ struct TripGridCell: View {
         .clipped()
         .contentShape(Rectangle())
         .task {
-            // 0. Si es un trip del feed, ya trae los thumbnails agregados
+            // Usa los datos ya cargados por el endpoint de trips — sin requests adicionales.
+            // pageThumbs viene de feed_trip_json; coverUrl es el fallback del destino.
+            // fetchJourneyPages solo se llama al abrir el detalle del trip, no desde la grilla.
             if let first = journey.pageThumbs?.first {
-                thumbUrl = first
-                return
+                thumbUrl = first; return
             }
-            // 1. Intentar servidor (journey real)
-            do {
-                let pages = try await APIClient.shared.fetchJourneyPages(journeyId: journey.id)
-                if let first = pages.first {
-                    thumbUrl = first.thumbnailUrl
-                    return
-                }
-            } catch {
-                // Cancelación de SwiftUI (vista redibujada): el .task se relanza solo
-                if (error as? URLError)?.code == .cancelled || error is CancellationError { return }
+            if journey.coverUrl != nil {
+                thumbUrl = journey.coverUrl; return
             }
-            // 2. Fallback: thumbnail local — disco + decodificación FUERA del main thread
+            // Fallback local — disco, sin red
             let jId = journey.id
             let img = await Task.detached(priority: .userInitiated) { () -> UIImage? in
                 let localPages = MemoirPersistence.shared.load(journeyId: jId)
