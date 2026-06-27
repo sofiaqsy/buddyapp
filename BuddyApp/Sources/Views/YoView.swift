@@ -725,23 +725,36 @@ struct YoView: View {
     }
 
     private func loadProfile() async {
-        guard Session.hasSession else { isLoading = false; return }
-        if user == nil { isLoading = true }
+        let tid  = TravelerService.shared.travelerId?.prefix(8) ?? "nil"
+        let ttok = TravelerService.shared.token.map { String($0.prefix(16)) + "…" } ?? "nil"
+        let atok = AuthService.shared.accessToken.map { String($0.prefix(16)) + "…" } ?? "nil"
+        print("👤 [YoView] loadProfile — travelerId=\(tid) travelerToken=\(ttok) authToken=\(atok) hasSession=\(Session.hasSession) isVerified=\(Session.isVerified)")
 
-        // /users/me resuelve la identidad desde el JWT — funciona tanto con
-        // Traveler JWT como con Supabase JWT (auth_user_id → travelers.id).
-        guard let me = try? await APIClient.shared.fetchCurrentUser() else {
+        guard Session.hasSession else {
+            print("👤 [YoView] sin sesión — saliendo")
             isLoading = false; return
         }
+        if user == nil { isLoading = true }
+
+        // /users/me resuelve la identidad desde el JWT — válido para Traveler JWT
+        // y Supabase JWT (auth_user_id → travelers.id en el backend).
+        print("👤 [YoView] fetchCurrentUser → /users/me…")
+        guard let me = try? await APIClient.shared.fetchCurrentUser() else {
+            print("👤 [YoView] ❌ fetchCurrentUser falló — token inválido, sin red, o sin perfil en DB")
+            isLoading = false; return
+        }
+        print("👤 [YoView] fetchCurrentUser ✅ → id=\(me.id.prefix(8)) name=\(me.fullName ?? "nil") role=\(me.role ?? "nil") TravelerService.id ahora=\(TravelerService.shared.travelerId?.prefix(8) ?? "nil")")
 
         // Identity is owned by TravelerService — hydrated at authentication time.
         // Views must not write to identity storage. Use me.id only for display/API calls.
+        print("👤 [YoView] cargando stickers/journeys/buddy para id=\(me.id.prefix(8))…")
         async let stickersTask = try? APIClient.shared.fetchUserStickers(userId: me.id)
         async let journeysTask = try? APIClient.shared.fetchUserTrips(userId: me.id)
         async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
         async let destsTask    = try? APIClient.shared.fetchDestinations()
 
         let (s, j, b, d) = await (stickersTask, journeysTask, buddyTask, destsTask)
+        print("👤 [YoView] datos cargados — nombre=\(me.fullName ?? "nil") stickers=\(s?.count ?? 0) journeys=\(j?.count ?? 0) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
         user         = me
         stickers     = s ?? []
         journeys     = j ?? []

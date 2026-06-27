@@ -15,37 +15,65 @@ struct InicioView: View {
     @State private var isFindingBuddy           = false   // creando/reusando trip en background
     @State private var homeBuddyCount           = 0       // buddies cerca, para el composer de la Home
     @State private var homeHelpSeed: (category: String, description: String?)? = nil  // categoría elegida en Home
+    @State private var confirmedHelpSeed: (category: String, description: String?)? = nil  // seed confirmado para la sheet
     @State private var homeHelpDestId: String?  = nil     // destino del flujo de ayuda sin trip
     @State private var showHomeHelpSheet        = false
     /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
     @State private var locationPromptDestination: APIDestination? = nil
-    @State private var dismissedPromptDestId: String? = nil   // "Ahora no" → no re-preguntar
     @State private var destinations: [APIDestination] = []
     @State private var pendingJourney: APIJourney? = nil
     @State private var activeJourney: APIJourney? = nil
+    @State private var liveJourneys: [APIJourney] = []   // active + planning, para swipe
+    @State private var currentTripPage = 0
     @State private var activeMatch: APIMatch? = nil
     @State private var isLoadingData = true
+    @State private var loadDataTask: Task<Void, Never>? = nil
     @State private var publicJourneys: [APIJourney] = []
     @State private var feedCursor: String? = nil
     @State private var feedHasMore = true
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
-    @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva
+    @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
+    @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
     @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
     @State private var recentHelpLoadedAt: Date? = nil    // throttle de refetch
     @State private var pendingNavToDetail = false
     @State private var hasLoaded = false
+    @State private var showActivateNextTripAlert = false
     @State private var skipNextRefresh = false
     @State private var isLoadingFeed = true
     @State private var feedFailed = false
     @ObservedObject private var chatStore = ChatStore.shared
     @ObservedObject private var placeDeepLink = PlaceDeepLink.shared
+    @EnvironmentObject private var authState: AuthState
+    /// IdentitySheet para el flujo de registro progresivo
+    @State private var showIdentitySheet = false
+    /// Acción pendiente que se ejecuta después de que el usuario se autentique
+    @State private var pendingIdentityAction: (() -> Void)? = nil
+    /// Journey capturado al abrir showContactSheet — no se borra con loadData.
+    @State private var contactSheetJourney: APIJourney? = nil
 
     private var pendingReply: Bool {
         chatStore.connections
             .first { ["accepted","active"].contains($0.match.status) }?
             .pendingReply ?? false
+    }
+
+    // Firma del estado de matches del viajero — cambia cuando un buddy acepta o
+    // se cierra un apoyo. Dispara la actualización en vivo del card.
+    private var travelerMatchSignature: String {
+        chatStore.connections
+            .filter { !$0.isBuddyRole }
+            .map { "\($0.match.id):\($0.match.status)" }
+            .sorted()
+            .joined(separator: "|")
+    }
+
+    // Prueba social: nombre del último buddy que ayudó en este destino
+    private var recentHelperFirstName: String? {
+        guard let full = recentHelp.first?.buddy?.fullName else { return nil }
+        return full.components(separatedBy: " ").first?.capitalized
     }
 
     // Destino activo → para pedir el head de afinidad al feed (ranking en servidor)
@@ -61,30 +89,41 @@ struct InicioView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear.frame(height: 0).id("inicioTop")   // ancla para volver arriba
 
+                    // Inline banner: permanente mientras GPS detecte destino distinto al trip
+                    if let dest = locationPromptDestination {
+                        LocationPromptBanner(destination: dest) {
+                            requireIdentity {
+                                Task { await openHelp(forDestinationId: dest.id) }
+                            }
+                        }
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.top, Spacing.md)
+                    }
+
                     Group {
                         if isLoadingData {
                             SkeletonBox(cornerRadius: 20)
                                 .frame(height: 200)
-                        } else if let journey = activeJourney {
-                            // La card del trip activo SIEMPRE se muestra;
-                            // solo el detalle del mapa depende de la ubicación/ruta
-                            NavigationLink(destination: TripDetailGate(journey: journey, match: activeMatch, unreadCount: pendingReply ? 1 : 0)
-                                .environmentObject(routeStore)) {
-                                ActiveTripCard(journey: journey, match: activeMatch, pendingReply: pendingReply) {
-                                    showContactSheet = true
+                        } else if !liveJourneys.isEmpty {
+                            VStack(spacing: Spacing.sm) {
+                                if liveJourneys.count == 1 {
+                                    tripCard(for: liveJourneys[0])
+                                } else {
+                                    // Varios trips → carrusel: jala a la izquierda para el otro
+                                    TabView(selection: $currentTripPage) {
+                                        ForEach(Array(liveJourneys.enumerated()), id: \.element.id) { idx, j in
+                                            tripCard(for: j).tag(idx)
+                                        }
+                                    }
+                                    .tabViewStyle(.page(indexDisplayMode: .never))
+                                    .frame(height: min(360, UIScreen.main.bounds.height * 0.44))
+                                }
+
+                                // Con un trip igual se puede planear otro lugar.
+                                RegisterCTACard(destinations: destinations) {
+                                    requireIdentity { navPath.append("register") }
                                 }
                             }
-                            .buttonStyle(.plain)
-                        } else if let journey = pendingJourney {
-                            PendingTripCard(
-                                journey: journey,
-                                destination: destinations.first { $0.id == (journey.destination?.id ?? journey.destinationId) },
-                                unreadCount: pendingReply ? 1 : 0,
-                                onTap: { navPath.append(journey) },
-                                onContactBuddy: {
-                                    showPendingContactSheet = true
-                                }
-                            )
                         } else {
                             VStack(alignment: .leading, spacing: Spacing.lg) {
                                 // 1. Contexto — ubicación detectada, o invitación a activarla.
@@ -92,7 +131,9 @@ struct InicioView: View {
                                 // 2. Ayuda — el composer ES la Home: "¿En qué te ayudamos?".
                                 // El Trip se crea/reusa automáticamente al enviar.
                                 CategoryPickerView(buddyCount: homeBuddyCount) { cat, desc in
-                                    await submitHelpFromHome(category: cat, description: desc)
+                                    requireIdentity {
+                                        Task { await submitHelpFromHome(category: cat, description: desc) }
+                                    }
                                 }
                                 .padding(.horizontal, -Spacing.edge)   // el composer maneja su propio margen
                                 .opacity(isFindingBuddy ? 0.5 : 1)
@@ -100,19 +141,13 @@ struct InicioView: View {
 
                                 // 5. Planear un viaje — secundario, opcional.
                                 RegisterCTACard(destinations: destinations) {
-                                    navPath.append("register")
+                                    requireIdentity { navPath.append("register") }
                                 }
                             }
                         }
                     }
                     .padding(.horizontal, Spacing.edge)
                     .padding(.top, Spacing.md)
-
-                    // Comunidad viva — con trip activo o en planificación
-                    if (activeJourney != nil || pendingJourney != nil), !recentHelp.isEmpty {
-                        comunidadVivaSection
-                            .padding(.top, Spacing.xl)
-                    }
 
                     communitySection
                         .padding(.top, Spacing.xl)
@@ -130,7 +165,16 @@ struct InicioView: View {
                     // Reemplaza el formulario por el confirm → "atrás" vuelve al tab, no al form
                     RegisterTripView { journey in
                         navPath = NavigationPath()
-                        navPath.append(journey)
+                        if homeHelpSeed != nil {
+                            // Flujo "Hablar con un buddy" sin ubicación → ir directo a buscar buddy
+                            confirmedHelpSeed = homeHelpSeed  // preservar antes de limpiar
+                            homeHelpSeed = nil
+                            activeJourney = journey
+                            contactSheetJourney = journey
+                            showContactSheet = true
+                        } else {
+                            navPath.append(journey)
+                        }
                     }
                 } else if route == "tripDetail", let journey = activeJourney {
                     TripDetailView(
@@ -178,6 +222,11 @@ struct InicioView: View {
             .onReceive(NotificationCenter.default.publisher(for: .helpCompleted)) { _ in
                 Task { await loadRecentHelp(force: true); await refreshTripState() }
             }
+            // Aceptación/cierre en vivo (SSE): el buddy acepta → aparece su foto;
+            // se cierra → vuelve el ícono. Sin salir y entrar al Home.
+            .onChange(of: travelerMatchSignature) { _, _ in
+                Task { await refreshTripState() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { _ in
                 skipNextRefresh = true   // evita que .onAppear sobreescriba el estado
                 activeJourney  = nil
@@ -214,9 +263,33 @@ struct InicioView: View {
                                             userInfo: ["tab": AppTab.inicio.rawValue])
             navPath.append("tripDetail")
         }
-        .sheet(isPresented: $showContactSheet) {
-            if let journey = activeJourney {
-                ContactarBuddyView(journey: journey)
+        .sheet(isPresented: $showContactSheet, onDismiss: {
+            confirmedHelpSeed = nil
+            // Optimistic: si ya tenemos un journey capturado (puede ser planning)
+            // mostrarlo de inmediato; refreshTripState lo confirmará con el status real.
+            if activeJourney == nil, let j = contactSheetJourney {
+                activeJourney = j
+                liveJourneys  = [j]
+            }
+            contactSheetJourney = nil
+            Task { await refreshTripState() }
+        }) {
+            if let journey = contactSheetJourney {
+                ContactarBuddyView(
+                    journey: journey,
+                    initialRequest: confirmedHelpSeed,
+                    onCancelled: {
+                        // Usuario canceló sin aceptar buddy → cancelar el journey
+                        let jid = journey.id
+                        Task {
+                            try? await APIClient.shared.updateJourneyStatus(journeyId: jid, status: "cancelled")
+                        }
+                        activeJourney  = nil
+                        pendingJourney = nil
+                        liveJourneys   = []
+                        contactSheetJourney = nil
+                    }
+                )
             }
         }
         // Flujo de la Home SIN trip previo: se pide ayuda solo con el destino.
@@ -241,36 +314,61 @@ struct InicioView: View {
             evaluateLocationPrompt()
             Task { await refreshHomeBuddyCount() }
         }
-        .alert(
-            locationPromptDestination.map { "Parece que estás en \($0.city)" } ?? "",
-            isPresented: Binding(
-                get: { locationPromptDestination != nil },
-                set: { if !$0 { locationPromptDestination = nil } }
-            )
-        ) {
-            Button("Buscar ayuda aquí") {
-                if let d = locationPromptDestination {
-                    locationPromptDestination = nil
-                    Task { await openHelp(forDestinationId: d.id) }
-                }
+        .onChange(of: authState.isLoggedIn) { _, loggedIn in
+            if !loggedIn {
+                pendingJourney = nil
+                activeJourney  = nil
+                liveJourneys   = []
+                activeMatch    = nil
+                recentHelp     = []
+                recentHelpByDest = [:]
+                pendingIdentityAction = nil
+                hasLoaded = false
+            } else {
+                Task { await loadData() }
             }
-            Button("Ahora no", role: .cancel) {
-                dismissedPromptDestId = locationPromptDestination?.id
-                locationPromptDestination = nil
+        }
+        // Registro progresivo: se muestra cuando una acción requiere identidad
+        .sheet(isPresented: $showIdentitySheet, onDismiss: {
+            // Si el usuario cerró sin autenticarse, descarta la acción pendiente
+            if !authState.isLoggedIn { pendingIdentityAction = nil }
+        }) {
+            IdentitySheet(contextMessage: "Para pedir ayuda a un buddy necesitamos saber quién eres.") {
+                // Autenticado: ejecutar la acción que estaba esperando
+                pendingIdentityAction?()
+                pendingIdentityAction = nil
             }
+            .environmentObject(authState)
+        }
+        // location prompt is rendered inline above the trip card — no alert needed
+    }
+
+    // MARK: – Registro progresivo
+
+    /// Ejecuta `action` si el usuario tiene sesión, o muestra el IdentitySheet primero.
+    private func requireIdentity(context: String? = nil, then action: @escaping () -> Void) {
+        if authState.canRequestHelp {
+            action()
+        } else {
+            pendingIdentityAction = action
+            showIdentitySheet = true
         }
     }
 
-    /// Decide si mostrar el prompt de cambio de ubicación (sin crear nada).
+    /// Mantiene el banner actualizado con el destino detectado por GPS.
+    /// Se muestra si el lugar detectado NO está entre tus trips vivos (active o
+    /// planning) — así sugiere pedir ayuda donde estás aunque tu trip sea otro.
     private func evaluateLocationPrompt() {
-        guard let near = nearestDestination, let active = activeJourney else { return }
-        let activeDestId = active.destination?.id ?? active.destinationId
-        guard near.id != activeDestId,                 // destino distinto al trip activo
-              near.id != dismissedPromptDestId,         // no descartado ya
-              locationPromptDestination == nil,
-              !showContactSheet
-        else { return }
-        locationPromptDestination = near
+        let near = nearestDestination
+        let liveDestIds = Set(liveJourneys.compactMap { $0.destination?.id ?? $0.destinationId })
+        print("📍 [LocationPrompt] userLoc=\(locationService.userLocation != nil) dests=\(destinations.count) nearest=\(near?.name ?? "nil") liveTrips=\(liveJourneys.map { ($0.destination?.name ?? "·") }) liveDestIds=\(liveDestIds.count)")
+        guard let near, !liveJourneys.isEmpty else {
+            print("📍 [LocationPrompt] → oculto (sin GPS-dest o sin trips vivos)")
+            locationPromptDestination = nil
+            return
+        }
+        locationPromptDestination = liveDestIds.contains(near.id) ? nil : near
+        print("📍 [LocationPrompt] → \(locationPromptDestination?.name ?? "oculto") (near=\(near.id.prefix(6)) yaEnTrips=\(liveDestIds.contains(near.id)))")
     }
 
     // MARK: – Contexto de ubicación
@@ -350,7 +448,10 @@ struct InicioView: View {
     /// ayuda ya en "buscando" SIN crear trip (se crea al aceptar un buddy).
     private func submitHelpFromHome(category: String, description: String?) async {
         guard let dest = nearestDestination else {
-            await MainActor.run { navPath.append("register") }   // sin GPS → registro manual
+            await MainActor.run {
+                homeHelpSeed = (category, description)  // guardamos para abrir ContactarBuddy tras crear el trip
+                navPath.append("register")
+            }
             return
         }
         await MainActor.run {
@@ -369,19 +470,66 @@ struct InicioView: View {
         }
     }
 
+    /// Card de un trip de Home — el match/badge dependen de si está activo.
+    /// La actividad de la comunidad es la del DESTINO de este trip (cada lugar
+    /// tiene su propia comunidad), no la del destino activo.
+    @ViewBuilder
+    private func tripCard(for journey: APIJourney) -> some View {
+        let isActive = journey.status == "active"
+        let destId = journey.destination?.id ?? journey.destinationId
+        let help = destId.flatMap { recentHelpByDest[$0] } ?? []
+        let helperName = help.first?.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
+        ActiveTripCard(
+            journey: journey,
+            match: isActive ? activeMatch : nil,
+            pendingReply: pendingReply,
+            statusText: isActive ? "EN CURSO" : "PRÓXIMO",
+            recentHelperName: helperName,
+            recentHelperTimeAgo: help.first.map { timeAgo($0.completedAt) },
+            recentHelperAvatars: help.map { $0.buddy?.avatarUrl },
+            recentHelperTotal: help.count,
+            onContactBuddy: {
+                if isActive {
+                    contactSheetJourney = journey
+                    showContactSheet = true
+                } else { showPendingContactSheet = true }
+            },
+            onOpenDetail: {
+                if isActive { navPath.append("tripDetail") } else { navPath.append(journey) }
+            }
+        )
+    }
+
     /// Revalida solo el estado del trip (activo/pendiente) — barato y frecuente
     private func refreshTripState() async {
-        guard let userId = AuthService.shared.userId,
-              let journeys = try? await APIClient.shared.fetchUserJourneys(userId: userId) else { return }
-        // Anti cross-account: descarta si la sesión cambió de usuario en vuelo
-        guard AuthService.shared.userId == userId else { return }
+        guard Session.hasSession else { print("🔄 [refreshTripState] sin sesión — skip"); return }
+        guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else {
+            print("❌ [refreshTripState] fetchTravelerJourneys falló")
+            return
+        }
+        print("🔄 [refreshTripState] \(journeys.count) journey(s): \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
         let active   = journeys.first(where: { $0.status == "active" })
         let planning = journeys.first(where: { $0.status == "planning" })
+
+        // Recalcular el match activo — al cerrar un apoyo el match deja de estar
+        // en estados activos, así el card vuelve a mostrar el ícono (no la foto).
+        var resolvedMatch: APIMatch? = nil
+        if active != nil {
+            let matches = (try? await APIClient.shared.fetchMatches()) ?? []
+            resolvedMatch = matches.first(where: { ["accepted", "active", "pending"].contains($0.status) })
+        }
+
         await MainActor.run {
             activeJourney  = active
-            pendingJourney = active == nil ? planning : nil
+            pendingJourney = planning
+            activeMatch    = resolvedMatch
+            liveJourneys   = journeys
+                .filter { ["active", "planning"].contains($0.status) }
+                .sorted { ($0.status == "active" ? 0 : 1) < ($1.status == "active" ? 0 : 1) }
+            evaluateLocationPrompt()
         }
         await loadRecentHelp()
+        await loadRecentHelpPerTrip()
         // Ruta en background — activos y planning la necesitan para el mapa
         if let active, !routeStore.isReady {
             let destId = active.destination?.id ?? active.destinationId
@@ -394,8 +542,8 @@ struct InicioView: View {
 
     /// Fetch ligero para navegar al detalle rápido tras "Ya llegué"
     private func quickLoadForDetail() async {
-        guard let userId = AuthService.shared.userId else { return }
-        guard let journeys = try? await APIClient.shared.fetchUserJourneys(userId: userId) else { return }
+        guard Session.hasSession else { return }
+        guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else { return }
         let active = journeys.first(where: { $0.status == "active" })
 
         // Asegura que routeStore tenga la ruta
@@ -406,10 +554,12 @@ struct InicioView: View {
 
         // Cargar match si hay viaje activo
         if let active {
-            let matches = try? await APIClient.shared.fetchMatches(userId: userId)
+            let matches = try? await APIClient.shared.fetchMatches()
+            let all = matches ?? []
+            let found = all.first(where: { ["accepted", "active", "pending"].contains($0.status) })
             await MainActor.run {
                 activeJourney = active
-                activeMatch = matches?.first(where: { ["accepted", "active"].contains($0.status) })
+                activeMatch = found
             }
         }
 
@@ -425,52 +575,120 @@ struct InicioView: View {
         }
     }
 
-    private func loadData() async {
-        async let dests = APIClient.shared.fetchDestinations()
-        destinations = (try? await dests) ?? []
-        ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
+    private func activateNextTrip() async {
+        guard let current = activeJourney, let next = pendingJourney else { return }
+        do {
+            // 1. Cancel active buddy match
+            if let match = activeMatch {
+                _ = try? await APIClient.shared.updateMatchStatus(matchId: match.id, status: "cancelled")
+            }
+            // 2. Complete current trip
+            try await APIClient.shared.updateJourneyStatus(journeyId: current.id, status: "completed")
+            // 3. Activate next trip
+            try await APIClient.shared.updateJourneyStatus(journeyId: next.id, status: "active")
+            // 4. Refresh
+            await loadData()
+        } catch {
+            print("❌ [activateNextTrip] \(error)")
+        }
+    }
 
-        guard let userId = AuthService.shared.userId else { isLoadingData = false; return }
+    private func loadData() async {
+        // Cancel any in-flight loadData — only the latest matters.
+        loadDataTask?.cancel()
+        let task = Task<Void, Never> { [self] in await _loadDataBody() }
+        loadDataTask = task
+        await task.value
+    }
+
+    private func _loadDataBody() async {
+        guard !Task.isCancelled else { return }
+        // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
+        async let dests = APIClient.shared.fetchDestinations()
+        let fetchedDests = (try? await dests) ?? []
+        await MainActor.run {
+            destinations = fetchedDests
+            ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
+            evaluateLocationPrompt()
+        }
+
+        // Sin ninguna sesión (ni guest ni verified): solo contenido público.
+        let tid = Session.travelerId
+        print("🏠 [loadData] hasSession=\(Session.hasSession) travelerId=\(tid?.prefix(8) ?? "nil") isVerified=\(Session.isVerified)")
+        guard Session.hasSession else {
+            print("🏠 [loadData] sin sesión — solo contenido público")
+            await MainActor.run { isLoadingData = false }
+            await loadFeed()
+            await refreshHomeBuddyCount()
+            return
+        }
+        // ── Contenido PRIVADO: guest y verified cargan sus journeys ──
 
         do {
-            let journeys = try await APIClient.shared.fetchUserJourneys(userId: userId)
-            // Anti cross-account: descarta si la sesión cambió de usuario en vuelo
-            guard AuthService.shared.userId == userId else {
-                print("⚠️ [InicioView] userId cambió durante loadData — descarto resultado")
-                isLoadingData = false; return
+            // fetchTravelerJourneys usa el JWT (traveler o Supabase) — válido para ambos.
+            let snapshotId = Session.travelerId   // capturar ANTES del await
+            print("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
+            let journeys = try await APIClient.shared.fetchTravelerJourneys()
+            print("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
+            // Anti cross-account guard: if identity was hydrated mid-flight (cold launch
+            // where validate() forces a refresh after loadData already started with nil),
+            // discard the stale response and retry immediately with the correct identity.
+            guard Session.travelerId == snapshotId else {
+                let newId = Session.travelerId?.prefix(8) ?? "?"
+                print("⚠️ [loadData] travelerId cambió (nil → \(newId)) — descarto y reintento con identidad correcta")
+                await MainActor.run { isLoadingData = false }
+                Task { await loadData() }
+                return
             }
             let active   = journeys.first(where: { $0.status == "active" })
             let planning = journeys.first(where: { $0.status == "planning" })
+            print("🏠 [loadData] active=\(active?.id.prefix(8) ?? "nil") planning=\(planning?.id.prefix(8) ?? "nil")")
 
             if let active, !routeStore.isReady {
                 let destId = active.destination?.id ?? active.destinationId
                 await routeStore.fetchDestinationFromAPI(id: destId)
             } else if active == nil, let planning, !routeStore.isReady {
-                // Cargar mapa también para trips en planificación
                 let destId = planning.destination?.id ?? planning.destinationId
                 await routeStore.fetchDestinationFromAPI(id: destId)
             }
 
-            // El trip activo se muestra exista o no la ruta — el mapa es lo
-            // único que depende de la ubicación
-            activeJourney  = active
-            pendingJourney = activeJourney == nil ? planning : nil
+            // Calcular nuevo estado antes de escribir al MainActor.
+            let newLive = journeys
+                .filter { ["active", "planning"].contains($0.status) }
+                .sorted { ($0.status == "active" ? 0 : 1) < ($1.status == "active" ? 0 : 1) }
+            await MainActor.run {
+                // No pisamos activeJourney si el contact sheet está abierto —
+                // onDismiss hace el update optimista y refreshTripState confirma.
+                if contactSheetJourney == nil {
+                    activeJourney = active
+                }
+                pendingJourney = planning
+                liveJourneys   = newLive
+                evaluateLocationPrompt()
+            }
 
-            // Cargar match activo y mensajes no leídos
-            if activeJourney != nil {
-                let matches = try await APIClient.shared.fetchMatches(userId: userId)
-                activeMatch = matches.first(where: { ["accepted", "active"].contains($0.status) })
-                // ChatStore carga y calcula pendingReply reactivamente
+            let shouldFetchMatch = await MainActor.run { activeJourney != nil }
+            if shouldFetchMatch {
+                let matches = try await APIClient.shared.fetchMatches()
+                print("🏠 [loadData] \(matches.count) match(es): \(matches.map { "\($0.status ?? "?")" })")
+                let found = matches.first(where: { ["accepted", "active", "pending"].contains($0.status) })
+                await MainActor.run { activeMatch = found }
                 await chatStore.load()
             }
             await loadRecentHelp(force: true)
-        } catch { }
-        isLoadingData = false
+            await loadRecentHelpPerTrip()
+        } catch {
+            print("❌ [loadData] ERROR: \(error)")
+        }
+        await MainActor.run { isLoadingData = false }
+        print("🏠 [loadData] done — activeJourney=\(await MainActor.run { activeJourney?.id.prefix(8) ?? "nil" }) liveJourneys=\(await MainActor.run { liveJourneys.count })")
 
         // Si viene de "Ya llegué", navegar directo al mapa
-        if pendingNavToDetail, activeJourney != nil, routeStore.isReady {
-            pendingNavToDetail = false
-            navPath.append("tripDetail")
+        await MainActor.run {
+            if pendingNavToDetail, activeJourney != nil, routeStore.isReady {
+                pendingNavToDetail = false
+                navPath.append("tripDetail")
+            }
         }
 
         // Feed de trips publicados — con un reintento: un timeout puntual
@@ -563,11 +781,39 @@ struct InicioView: View {
         defer { isLoadingRecentHelp = false }
         do {
             let result = try await APIClient.shared.fetchRecentHelp(destinationId: destId)
-            recentHelp = result
+            // Solo actualiza si el destino sigue siendo el mismo (anti carrera con
+            // cambios de trip) y conserva lo último conocido si llega vacío por un
+            // blip — la prueba social no debe parpadear al refrescar.
+            if !result.isEmpty || recentHelpDestId != destId {
+                recentHelp = result
+            }
             recentHelpDestId = destId
             recentHelpLoadedAt = Date()
         } catch {
-            recentHelp = []
+            // Error transitorio (p. ej. al hacer pull-to-refresh): preserva la
+            // info actual en vez de borrarla.
+        }
+    }
+
+    /// Carga la actividad de comunidad de CADA destino vivo (uno por trip del
+    /// carrusel), en paralelo. Así cada card muestra su propia prueba social.
+    private func loadRecentHelpPerTrip() async {
+        let destIds = Set(liveJourneys.compactMap { $0.destination?.id ?? $0.destinationId })
+        await withTaskGroup(of: (String, [APIRecentHelp]).self) { group in
+            for id in destIds {
+                group.addTask {
+                    let r = (try? await APIClient.shared.fetchRecentHelp(destinationId: id)) ?? []
+                    return (id, r)
+                }
+            }
+            var collected: [String: [APIRecentHelp]] = [:]
+            for await (id, r) in group { collected[id] = r }
+            await MainActor.run {
+                // Conserva lo previo si algo llega vacío por un blip (no parpadear)
+                for (id, r) in collected where !r.isEmpty || recentHelpByDest[id] == nil {
+                    recentHelpByDest[id] = r
+                }
+            }
         }
     }
 
@@ -578,66 +824,6 @@ struct InicioView: View {
         if s < 3600  { return "hace \(Int(s / 60)) min" }
         if s < 86400 { return "hace \(Int(s / 3600)) h" }
         return "hace \(Int(s / 86400)) d"
-    }
-
-    private func helpAvatar(_ user: APIUserRef?, size: CGFloat, online: Bool = false) -> some View {
-        Circle().fill(Color.sandLight).frame(width: size, height: size)
-            .overlay {
-                CachedImage(urlString: user?.avatarUrl) { img in
-                    img.resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
-                } placeholder: {
-                    Image(systemName: "person.fill")
-                        .font(.system(size: size * 0.45)).foregroundStyle(Color.sand)
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if online {
-                    Circle().fill(Color.onlineGreen).frame(width: size * 0.28, height: size * 0.28)
-                        .overlay(Circle().stroke(Color.surface, lineWidth: 2))
-                }
-            }
-            .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
-    }
-
-    private var comunidadVivaSection: some View {
-        let first = recentHelp.first
-        let firstName = (first?.buddy?.fullName ?? "Un buddy")
-            .components(separatedBy: " ").first?.capitalized ?? "Un buddy"
-        let cluster = Array(recentHelp.prefix(3))
-        let extra = max(0, recentHelp.count - cluster.count)
-
-        return VStack(alignment: .leading, spacing: Spacing.md) {
-            HStack(spacing: 6) {
-                Text("COMUNIDAD VIVA").font(BT.eyebrow).tracking(1.5).foregroundStyle(Color.ink)
-            }
-            .padding(.horizontal, Spacing.edge)
-
-            HStack(spacing: 12) {
-                helpAvatar(first?.buddy, size: 44, online: false)
-                VStack(alignment: .leading, spacing: 2) {
-                    (Text(firstName).font(BT.footnoteBold).foregroundStyle(Color.ink)
-                     + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted))
-                        .lineLimit(2)
-                    Text(timeAgo(first?.completedAt)).font(BT.caption1).foregroundStyle(Color.teal)
-                }
-                Spacer(minLength: 8)
-                HStack(spacing: -8) {
-                    ForEach(cluster) { h in helpAvatar(h.buddy, size: 28) }
-                    if extra > 0 {
-                        Text("+\(extra)")
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.inkMuted)
-                            .frame(width: 28, height: 28)
-                            .background(Color.sandLight, in: Circle())
-                            .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
-                    }
-                }
-            }
-            .padding(Spacing.md)
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-            .cardShadow()
-            .padding(.horizontal, Spacing.edge)
-        }
     }
 
     private var communitySection: some View {
@@ -1113,16 +1299,16 @@ struct PublishedTripCard: View {
 struct StoryViewerSheet: View {
     let journey: APIJourney
     @Environment(\.dismiss) private var dismiss
-    @State private var pages: [APIJourneyPage] = []
+    @State private var thumbs: [String] = []
     @State private var current = 0
 
     private var destName: String { journey.destination?.name ?? journey.title ?? "Trip" }
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
+            Color.canvas.ignoresSafeArea()
 
-            if pages.isEmpty {
+            if thumbs.isEmpty {
                 CachedImage(urlString: journey.destination?.coverUrl) { img in
                     img.resizable().scaledToFit()
                 } placeholder: {
@@ -1132,32 +1318,55 @@ struct StoryViewerSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 TabView(selection: $current) {
-                    ForEach(Array(pages.enumerated()), id: \.element.id) { i, page in
-                        CachedImage(urlString: page.thumbnailUrl) { img in
+                    ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
+                        CachedImage(urlString: url) { img in
                             img.resizable().scaledToFit()
-                        } placeholder: { Color(white: 0.1) }
+                        } placeholder: { Color.sandLight }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .tag(i)
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: pages.count > 1 ? .automatic : .never))
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .overlay(alignment: .bottom) {
+                    if thumbs.count > 1 {
+                        HStack(spacing: 7) {
+                            ForEach(0..<thumbs.count, id: \.self) { i in
+                                Circle()
+                                    .fill(i == current ? Color.ink : Color.ink.opacity(0.25))
+                                    .frame(width: 7, height: 7)
+                            }
+                        }
+                        .animation(.easeInOut(duration: 0.2), value: current)
+                        .padding(.vertical, 10).padding(.horizontal, 14)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.bottom, 24)
+                    }
+                }
             }
 
-            // Solo el botón de cerrar — sin conteos
+            // Solo el botón de cerrar — sin conteos. Material para verse sobre
+            // foto o sobre el fondo crema indistintamente.
             HStack {
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 36, height: 36).background(.white.opacity(0.18), in: Circle())
+                        .font(.system(size: 15, weight: .bold)).foregroundStyle(Color.ink)
+                        .frame(width: 36, height: 36).background(.ultraThinMaterial, in: Circle())
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, Spacing.edge).padding(.top, 8)
         }
         .task {
-            pages = (try? await APIClient.shared.fetchJourneyPages(journeyId: journey.id)) ?? []
-            ImagePrefetcher.prefetch(pages.map(\.thumbnailUrl))
+            // El feed (trips) ya trae page_thumbs agregados de todos los lugares.
+            // Si no vienen (p. ej. tab Yo con id de journey real), se piden al server.
+            if let pt = journey.pageThumbs, !pt.isEmpty {
+                thumbs = pt
+            } else {
+                thumbs = (try? await APIClient.shared.fetchJourneyPages(journeyId: journey.id))?
+                    .map(\.thumbnailUrl) ?? []
+            }
+            ImagePrefetcher.prefetch(thumbs)
         }
     }
 }
@@ -1237,6 +1446,109 @@ struct CommunityPostCard: View {
     }
 }
 
+// MARK: – LOCATION PROMPT BANNER
+// Inline card shown above the trip card when GPS detects a different destination
+
+struct LocationPromptBanner: View {
+    let destination: APIDestination
+    var onConfirm: () -> Void
+
+    var body: some View {
+        Button {
+            Haptic.light()
+            onConfirm()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.teal)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Parece que estás en \(destination.city)")
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.primary)
+                    Text("Buscar un buddy aquí")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.teal)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.secondary.opacity(0.5))
+            }
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, 12)
+            .background(Color.teal.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.md)
+                    .stroke(Color.teal.opacity(0.15), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: – NEXT TRIP ROW
+// Compact strip shown below ActiveTripCard when a planning trip is waiting
+
+struct NextTripRow: View {
+    let journey: APIJourney
+    var onActivate: () -> Void
+
+    private var destName: String { journey.destination?.name ?? "Próximo destino" }
+    private var coverURL: URL? {
+        guard let s = journey.destination?.coverUrl else { return nil }
+        return URL(string: s)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Thumbnail
+            CachedImage(url: coverURL) { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                Color.sandLight
+            }
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("PRÓXIMO VIAJE")
+                    .font(BT.eyebrow)
+                    .tracking(1)
+                    .foregroundStyle(Color.secondary)
+                Text(destName)
+                    .font(BT.headline)
+                    .foregroundStyle(Color.primary)
+            }
+
+            Spacer()
+
+            Button {
+                Haptic.medium()
+                onActivate()
+            } label: {
+                Text("Activar")
+                    .font(BT.footnoteBold)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.teal)
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.sm)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+        .cardShadow()
+    }
+}
+
 // MARK: – ACTIVE TRIP CARD
 // Shown in Inicio when user has a journey with status "active"
 
@@ -1244,7 +1556,14 @@ struct ActiveTripCard: View {
     let journey: APIJourney
     var match: APIMatch? = nil
     var pendingReply: Bool = false
+    var statusText: String = "EN CURSO"
+    // Prueba social: buddies que ayudaron en este destino (estado sin buddy)
+    var recentHelperName: String? = nil
+    var recentHelperTimeAgo: String? = nil
+    var recentHelperAvatars: [String?] = []   // urls para el cluster
+    var recentHelperTotal: Int = 0
     var onContactBuddy: (() -> Void)? = nil
+    var onOpenDetail: (() -> Void)? = nil
 
     private var coverURL: URL? {
         guard let s = journey.destination?.coverUrl else { return nil }
@@ -1278,12 +1597,17 @@ struct ActiveTripCard: View {
                     startPoint: .center, endPoint: .bottom
                 )
 
-                // Badge EN CURSO — top right
+                // Tap zone: imagen/mapa → TripDetail
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { Haptic.light(); onOpenDetail?() }
+
+                // Top bar: EN CURSO badge (top-right)
                 HStack {
                     Spacer()
                     HStack(spacing: 5) {
                         Circle().fill(Color.onlineGreen).frame(width: 6, height: 6)
-                        Text("EN CURSO")
+                        Text(statusText)
                             .font(BT.eyebrow)
                             .tracking(1)
                             .foregroundStyle(.white)
@@ -1297,7 +1621,7 @@ struct ActiveTripCard: View {
                 .padding(.top, Spacing.md)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-                // Título + panel inferior en un solo flujo — nunca se superponen
+                // Título + panel inferior
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     Text(tripTitle)
                         .font(BT.title1)
@@ -1305,94 +1629,76 @@ struct ActiveTripCard: View {
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                if match != nil {
-                    // ── Buddy asignado ─────────────────────────────
+                    // ── Layout único: prueba social (izq) + círculo de acción (der) ──
                     HStack(spacing: 12) {
-                        // Avatar
-                        ZStack(alignment: .bottomTrailing) {
-                            Circle()
-                                .fill(Color.sandLight)
-                                .frame(width: 44, height: 44)
-                                .overlay {
-                                    if let url = buddyAvatarURL {
-                                        AsyncImage(url: url) { img in
-                                            img.resizable().scaledToFill()
-                                        } placeholder: { Color.sandLight }
-                                        .clipShape(Circle())
-                                    } else {
-                                        Image(systemName: "person.fill")
-                                            .font(.system(size: 18))
-                                            .foregroundStyle(Color.sand)
+                        // Actividad de la comunidad — solo si existe (sin texto de relleno)
+                        if let helper = recentHelperName {
+                            VStack(alignment: .leading, spacing: 7) {
+                                HStack(spacing: -8) {
+                                    ForEach(Array(recentHelperAvatars.prefix(3).enumerated()), id: \.offset) { _, s in
+                                        socialAvatar(urlString: s)
+                                    }
+                                    if recentHelperTotal > 3 {
+                                        Text("+\(recentHelperTotal - 3)")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.white)
+                                            .frame(width: 26, height: 26)
+                                            .background(.ultraThinMaterial, in: Circle())
+                                            .overlay(Circle().stroke(.white.opacity(0.4), lineWidth: 1.5))
                                     }
                                 }
-                            Circle().fill(Color.onlineGreen).frame(width: 12, height: 12)
-                                .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 1.5))
-                                .offset(x: 1, y: 1)
+                                (Text(helper).font(BT.footnoteBold).foregroundStyle(.white)
+                                 + Text(" ayudó aquí").font(BT.footnote).foregroundStyle(.white.opacity(0.8))
+                                 + Text(recentHelperTimeAgo.map { " · \($0)" } ?? "").font(BT.caption1).foregroundStyle(.white.opacity(0.6)))
+                                    .lineLimit(1)
+                            }
                         }
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("TU BUDDY")
-                                .font(BT.eyebrow)
-                                .tracking(1)
-                                .foregroundStyle(.white.opacity(0.65))
-                            Text(buddyName)
-                                .font(BT.headline)
-                                .foregroundStyle(.white)
-                        }
+                        Spacer(minLength: 8)
 
-                        Spacer()
-
-                        // Botón chat + indicador de pendiente
+                        // Círculo de acción: foto del buddy (asignado) o ícono (buscar)
                         Button {
                             Haptic.medium()
                             onContactBuddy?()
                         } label: {
                             ZStack(alignment: .topTrailing) {
-                                Image(systemName: "message.fill")
-                                    .font(.system(size: 18, weight: .medium))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 44, height: 44)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(Circle())
-
-                                if pendingReply {
+                                if match != nil {
+                                    // Foto del buddy asignado → abre el chat
                                     Circle()
-                                        .fill(Color.red)
-                                        .frame(width: 12, height: 12)
-                                        .overlay(Circle().stroke(.white, lineWidth: 1.5))
-                                        .offset(x: 3, y: -3)
+                                        .fill(Color.sandLight)
+                                        .frame(width: 48, height: 48)
+                                        .overlay {
+                                            if let url = buddyAvatarURL {
+                                                AsyncImage(url: url) { img in
+                                                    img.resizable().scaledToFill()
+                                                } placeholder: { Color.sandLight }
+                                                .clipShape(Circle())
+                                            } else {
+                                                Image(systemName: "person.fill")
+                                                    .font(.system(size: 20))
+                                                    .foregroundStyle(Color.sand)
+                                            }
+                                        }
+                                        .overlay(Circle().stroke(.white, lineWidth: 2))
+                                    if pendingReply {
+                                        Circle()
+                                            .fill(Color.red)
+                                            .frame(width: 13, height: 13)
+                                            .overlay(Circle().stroke(.white, lineWidth: 1.5))
+                                            .offset(x: 3, y: -3)
+                                    }
+                                } else {
+                                    Image(systemName: "person.wave.2.fill")
+                                        .font(.system(size: 18, weight: .medium))
+                                        .foregroundStyle(.black)
+                                        .frame(width: 48, height: 48)
+                                        .background(.white)
+                                        .clipShape(Circle())
                                 }
                             }
                         }
                         .buttonStyle(.plain)
                     }
-                } else {
-                    // ── Sin buddy aún ──────────────────────────────
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("¿Tienes alguna duda?")
-                            .font(BT.headline)
-                            .foregroundStyle(.white)
-                        Text("Un buddy se conectará contigo para ayudarte en unos minutos.")
-                            .font(BT.callout)
-                            .foregroundStyle(.white.opacity(0.75))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Button {
-                            Haptic.medium()
-                            onContactBuddy?()
-                        } label: {
-                            Label("Contactar buddy", systemImage: "person.2.fill")
-                                .font(BT.footnoteBold)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(.white)
-                                .foregroundStyle(.black)
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 4)
-                    }
-                }
                 }
                 .padding(Spacing.md)
                 .background(
@@ -1406,6 +1712,26 @@ struct ActiveTripCard: View {
         .frame(height: min(360, UIScreen.main.bounds.height * 0.44))
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
+    }
+
+    // Avatar pequeño con borde para el cluster de prueba social sobre la foto
+    private func socialAvatar(urlString: String?) -> some View {
+        Circle()
+            .fill(Color.sandLight)
+            .frame(width: 26, height: 26)
+            .overlay {
+                if let s = urlString, let url = URL(string: s) {
+                    AsyncImage(url: url) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: { Color.sandLight }
+                    .clipShape(Circle())
+                } else {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.sand)
+                }
+            }
+            .overlay(Circle().stroke(.white.opacity(0.6), lineWidth: 1.5))
     }
 
     private var fallback: some View {
