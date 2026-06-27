@@ -332,40 +332,70 @@ final class APIClient {
         try await request(path: "/journeys/\(journeyId)/pages", method: "GET")
     }
 
-    // Upload binary data to Supabase Storage, returns public URL.
-    // Uses Supabase JWT (not Traveler JWT) — Storage RLS only understands Supabase auth.
+    // MARK: – Avatar
+
+    /// Upload a traveler avatar via buddy-core.
+    /// The backend owns all Storage interaction — this method knows nothing about
+    /// buckets, paths, RLS, or service-role keys.
+    func uploadAvatar(imageData: Data) async throws -> String {
+        let boundary = "BuddyBoundary.\(UUID().uuidString)"
+        var body = Data()
+        body.appendMultipart(boundary: boundary, name: "avatar",
+                             filename: "avatar.jpg", mime: "image/jpeg", data: imageData)
+        body.append("--\(boundary)--\r\n")
+
+        let token = TravelerService.shared.token ?? AuthService.shared.accessToken ?? anonKey
+        guard let url = URL(string: baseURL + "/users/me/avatar") else { throw APIError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = body
+
+        print("🖼️ [APIClient] POST /users/me/avatar (\(imageData.count / 1024) KB)…")
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
+
+        guard (200..<300).contains(http.statusCode) else {
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? ""
+            print("❌ [APIClient] POST /users/me/avatar → \(http.statusCode): \(preview)")
+            let msg = (try? JSONDecoder().decode(APIErrorResponse.self, from: data))?.error
+            throw APIError.server(http.statusCode, msg ?? "Upload failed")
+        }
+
+        struct AvatarResponse: Decodable { let avatarUrl: String }
+        do {
+            let resp = try JSONDecoder.buddy.decode(AvatarResponse.self, from: data)
+            print("🖼️ [APIClient] ✅ avatar uploaded → \(resp.avatarUrl.suffix(50))")
+            return resp.avatarUrl
+        } catch {
+            print("❌ [APIClient] decode AvatarResponse: \(error)\nraw: \(String(data: data.prefix(300), encoding: .utf8) ?? "")")
+            throw error
+        }
+    }
+
+    // MARK: – Storage (memoir photos only — pending migration to backend)
+    // TODO: route memoir photo uploads through buddy-core, same as avatars.
+    // Until then this method remains here for uploadAndSavePages().
+
     private func uploadToStorage(bucket: String, path: String, data: Data) async throws -> String {
         let token = AuthService.shared.accessToken ?? anonKey
         let urlStr = "\(supabaseURL)/storage/v1/object/\(bucket)/\(path)"
         guard let url = URL(string: urlStr) else { throw APIError.unknown }
-
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        req.setValue("true", forHTTPHeaderField: "x-upsert")  // overwrite existing file
+        req.setValue("true", forHTTPHeaderField: "x-upsert")
         req.httpBody = data
-
         let (body, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
-
-        let statusOK = (200..<300).contains(http.statusCode)
-        print("🖼️ [Storage] \(http.statusCode) \(bucket)/\(path) (\(data.count / 1024) KB)" +
-              (statusOK ? "" : " — \(String(data: body.prefix(200), encoding: .utf8) ?? "")"))
-
-        guard statusOK else { throw APIError.server(http.statusCode, "Storage upload failed") }
-
+        let ok = (200..<300).contains(http.statusCode)
+        if !ok {
+            print("❌ [Storage] \(http.statusCode) \(bucket)/\(path) — \(String(data: body.prefix(200), encoding: .utf8) ?? "")")
+            throw APIError.server(http.statusCode, "Storage upload failed")
+        }
         return "\(supabaseURL)/storage/v1/object/public/\(bucket)/\(path)"
-    }
-
-    func uploadAvatar(userId: String, imageData: Data) async throws -> String {
-        let path = "avatars/\(userId).jpg"
-        print("🖼️ [APIClient] uploadAvatar → Storage bucket=memoir-photos path=\(path)")
-        let url = try await uploadToStorage(bucket: "memoir-photos", path: path, data: imageData)
-        print("🖼️ [APIClient] Storage ✅ — PATCH /users/\(userId.prefix(8))… avatar_url=\(url.suffix(40))")
-        try await requestVoid(path: "/users/\(userId)", method: "PATCH", body: ["avatar_url": url])
-        print("🖼️ [APIClient] PATCH ✅ — avatar guardado en DB")
-        return url
     }
 
     func collectPlace(journeyId: String, placeId: String) async throws -> APIJourneyPlace {
@@ -602,6 +632,25 @@ enum APIError: LocalizedError {
 
 private struct APIErrorResponse: Decodable { let error: String }
 private struct EmptyResponse: Decodable {}
+
+// MARK: – Multipart form-data helper
+
+private extension Data {
+    /// Appends one multipart file part including headers and the file bytes.
+    /// Call `append("--\(boundary)--\r\n")` after the last part to close the body.
+    mutating func appendMultipart(boundary: String, name: String,
+                                  filename: String, mime: String, data: Data) {
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n")
+        append("Content-Type: \(mime)\r\n\r\n")
+        append(data)
+        append("\r\n")
+    }
+
+    mutating func append(_ string: String) {
+        if let d = string.data(using: .utf8) { append(d) }
+    }
+}
 
 // MARK: – JSON Decoder with date strategy
 

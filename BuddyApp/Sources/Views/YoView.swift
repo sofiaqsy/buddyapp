@@ -704,11 +704,7 @@ struct YoView: View {
     }
 
     private func uploadAvatar(item: PhotosPickerItem) async {
-        guard let userId = Session.travelerId else {
-            print("🖼️ [uploadAvatar] ❌ sin travelerId — abortando")
-            return
-        }
-        print("🖼️ [uploadAvatar] iniciando para userId=\(userId.prefix(8))…")
+        print("🖼️ [uploadAvatar] iniciando…")
 
         guard let data = try? await item.loadTransferable(type: Data.self) else {
             print("🖼️ [uploadAvatar] ❌ loadTransferable falló — formato no soportado")
@@ -721,21 +717,19 @@ struct YoView: View {
             print("🖼️ [uploadAvatar] ❌ compresión JPEG falló")
             return
         }
-        print("🖼️ [uploadAvatar] JPEG comprimido: \(jpegData.count / 1024) KB — subiendo…")
+        print("🖼️ [uploadAvatar] JPEG comprimido: \(jpegData.count / 1024) KB — enviando a backend…")
 
         await MainActor.run { isUploadingAvatar = true }
         do {
-            let url = try await APIClient.shared.uploadAvatar(userId: userId, imageData: jpegData)
-            print("🖼️ [uploadAvatar] ✅ URL guardada: \(url)")
+            let url = try await APIClient.shared.uploadAvatar(imageData: jpegData)
+            print("🖼️ [uploadAvatar] ✅ \(url.suffix(60))")
             await MainActor.run {
-                user = user.map { u in
-                    var copy = u; copy.avatarUrl = url; return copy
-                }
+                user = user.map { u in var copy = u; copy.avatarUrl = url; return copy }
                 isUploadingAvatar = false
                 Haptic.success()
             }
         } catch {
-            print("🖼️ [uploadAvatar] ❌ error: \(error)")
+            print("🖼️ [uploadAvatar] ❌ \(error)")
             await MainActor.run { isUploadingAvatar = false }
         }
     }
