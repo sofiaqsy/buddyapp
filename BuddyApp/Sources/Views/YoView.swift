@@ -197,6 +197,7 @@ struct YoView: View {
                         Image(systemName: "person.fill")
                             .font(.system(size: 36, weight: .light))
                             .foregroundStyle(Color.sand)
+                            .frame(width: 88, height: 88) // ancla el placeholder al mismo tamaño
                     }
                     if isUploadingAvatar {
                         Circle().fill(.black.opacity(0.4)).frame(width: 88, height: 88)
@@ -211,6 +212,7 @@ struct YoView: View {
                     }
                     .offset(x: 2, y: 2)
                 }
+                .frame(width: 96, height: 96) // ancla el ZStack entero para que el badge no desplace el layout
             }
             .onChange(of: avatarItem) { _, item in
                 guard let item else { return }
