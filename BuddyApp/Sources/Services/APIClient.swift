@@ -96,7 +96,15 @@ final class APIClient {
             throw APIError.server(http.statusCode, msg ?? "Unknown error")
         }
 
-        return try JSONDecoder.buddy.decode(T.self, from: data)
+        do {
+            return try JSONDecoder.buddy.decode(T.self, from: data)
+        } catch {
+            #if DEBUG
+            let preview = String(data: data.prefix(500), encoding: .utf8) ?? "<non-UTF8>"
+            print("❌ [APIClient] decode \(T.self) failed [\(path)]: \(error)\nraw: \(preview)")
+            #endif
+            throw error
+        }
     }
 
     func requestVoid(
