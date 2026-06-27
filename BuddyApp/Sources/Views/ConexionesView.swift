@@ -677,13 +677,6 @@ struct OfferCard: View {
             RoundedRectangle(cornerRadius: Radius.lg)
                 .stroke(Color(hex: "#B45309").opacity(0.35), lineWidth: 1)
         )
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Color(hex: "#B45309").opacity(0.6))
-                .frame(width: 3)
-                .padding(.vertical, 1)
-                .clipShape(Capsule())
-        }
         .cardShadow()
     }
 
