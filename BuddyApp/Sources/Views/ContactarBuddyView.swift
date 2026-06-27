@@ -30,6 +30,10 @@ struct ContactarBuddyView: View {
     /// categoría/texto) → el usuario aterriza directo en "buscando", sin repetir
     /// la pantalla de categorías.
     var initialRequest: (category: String, description: String?)? = nil
+    /// Llamado cuando el usuario cancela el flujo completo sin confirmar un buddy.
+    /// Solo se llama en flujos initialRequest — en flujos normales el usuario vuelve
+    /// al selector de categoría en lugar de cerrar la sheet.
+    var onCancelled: (() -> Void)? = nil
 
     /// Destino efectivo: del Trip si existe, o el pasado directamente.
     private var resolvedDestinationId: String? {
@@ -38,6 +42,8 @@ struct ContactarBuddyView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .loading
+
+    private var effectiveUserId: String? { Session.travelerId }
     @State private var match: APIMatch?
     @State private var pollTimer: Timer?
     @State private var sseMatchTask: Task<Void, Never>? = nil
@@ -62,8 +68,11 @@ struct ContactarBuddyView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if phase == .selectCategory {
-                        Button { dismiss() } label: {
+                    if phase == .selectCategory || phase == .loading {
+                        Button {
+                            if initialRequest != nil { onCancelled?() }
+                            dismiss()
+                        } label: {
                             Image(systemName: "xmark")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(Color.inkMuted)
@@ -87,7 +96,14 @@ struct ContactarBuddyView: View {
     }
 
     private var loadingView: some View {
-        VStack { Spacer(); ProgressView().tint(Color.teal); Spacer() }
+        VStack(spacing: Spacing.md) {
+            Spacer()
+            ProgressView().tint(Color.teal)
+            Text(initialRequest != nil ? "Preparando tu búsqueda…" : "Cargando…")
+                .font(BT.callout)
+                .foregroundStyle(Color.inkMuted)
+            Spacer()
+        }
     }
 
     private var chatView: some View {
@@ -119,9 +135,9 @@ struct ContactarBuddyView: View {
 
     private func checkStatus() async {
         phase = .loading
-        guard let userId = AuthService.shared.userId else { phase = .error("Sin sesión."); return }
+        guard let userId = effectiveUserId else { phase = .error("Sin sesión."); return }
         do {
-            let matches = try await APIClient.shared.fetchMatches(userId: userId)
+            let matches = try await APIClient.shared.fetchMatches()
             print("🔎 [checkStatus] userId=\(userId) — \(matches.count) match(es) recibidos")
             for m in matches {
                 print("   • match id=\(m.id) status=\(m.status ?? "nil") travelerId=\(m.travelerId) buddyId=\(m.buddyId ?? "nil")")
@@ -156,13 +172,18 @@ struct ContactarBuddyView: View {
     }
 
     func handleRequest(category: String, description: String?) async {
-        guard let userId = AuthService.shared.userId else { return }
+        guard let userId = effectiveUserId else { return }
         let destIdOpt2: String? = resolvedDestinationId
         guard let destId = destIdOpt2 else { return }
         phase = .searching
         do {
+            // Activate the journey so the home hero card shows it and
+            // loadData can load the associated match.
+            if let j = journey, j.status == "planning" {
+                try? await APIClient.shared.updateJourneyStatus(journeyId: j.id, status: "active")
+            }
             let req = try await APIClient.shared.createHelpRequest(
-                travelerId: userId, destinationId: destId, journeyId: journey?.id,
+                destinationId: destId, journeyId: journey?.id,
                 category: category, description: description, arrivalAt: journey?.arrivalAt)
             activeRequestId = req.id
             startPolling(); startSSEMatch(requestId: req.id)
@@ -179,6 +200,7 @@ struct ContactarBuddyView: View {
         // Si vino de la Home (sin pasar por el selector) → cerrar y volver al
         // inicio. Si vino del selector → volver a elegir categoría.
         if initialRequest != nil {
+            onCancelled?()
             dismiss()
         } else {
             phase = .selectCategory
@@ -194,7 +216,7 @@ struct ContactarBuddyView: View {
 
     private func startSSEMatch(requestId: String) {
         sseMatchTask?.cancel()
-        guard let token = AuthService.shared.accessToken,
+        guard let token = Session.token,
               let url = URL(string: "\(APIClient.shared.baseURL)/matching/request/\(requestId)/stream") else { return }
 
         sseMatchTask = Task {
@@ -221,9 +243,9 @@ struct ContactarBuddyView: View {
     }
 
     private func pollForMatch() async {
-        guard let userId = AuthService.shared.userId else { return }
+        guard let userId = effectiveUserId else { return }
         do {
-            let matches = try await APIClient.shared.fetchMatches(userId: userId)
+            let matches = try await APIClient.shared.fetchMatches()
             let activeStatuses = ["pending", "accepted", "active"]
             if let active = matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
                 pollTimer?.invalidate()
@@ -355,15 +377,9 @@ struct CategoryPickerView: View {
                 }
                 .disabled(!canRequest)
 
-                VStack(spacing: 2) {
-                    HStack(spacing: 5) {
-                        Circle().fill(buddyCount > 0 ? Color.onlineGreen : Color.sand).frame(width: 6, height: 6)
-                        Text(availabilityText).font(BT.caption1).foregroundStyle(Color.inkMuted)
-                    }
-                    if buddyCount > 0 {
-                        Text("Suelen responder en pocos minutos")
-                            .font(BT.caption2).foregroundStyle(Color.inkMuted.opacity(0.7))
-                    }
+                HStack(spacing: 5) {
+                    Circle().fill(buddyCount > 0 ? Color.onlineGreen : Color.sand).frame(width: 6, height: 6)
+                    Text(availabilityText).font(BT.caption1).foregroundStyle(Color.inkMuted)
                 }
             }
             .padding(.horizontal, Spacing.edge)
@@ -461,6 +477,8 @@ struct BuddyChatView: View {
 
     @EnvironmentObject private var locationService: LocationService
 
+    private var effectiveUserId: String? { Session.travelerId }
+
     @State private var matchStatus:   String = ""
     @State private var messages:      [APIMessage] = []
     @State private var inputText      = ""
@@ -491,7 +509,7 @@ struct BuddyChatView: View {
         guard matchStatus != "completed" else { return false }
         guard !closeCardDismissed, pendingAudioLocalURL == nil else { return false }
         guard let last = messages.last else { return false }
-        let isFromBuddy = last.senderId != AuthService.shared.userId
+        let isFromBuddy = last.senderId != effectiveUserId
         let matchStart = match.matchedAt ?? match.createdAt ?? Date()
         let tenMinPassed = Date().timeIntervalSince(matchStart) > 10 * 60
         return isFromBuddy && tenMinPassed
@@ -499,7 +517,7 @@ struct BuddyChatView: View {
 
     // When the current user is the buddy, show traveler info (not their own)
     private var isCurrentUserBuddy: Bool {
-        AuthService.shared.userId == match.buddyId
+        effectiveUserId == match.buddyId
     }
     private var buddyName: String {
         let person = isCurrentUserBuddy ? match.traveler : match.buddy
@@ -614,7 +632,7 @@ struct BuddyChatView: View {
                             }
                             BuddyMessageBubble(
                                 message: msg,
-                                isMe: msg.senderId != nil && msg.senderId == AuthService.shared.userId
+                                isMe: msg.senderId != nil && msg.senderId == effectiveUserId
                             )
                             .padding(.bottom, 4)
                         }
@@ -1033,10 +1051,10 @@ struct BuddyChatView: View {
 
     private func sendMessage() async {
         let text = inputText.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty, let userId = AuthService.shared.userId else { return }
+        guard !text.isEmpty, let userId = effectiveUserId else { return }
         Haptic.light()
         inputText = ""; isSending = true
-        if let msg = try? await APIClient.shared.sendMessage(matchId: match.id, senderId: userId, content: text) {
+        if let msg = try? await APIClient.shared.sendMessage(matchId: match.id, content: text) {
             messages.append(msg)
         }
         isSending = false
@@ -1045,7 +1063,7 @@ struct BuddyChatView: View {
 
     private func sendLocation() async {
         guard let loc = locationService.userLocation,
-              let userId = AuthService.shared.userId else {
+              let userId = effectiveUserId else {
             Haptic.light()
             return
         }
@@ -1053,7 +1071,7 @@ struct BuddyChatView: View {
         let lat = loc.coordinate.latitude
         let lng = loc.coordinate.longitude
         let content = "location:\(lat),\(lng)"
-        if let msg = try? await APIClient.shared.sendMessage(matchId: match.id, senderId: userId, content: content) {
+        if let msg = try? await APIClient.shared.sendMessage(matchId: match.id, content: content) {
             messages.append(msg)
         }
         isSendingLocation = false
@@ -1119,7 +1137,7 @@ struct BuddyChatView: View {
     private func connectSSE() async {
         guard let url = URL(string: "\(APIClient.shared.baseURL)/messages/\(match.id)/stream") else { return }
         var request = URLRequest(url: url)
-        if let token = AuthService.shared.accessToken {
+        if let token = Session.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.timeoutInterval = 300 // 5 min — se reconecta si cae
@@ -1428,16 +1446,13 @@ final class AudioRecorderVM: ObservableObject {
         req.httpMethod = "POST"
         let boundary = "Boundary-\(UUID().uuidString)"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        if let token = AuthService.shared.accessToken {
+        if let token = Session.token {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
+        // Backend derives sender_id from the JWT — no multipart field needed.
         let audioData = try Data(contentsOf: fileURL)
-        let senderId = AuthService.shared.userId ?? ""
         var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"sender_id\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(senderId)\r\n".data(using: .utf8)!)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"audio\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: audio/mp4\r\n\r\n".data(using: .utf8)!)

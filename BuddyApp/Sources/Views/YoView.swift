@@ -3,12 +3,18 @@ import PhotosUI
 
 // MARK: – YO (PROFILE)
 
+enum IdentityMode: Identifiable {
+    case newUser, login
+    var id: Self { self }
+}
+
 struct YoView: View {
     @EnvironmentObject var authState: AuthState
     @EnvironmentObject var routeStore: RouteStore
     @State private var user: APIUser? = nil
     @State private var stickers: [APIUserSticker] = []
     @State private var journeys: [APIJourney] = []
+    @State private var selectedStory: APIJourney? = nil   // detalle de publicación
     @State private var isLoading = true
     @State private var editingBio = false
     @State private var bioText = ""
@@ -22,11 +28,17 @@ struct YoView: View {
     @State private var destinations: [APIDestination] = []
     @State private var showBecomeBuddyConfirm = false
     @State private var isBecomingBuddy = false
+    @State private var identityMode: IdentityMode? = nil
+    // Guardia de logout: si hay apoyo activo no se puede cerrar sesión sin confirmar
+    @State private var showActiveHelpLogoutAlert = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading {
+                // ── Estado anónimo ──
+                if !authState.isLoggedIn {
+                    anonymousState
+                } else if isLoading {
                     ZStack {
                         Color.canvas.ignoresSafeArea()
                         ProgressView().tint(Color.inkMuted)
@@ -51,7 +63,7 @@ struct YoView: View {
                                 Menu {
                                     Button {
                                         Haptic.light()
-                                        showLogoutConfirm = true
+                                        requestLogout()
                                     } label: {
                                         Label("Cerrar sesión", systemImage: "rectangle.portrait.and.arrow.right")
                                     }
@@ -82,24 +94,23 @@ struct YoView: View {
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.md)
 
-                            // 3 — Colección (historia del viajero)
+                            // 3 — Rol buddy (fila nav o CTA), antes de la colección
+                            buddyRow
+                                .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.xl)
+
+                            if buddyMe?.isBuddy != true {
+                                becomeBuddyCTA
+                                    .padding(.horizontal, Spacing.edge)
+                                    .padding(.top, Spacing.md)
+                            }
+
+                            // 4 — Colección (historia del viajero)
                             stickerSection
                                 .padding(.top, Spacing.xl)
 
                             tripsSection
                                 .padding(.top, Spacing.xl)
-
-                            // 4 — Rol buddy: solo una fila de navegación
-                            buddyRow
-                                .padding(.horizontal, Spacing.edge)
-                                .padding(.top, Spacing.xl)
-
-                            // 5 — CTA "Quiero ser Buddy" — solo si NO es buddy, al fondo, tenue
-                            if buddyMe?.isBuddy != true {
-                                becomeBuddyCTA
-                                    .padding(.horizontal, Spacing.edge)
-                                    .padding(.top, Spacing.lg)
-                            }
                         }
                         .padding(.bottom, 100)
                     }
@@ -109,14 +120,27 @@ struct YoView: View {
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            // Detalle de la publicación — mismo visor que en Home
+            .sheet(item: $selectedStory) { journey in
+                StoryViewerSheet(journey: journey)
+            }
             .confirmationDialog("¿Cerrar sesión?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
                 Button("Cerrar sesión", role: .destructive) {
-                    AuthService.shared.signOut()
-                    authState.isLoggedIn = false
+                    performLogout()
                 }
                 Button("Cancelar", role: .cancel) {}
             } message: {
-                Text("Tendrás que volver a verificar tu número de teléfono.")
+                Text("Tendrás que volver a verificar tu número de teléfono. Puedes regresar cuando quieras.")
+            }
+            .alert("Tienes un apoyo activo", isPresented: $showActiveHelpLogoutAlert) {
+                Button("Cerrar sesión de todas formas", role: .destructive) { performLogout() }
+                Button("Quedarse", role: .cancel) {}
+            } message: {
+                Text("Hay un buddy ayudándote ahora mismo. Si cierras sesión puedes regresar verificando el mismo número de teléfono.")
+            }
+            .sheet(item: $identityMode) { mode in
+                IdentitySheet(skipName: mode == .login) { Task { await loadProfile() } }
+                    .environmentObject(authState)
             }
             .confirmationDialog("¿Eliminar tu cuenta?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
                 Button("Eliminar cuenta permanentemente", role: .destructive) {
@@ -126,13 +150,13 @@ struct YoView: View {
             } message: {
                 Text("Se eliminarán todos tus datos personales. Esta acción no se puede deshacer.")
             }
-            .confirmationDialog("¿Convertirte en Buddy?", isPresented: $showBecomeBuddyConfirm, titleVisibility: .visible) {
-                Button("Quiero ser Buddy") {
+            .confirmationDialog("Alguien está llegando a tu ciudad.", isPresented: $showBecomeBuddyConfirm, titleVisibility: .visible) {
+                Button("Ser Buddy en mi ciudad") {
                     Task { await becomeBuddy() }
                 }
-                Button("Cancelar", role: .cancel) {}
+                Button("Ahora no", role: .cancel) {}
             } message: {
-                Text("Crearemos tu perfil de buddy y lo enviaremos a verificación. Podrás elegir tus zonas y en qué ayudas una vez aprobado.")
+                Text("Los Buddies son personas locales que eligen estar cuando alguien llega por primera vez. Tú sabes cosas que ningún mapa puede mostrar.")
             }
             .overlay {
                 if isDeletingAccount {
@@ -319,10 +343,7 @@ struct YoView: View {
             showBecomeBuddyConfirm = true
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "hands.sparkles")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.inkMuted)
-                Text("¿Quieres ayudar a viajeros?")
+                Text("Ser Buddy en mi ciudad")
                     .font(BT.footnote)
                     .foregroundStyle(Color.inkMuted)
                 Spacer()
@@ -459,6 +480,10 @@ struct YoView: View {
                     ForEach(journeys, id: \.id) { journey in
                         TripGridCell(journey: journey)
                             .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+                            .onTapGesture {
+                                Haptic.light()
+                                selectedStory = journey
+                            }
                     }
                     // Celdas fantasma — completan la fila e invitan al próximo trip
                     let remainder = journeys.count % 3
@@ -488,20 +513,180 @@ struct YoView: View {
 
     // MARK: – Helpers
 
+    // Verifica si hay un apoyo activo antes de cerrar sesión.
+    private func requestLogout() {
+        let hasActiveHelp = ChatStore.shared.connections.contains {
+            ["accepted", "active"].contains($0.match.status) && !$0.isBuddyRole
+        }
+        if hasActiveHelp {
+            showActiveHelpLogoutAlert = true
+        } else {
+            showLogoutConfirm = true
+        }
+    }
+
+    private func performLogout() {
+        AuthService.shared.signOut()
+        // `userDidLogOut` ya fue emitido por signOut(); AuthState lo escucha y
+        // pone isLoggedIn = false. Limpiamos el estado local de la vista.
+        user         = nil
+        stickers     = []
+        journeys     = []
+        buddyMe      = nil
+        isLoading    = true
+    }
+
     private func deleteAccount() async {
         isDeletingAccount = true
         defer { isDeletingAccount = false }
         do {
             try await APIClient.shared.deleteAccount()
             AuthService.shared.signOut()
-            authState.isLoggedIn = false
         } catch {
             print("[YoView] deleteAccount error:", error.localizedDescription)
         }
     }
 
+    // MARK: – Vista anónima
+
+    private var anonymousState: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("TU PERFIL")
+                            .font(BT.eyebrow).tracking(2)
+                            .foregroundStyle(Color.inkMuted)
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("Tu")
+                                .font(BT.title1).foregroundStyle(Color.ink)
+                            Text("historia.")
+                                .font(BT.displayLarge).foregroundStyle(Color.sand)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.md)
+                .padding(.bottom, Spacing.lg)
+
+                // Tarjeta de invitación
+                VStack(alignment: .leading, spacing: 0) {
+
+                    // Encabezado de tarjeta
+                    HStack(alignment: .top, spacing: 14) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.sandLight)
+                                .frame(width: 44, height: 44)
+                            Image(systemName: "point.topright.arrow.triangle.backward.to.point.bottomleft.scurvepath")
+                                .font(.system(size: 18, weight: .light))
+                                .foregroundStyle(Color.sand)
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Guarda tu historia de viaje")
+                                .font(BT.footnoteBold)
+                                .foregroundStyle(Color.ink)
+                            Text("Crea tu perfil para que Buddy recuerde todo lo que importa.")
+                                .font(BT.caption1)
+                                .foregroundStyle(Color.inkMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.bottom, Spacing.lg)
+
+                    Divider().overlay(Color.border)
+                        .padding(.bottom, Spacing.lg)
+
+                    // Beneficios
+                    VStack(alignment: .leading, spacing: Spacing.md) {
+                        anonymousBenefit(icon: "mappin",
+                                         title: "Tus viajes",
+                                         subtitle: "Accede a ellos desde cualquier dispositivo")
+                        anonymousBenefit(icon: "camera",
+                                         title: "Tus momentos",
+                                         subtitle: "Fotos y memorias guardadas en tu memoir")
+                        anonymousBenefit(icon: "bubble.left.and.bubble.right",
+                                         title: "Tus conversaciones",
+                                         subtitle: "Continúa donde lo dejaste con tus buddies")
+                        anonymousBenefit(icon: "person.2",
+                                         title: "Tus buddies",
+                                         subtitle: "Conecta con personas que ya te ayudaron")
+                    }
+                    .padding(.bottom, Spacing.xl)
+
+                    // CTA primario
+                    Button {
+                        Haptic.medium()
+                        identityMode = .newUser
+                    } label: {
+                        Text("Crear mi perfil")
+                            .font(BT.footnoteBold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 17)
+                            .background(Color.ink)
+                            .foregroundStyle(Color.inkInverse)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.pressable)
+                    .padding(.bottom, Spacing.sm)
+
+                    // CTA secundario
+                    Button {
+                        Haptic.light()
+                        identityMode = .login
+                    } label: {
+                        Text("Ya tengo una cuenta")
+                            .font(BT.callout)
+                            .foregroundStyle(Color.inkMuted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(Spacing.lg)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
+                .padding(.horizontal, Spacing.edge)
+
+                // Microcopy tranquilizador
+                Text("Nombre y teléfono. Nada más.")
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted.opacity(0.7))
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, Spacing.sm)
+            }
+        }
+        .background(Color.canvas)
+    }
+
+    private func anonymousBenefit(icon: String, title: String, subtitle: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color.canvas)
+                    .frame(width: 30, height: 30)
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.sand)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.ink)
+                Text(subtitle)
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            Spacer()
+        }
+    }
+
     private func saveBio() {
-        guard let userId = AuthService.shared.userId else { return }
+        guard let userId = Session.travelerId else { return }
         isSavingBio = true
         Task {
             do {
@@ -519,7 +704,7 @@ struct YoView: View {
     }
 
     private func uploadAvatar(item: PhotosPickerItem) async {
-        guard let userId = AuthService.shared.userId else { return }
+        guard let userId = Session.travelerId else { return }
         guard let data = try? await item.loadTransferable(type: Data.self) else { return }
         // Redimensionar a max 400px
         guard let uiImg = UIImage(data: data),
@@ -540,33 +725,30 @@ struct YoView: View {
     }
 
     private func loadProfile() async {
-        // Spinner solo en la primera carga — los refresh son silenciosos
+        guard Session.hasSession else { isLoading = false; return }
         if user == nil { isLoading = true }
-        guard let userId = AuthService.shared.userId else { isLoading = false; return }
 
-        async let userTask     = try? APIClient.shared.fetchUser(id: userId)
-        async let stickersTask = try? APIClient.shared.fetchUserStickers(userId: userId)
-        async let journeysTask = try? APIClient.shared.fetchUserJourneys(userId: userId)
+        // /users/me resuelve la identidad desde el JWT — funciona tanto con
+        // Traveler JWT como con Supabase JWT (auth_user_id → travelers.id).
+        guard let me = try? await APIClient.shared.fetchCurrentUser() else {
+            isLoading = false; return
+        }
+
+        // Identity is owned by TravelerService — hydrated at authentication time.
+        // Views must not write to identity storage. Use me.id only for display/API calls.
+        async let stickersTask = try? APIClient.shared.fetchUserStickers(userId: me.id)
+        async let journeysTask = try? APIClient.shared.fetchUserTrips(userId: me.id)
         async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
         async let destsTask    = try? APIClient.shared.fetchDestinations()
 
-        let (u, s, j, b, d) = await (userTask, stickersTask, journeysTask, buddyTask, destsTask)
-        user     = u
-        stickers = s ?? []
-        journeys = (j ?? []).filter { $0.status == "completed" || $0.status == "published" }
-        buddyMe  = b
+        let (s, j, b, d) = await (stickersTask, journeysTask, buddyTask, destsTask)
+        user         = me
+        stickers     = s ?? []
+        journeys     = j ?? []
+        buddyMe      = b
         destinations = d ?? []
-        isLoading = false
+        isLoading    = false
 
-        // Diagnóstico: ¿qué usuario y qué estado de buddy devolvió el backend?
-        print("👤 [YoView] userId=\(userId) name=\(u?.fullName ?? "nil")")
-        if let b {
-            print("🤝 [YoView] is_buddy=\(b.isBuddy) verification=\(b.profile?.verificationStatus ?? "nil") "
-                + "available=\(b.profile?.isAvailable.description ?? "nil") helps=\(b.profile?.totalHelps ?? 0)")
-        } else {
-            print("🤝 [YoView] /buddy/me devolvió nil (error de red o decode)")
-        }
-        // Sync collected status onto map pins
         await routeStore.syncCollectedStickers(userStickers: stickers)
     }
 
@@ -697,10 +879,28 @@ struct TripGridCell: View {
                     }
                 }
             }
+            // Etiqueta para los viajes privados (no publicados a la comunidad)
+            .overlay(alignment: .topLeading) {
+                if journey.isPublic == false {
+                    HStack(spacing: 3) {
+                        Image(systemName: "lock.fill").font(.system(size: 8, weight: .bold))
+                        Text("Privado").font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(.black.opacity(0.45), in: Capsule())
+                    .padding(6)
+                }
+            }
         .clipped()
         .contentShape(Rectangle())
         .task {
-            // 1. Intentar servidor primero
+            // 0. Si es un trip del feed, ya trae los thumbnails agregados
+            if let first = journey.pageThumbs?.first {
+                thumbUrl = first
+                return
+            }
+            // 1. Intentar servidor (journey real)
             do {
                 let pages = try await APIClient.shared.fetchJourneyPages(journeyId: journey.id)
                 if let first = pages.first {
@@ -759,16 +959,6 @@ private struct BuddyNavRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            // Ícono buddy
-            ZStack {
-                Circle()
-                    .fill(badgeColor.opacity(0.1))
-                    .frame(width: 40, height: 40)
-                Image(systemName: "hands.sparkles.fill")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(badgeColor)
-            }
-
             VStack(alignment: .leading, spacing: 3) {
                 Text("Perfil de Buddy")
                     .font(BT.callout)

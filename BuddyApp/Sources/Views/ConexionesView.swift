@@ -12,10 +12,11 @@ final class ChatStore: ObservableObject {
         let unreadCount: Int
         var id: String { match.id }
 
-        // When the current user is the buddy, the "other person" is the traveler
+        // When the current user is the buddy, the "other person" is the traveler.
+        // match.buddyId is a traveler_id — compare against Session.travelerId, not auth_user_id.
         var isBuddyRole: Bool {
-            guard let userId = AuthService.shared.userId else { return false }
-            return match.buddyId == userId
+            guard let travelerId = Session.travelerId else { return false }
+            return match.buddyId == travelerId
         }
 
         var buddyName: String {
@@ -30,14 +31,14 @@ final class ChatStore: ObservableObject {
 
         /// El buddy respondió y el viajero aún no ha contestado
         var pendingReply: Bool {
-            guard let last = lastMessage, let userId = AuthService.shared.userId else { return false }
-            return last.senderId != userId
+            guard let last = lastMessage, let travelerId = Session.travelerId else { return false }
+            return last.senderId != travelerId
         }
 
         /// El último mensaje lo envié yo (para mostrar "Tú:" estilo WhatsApp)
         var isLastFromMe: Bool {
-            guard let last = lastMessage, let userId = AuthService.shared.userId else { return false }
-            return last.senderId == userId
+            guard let last = lastMessage, let travelerId = Session.travelerId else { return false }
+            return last.senderId == travelerId
         }
 
         var lastText: String {
@@ -93,8 +94,8 @@ final class ChatStore: ObservableObject {
             var attempt = 0
             while !Task.isCancelled {
                 // Token fresco en CADA intento — evita el bucle de 401 con un
-                // access token expirado en sesiones largas.
-                guard let token = AuthService.shared.accessToken else {
+                // token expirado en sesiones largas. Cubre guest y verified.
+                guard let token = Session.token else {
                     try? await Task.sleep(nanoseconds: 3_000_000_000); continue
                 }
                 var request = URLRequest(url: url)
@@ -106,9 +107,14 @@ final class ChatStore: ObservableObject {
                     await backoff(&attempt)
                     continue
                 }
-                // 401 → token expirado: refrescar y reintentar sin contar como fallo
+                // 401 → token expirado: refrescar y reintentar sin contar como fallo.
+                // Intenta Traveler JWT primero (cubre guests), luego Supabase.
                 if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                    _ = await AuthService.shared.tryRefresh()
+                    if let tid = TravelerService.shared.travelerId {
+                        _ = try? await TravelerService.shared.forceRefresh(travelerId: tid)
+                    } else {
+                        _ = await AuthService.shared.tryRefresh()
+                    }
                     await backoff(&attempt)
                     continue
                 }
@@ -170,22 +176,34 @@ final class ChatStore: ObservableObject {
         eventStreamTask = nil
     }
 
+    /// Limpia el estado privado tras un logout. El contenido público (feed de destinos,
+    /// comunidad) se gestiona en InicioView y no se ve afectado.
+    @MainActor
+    func clearAfterLogout() {
+        connections         = []
+        offers              = []
+        totalUnread         = 0
+        pendingFeedbackMatch = nil
+        hasLoadedOnce       = false
+    }
+
     func load() async {
-        guard let userId = AuthService.shared.userId else {
+        guard Session.hasSession else {
             // Sin sesión todavía: no dejar el spinner colgado para siempre
             await MainActor.run { hasLoadedOnce = true }
             return
         }
+        let currentTravelerId = Session.travelerId
         await MainActor.run { isLoading = true }
         do {
-            let matches = try await APIClient.shared.fetchMatches(userId: userId)
+            let matches = try await APIClient.shared.fetchMatches()
             var items: [ConnectionItem] = []
             await withTaskGroup(of: ConnectionItem?.self) { group in
                 for match in matches {
                     group.addTask {
                         let msgs = try? await APIClient.shared.fetchMessages(matchId: match.id)
                         let last = msgs?.last
-                        let unread = msgs?.filter { $0.senderId != userId && $0.readAt == nil }.count ?? 0
+                        let unread = msgs?.filter { $0.senderId != currentTravelerId && $0.readAt == nil }.count ?? 0
                         return ConnectionItem(match: match, lastMessage: last, unreadCount: unread)
                     }
                 }
@@ -224,14 +242,15 @@ final class ChatStore: ObservableObject {
     /// Refresca SOLO una conexión (1 llamada) en vez de recargar toda la lista.
     /// Es el camino caliente del chat en tiempo real — evita el storm N+1.
     func refreshOne(matchId: String) async {
-        guard let userId = AuthService.shared.userId else { return }
+        guard Session.hasSession else { return }
+        let currentTravelerId = Session.travelerId
         // Si el match no está en la lista aún (conexión nueva) → carga completa
         guard connections.contains(where: { $0.match.id == matchId }) else {
             await load(); return
         }
         let msgs   = try? await APIClient.shared.fetchMessages(matchId: matchId)
         let last   = msgs?.last
-        let unread = msgs?.filter { $0.senderId != userId && $0.readAt == nil }.count ?? 0
+        let unread = msgs?.filter { $0.senderId != currentTravelerId && $0.readAt == nil }.count ?? 0
 
         await MainActor.run {
             guard let idx = connections.firstIndex(where: { $0.match.id == matchId }) else { return }
@@ -275,7 +294,9 @@ final class ChatStore: ObservableObject {
 
 struct ConexionesView: View {
     @EnvironmentObject var chatStore: ChatStore
+    @EnvironmentObject var authState: AuthState
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
+    @State private var showIdentitySheet = false
 
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["pending","accepted","active"].contains($0.match.status) }
@@ -318,9 +339,12 @@ struct ConexionesView: View {
                 .padding(.top, Spacing.md)
 
                 Group {
+                    // ── Estado anónimo: el tab muestra una invitación, no está vacío ──
+                    if !authState.isLoggedIn {
+                        anonymousConnectionState
                     // Spinner SOLO antes de la primera carga — después, vacío
                     // significa empty state y las recargas son silenciosas
-                    if !chatStore.hasLoadedOnce && chatStore.connections.isEmpty {
+                    } else if !chatStore.hasLoadedOnce && chatStore.connections.isEmpty {
                         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if chatStore.connections.isEmpty && chatStore.offers.isEmpty {
                         emptyState
@@ -332,7 +356,14 @@ struct ConexionesView: View {
             .navigationBarHidden(true)
             .background(Color.canvas)
         }
-        .task { await chatStore.load() }
+        .task { if authState.isLoggedIn { await chatStore.load() } }
+        .onChange(of: authState.isLoggedIn) { _, loggedIn in
+            if !loggedIn {
+                chatTarget = nil
+            } else {
+                Task { await chatStore.load() }
+            }
+        }
         // Recarga ofertas en tiempo real cuando el matching elige a este buddy
         .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
             Task {
@@ -354,6 +385,48 @@ struct ConexionesView: View {
                 }
             }
         }
+        .sheet(isPresented: $showIdentitySheet) {
+            IdentitySheet(contextMessage: "Identifícate para ver tus conversaciones con buddies.") {
+                Task { await chatStore.load() }
+                chatStore.startEventStream()
+            }
+            .environmentObject(authState)
+        }
+    }
+
+    // MARK: – Estado anónimo del tab Conexiones
+
+    private var anonymousConnectionState: some View {
+        VStack(spacing: Spacing.lg) {
+            Spacer()
+            Image(systemName: "person.2")
+                .font(.system(size: 42, weight: .light))
+                .foregroundStyle(Color.inkMuted.opacity(0.4))
+            VStack(spacing: Spacing.sm) {
+                Text("Tus conexiones te esperan")
+                    .font(BT.title3)
+                    .foregroundStyle(Color.ink)
+                Text("Cuando hables con un buddy o alguien te pida ayuda,\naparecerá aquí.")
+                    .font(BT.callout)
+                    .foregroundStyle(Color.inkMuted)
+                    .multilineTextAlignment(.center)
+            }
+            Button {
+                Haptic.medium()
+                showIdentitySheet = true
+            } label: {
+                Text("Identificarme")
+                    .font(BT.footnoteBold)
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.vertical, 15)
+                    .background(Color.ink)
+                    .foregroundStyle(Color.inkInverse)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.pressable)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var connectionList: some View {
@@ -615,11 +688,10 @@ struct OfferCard: View {
     }
 
     private func accept() async {
-        guard let userId = AuthService.shared.userId,
-              let requestId = offer.helpRequest?.id else { return }
+        guard let requestId = offer.helpRequest?.id else { return }
         isAccepting = true
         do {
-            let match = try await APIClient.shared.acceptRequest(requestId: requestId, buddyId: userId)
+            let match = try await APIClient.shared.acceptRequest(requestId: requestId)
             Haptic.success()
             onAccepted(match)
             onHandled()

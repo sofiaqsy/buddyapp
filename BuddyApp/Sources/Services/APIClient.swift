@@ -11,9 +11,14 @@ final class APIClient {
     private let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpcmhjamZ1Z2Zoa3Nrenpxa2NlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjI5MzMsImV4cCI6MjA5NjU5ODkzM30.E4mk6bcNal61wLN6zvj2TVgSoVdo2ka_2OdX56jBwsk"
     private let supabaseURL = "https://virhcjfugfhkskzzqkce.supabase.co"
 
+    // Deduplicate concurrent refresh calls — only one in-flight at a time.
+    private var refreshTask: Task<Bool, Never>?
+
     private var headers: [String: String] {
-        // Use user's access token if available, otherwise fall back to anon key
-        let token = AuthService.shared.accessToken ?? anonKey
+        // Priority: Traveler JWT (guest or verified) → legacy Supabase token → anon key
+        let token = TravelerService.shared.token
+            ?? AuthService.shared.accessToken
+            ?? anonKey
         return [
             "Content-Type":  "application/json",
             "Authorization": "Bearer \(token)"
@@ -21,6 +26,21 @@ final class APIClient {
     }
 
     private init() {}
+
+    // Coalesces concurrent refresh attempts into one network call.
+    private func sharedRefresh() async -> Bool {
+        if let existing = refreshTask { return await existing.value }
+        let task = Task<Bool, Never> {
+            defer { refreshTask = nil }
+            if let tid = TravelerService.shared.travelerId,
+               (try? await TravelerService.shared.forceRefresh(travelerId: tid)) != nil {
+                return true
+            }
+            return await AuthService.shared.tryRefresh()
+        }
+        refreshTask = task
+        return await task.value
+    }
 
     // MARK: – Generic request
 
@@ -32,6 +52,20 @@ final class APIClient {
     ) async throws -> T {
         guard let url = URL(string: baseURL + path) else {
             throw APIError.invalidURL
+        }
+
+        // Ensure a Traveler session exists for write operations on traveler-owned resources.
+        // Read-only paths (GET /destinations, GET /feed, etc.) work with the anon key.
+        // This creates a guest Traveler lazily on the first meaningful action.
+        let writeMethods = ["POST", "PATCH", "PUT", "DELETE"]
+        let needsIdentity = writeMethods.contains(method) && !Session.hasSession
+        if needsIdentity, !TravelerService.shared.hasSession {
+            let token = try await TravelerService.shared.ensureSession()
+            print("🧳 [APIClient] guest session created → token prefix: \(token.prefix(20))…")
+            await MainActor.run {
+                // Sync AuthState so views react (e.g. tabs update their empty state)
+                NotificationCenter.default.post(name: .travelerSessionCreated, object: nil)
+            }
         }
 
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
@@ -48,9 +82,8 @@ final class APIClient {
             throw APIError.unknown
         }
 
-        // Auto-refresh on 401 then retry once (WhatsApp-style permanent session)
         if http.statusCode == 401, !isRetry {
-            let refreshed = await AuthService.shared.tryRefresh()
+            let refreshed = await sharedRefresh()
             if refreshed {
                 return try await request(path: path, method: method, body: body, isRetry: true)
             } else {
@@ -81,7 +114,7 @@ final class APIClient {
         guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
 
         if http.statusCode == 401, !isRetry {
-            let refreshed = await AuthService.shared.tryRefresh()
+            let refreshed = await sharedRefresh()
             if refreshed {
                 try await requestVoid(path: path, method: method, body: body, isRetry: true)
             } else {
@@ -149,20 +182,23 @@ final class APIClient {
     }
 
     func createJourney(
-        userId: String,
         destinationId: String,
         title: String?,
         arrivalAt: Date?,
         knowsHowToGet: Bool = false,
         hasLodging: Bool = false
     ) async throws -> APIJourney {
+        // Backend derives owner from the JWT (traveler_id or legacy user_id).
+        // Send user_id in body only for pure legacy Supabase sessions (no Traveler token).
         var body: [String: Any] = [
-            "user_id": userId,
-            "destination_id": destinationId,
+            "destination_id":   destinationId,
             "knows_how_to_get": knowsHowToGet,
-            "has_lodging": hasLodging
+            "has_lodging":      hasLodging
         ]
-        if let title { body["title"] = title }
+        if !TravelerService.shared.hasSession, let uid = AuthService.shared.userId {
+            body["user_id"] = uid
+        }
+        if let title     { body["title"]      = title }
         if let arrivalAt { body["arrival_at"] = ISO8601DateFormatter().string(from: arrivalAt) }
         return try await request(path: "/journeys", method: "POST", body: body)
     }
@@ -172,10 +208,9 @@ final class APIClient {
     /// del usuario: pedir ayuda nunca exige crearlo a mano.
     /// Reusa fetchUserJourneys / createJourney / updateJourneyStatus.
     func ensureActiveTrip(destinationId: String) async throws -> APIJourney {
-        guard let userId = AuthService.shared.userId else { throw APIError.unknown }
-        let journeys = (try? await fetchUserJourneys(userId: userId)) ?? []
+        // Always use the Traveler-first path — backend resolves owner from JWT.
+        let journeys: [APIJourney] = (try? await fetchTravelerJourneys()) ?? []
 
-        // 1-2. Reusar un Trip existente para ese destino (activo o en planificación)
         if let existing = journeys.first(where: {
             ($0.destination?.id ?? $0.destinationId) == destinationId
                 && ["active", "planning"].contains($0.status)
@@ -186,9 +221,7 @@ final class APIClient {
             return existing
         }
 
-        // 3. Crear automáticamente en background y activarlo
-        let created = try await createJourney(userId: userId, destinationId: destinationId,
-                                              title: nil, arrivalAt: nil)
+        let created = try await createJourney(destinationId: destinationId, title: nil, arrivalAt: nil)
         try? await updateJourneyStatus(journeyId: created.id, status: "active")
         return created
     }
@@ -226,8 +259,18 @@ final class APIClient {
     }
 
     func publishJourney(journeyId: String, pages: [CollagePage]) async throws {
-        // 1. Subir todas las portadas EN PARALELO — con N páginas el tiempo
-        //    total es ~1 subida, no N subidas encadenadas
+        try await uploadAndSavePages(journeyId: journeyId, pages: pages)
+        // Marca el journey como completado + público
+        try await requestVoid(
+            path: "/journeys/\(journeyId)",
+            method: "PATCH",
+            body: ["status": "completed", "is_public": true] as [String: Any]
+        )
+    }
+
+    /// Sube las portadas de un journey y guarda sus URLs (sin tocar el status).
+    /// Reutilizable para publicar journey por journey dentro de un trip.
+    private func uploadAndSavePages(journeyId: String, pages: [CollagePage]) async throws {
         let results: [(Int, String)] = await withTaskGroup(of: (Int, String)?.self) { group in
             for (index, page) in pages.enumerated() {
                 group.addTask {
@@ -247,7 +290,6 @@ final class APIClient {
             .sorted { $0.0 < $1.0 }
             .map { ["page_index": $0.0, "thumbnail_url": $0.1] }
 
-        // 2. Save page URLs to backend
         if !pagePayload.isEmpty {
             try await requestVoid(
                 path: "/journeys/\(journeyId)/pages",
@@ -255,13 +297,27 @@ final class APIClient {
                 body: ["pages": pagePayload] as [String: Any]
             )
         }
+    }
 
-        // 3. Mark journey as completed + public
+    // MARK: - Trip (contenedor de varios lugares = una publicación)
+
+    /// Publica el VIAJE completo: sube las portadas de cada lugar y cierra el
+    /// trip → todos sus journeys quedan completados como UNA sola historia.
+    func publishTrip(tripId: String, places: [(journeyId: String, pages: [CollagePage])]) async throws {
+        for place in places {
+            try await uploadAndSavePages(journeyId: place.journeyId, pages: place.pages)
+        }
         try await requestVoid(
-            path: "/journeys/\(journeyId)",
+            path: "/trips/\(tripId)",
             method: "PATCH",
             body: ["status": "completed", "is_public": true] as [String: Any]
         )
+    }
+
+    /// Elimina el viaje completo: borra el trip, sus lugares (journeys) y cierra
+    /// los apoyos (match) en curso.
+    func cancelTrip(tripId: String) async throws {
+        try await requestVoid(path: "/trips/\(tripId)", method: "DELETE")
     }
 
     func fetchJourneyPages(journeyId: String) async throws -> [APIJourneyPage] {
@@ -270,7 +326,7 @@ final class APIClient {
 
     // Upload binary data to Supabase Storage, returns public URL
     private func uploadToStorage(bucket: String, path: String, data: Data) async throws -> String {
-        let token = AuthService.shared.accessToken ?? anonKey
+        let token = TravelerService.shared.token ?? AuthService.shared.accessToken ?? anonKey
         let urlStr = "\(supabaseURL)/storage/v1/object/\(bucket)/\(path)"
         guard let url = URL(string: urlStr) else { throw APIError.unknown }
 
@@ -297,11 +353,12 @@ final class APIClient {
         )
     }
 
-    func likeJourney(journeyId: String, userId: String) async throws {
+    func likeJourney(journeyId: String) async throws {
+        // Backend derives identity from the JWT — no body param needed.
         let _: EmptyResponse = try await request(
             path: "/journeys/\(journeyId)/like",
             method: "POST",
-            body: ["user_id": userId]
+            body: [:]
         )
     }
 
@@ -309,6 +366,13 @@ final class APIClient {
 
     func fetchUser(id: String) async throws -> APIUser {
         try await request(path: "/users/\(id)")
+    }
+
+    /// Perfil del usuario autenticado — resuelve la identidad desde el JWT.
+    /// Válido para Traveler JWT y Supabase JWT. Usar siempre en lugar de
+    /// fetchUser(id:) cuando el id puede ser un auth_user_id.
+    func fetchCurrentUser() async throws -> APIUser {
+        try await request(path: "/users/me")
     }
 
     func fetchBuddyMe() async throws -> APIBuddyMe {
@@ -351,6 +415,18 @@ final class APIClient {
         try await request(path: "/users/\(userId)/journeys")
     }
 
+    /// Journeys del Traveler actual (guest o verified) — no requiere userId,
+    /// el backend lo resuelve desde el traveler_id en el JWT.
+    func fetchTravelerJourneys() async throws -> [APIJourney] {
+        try await request(path: "/travelers/me/journeys")
+    }
+
+    /// Publicaciones del perfil AGRUPADAS por viaje (una por trip, con momentos
+    /// y lugares agregados). Decodifica con el mismo shape que el feed.
+    func fetchUserTrips(userId: String) async throws -> [APIJourney] {
+        try await request(path: "/users/\(userId)/trips")
+    }
+
     func updateUserBio(userId: String, bio: String) async throws {
         try await requestVoid(path: "/users/\(userId)", method: "PATCH", body: ["bio": bio])
     }
@@ -387,15 +463,15 @@ final class APIClient {
 
     // MARK: – Matching
 
-    func createHelpRequest(travelerId: String, destinationId: String, journeyId: String? = nil, category: String, description: String?, arrivalAt: Date?) async throws -> APIHelpRequest {
+    // Ownership is derived from the Traveler JWT by the backend — never passed in the body.
+    func createHelpRequest(destinationId: String, journeyId: String? = nil, category: String, description: String?, arrivalAt: Date?) async throws -> APIHelpRequest {
         var body: [String: Any] = [
-            "traveler_id": travelerId,
             "destination_id": destinationId,
             "category": category
         ]
-        if let journeyId { body["journey_id"] = journeyId }   // liga la ayuda al Trip (historial)
-        if let description { body["description"] = description }
-        if let arrivalAt { body["arrival_at"] = ISO8601DateFormatter().string(from: arrivalAt) }
+        if let journeyId    { body["journey_id"]  = journeyId }
+        if let description  { body["description"] = description }
+        if let arrivalAt    { body["arrival_at"]  = ISO8601DateFormatter().string(from: arrivalAt) }
         return try await request(path: "/matching/request", method: "POST", body: body)
     }
 
@@ -423,11 +499,12 @@ final class APIClient {
         return resp.count
     }
 
-    func acceptRequest(requestId: String, buddyId: String) async throws -> APIMatch {
+    // buddy_id is derived from the Traveler JWT by the backend — not accepted from the body.
+    func acceptRequest(requestId: String) async throws -> APIMatch {
         try await request(
             path: "/matching/match",
             method: "POST",
-            body: ["request_id": requestId, "buddy_id": buddyId]
+            body: ["request_id": requestId]
         )
     }
 
@@ -439,8 +516,9 @@ final class APIClient {
         )
     }
 
-    func fetchMatches(userId: String) async throws -> [APIMatch] {
-        try await request(path: "/matching/matches/\(userId)")
+    // No path parameter — backend resolves ownership from the JWT.
+    func fetchMatches() async throws -> [APIMatch] {
+        try await request(path: "/matching/matches")
     }
 
     func fetchMyOffers() async throws -> [APIBuddyOffer] {
@@ -448,11 +526,11 @@ final class APIClient {
     }
 
     func declineBuddyOffer(requestId: String) async throws {
-        guard let userId = AuthService.shared.userId else { return }
+        // Backend derives buddy_id from the JWT — no body param needed.
         try await requestVoid(
             path: "/matching/decline",
             method: "POST",
-            body: ["request_id": requestId, "buddy_id": userId]
+            body: ["request_id": requestId]
         )
     }
 
@@ -476,15 +554,17 @@ final class APIClient {
         return try await request(path: path)
     }
 
-    func sendMessage(matchId: String, senderId: String, content: String, type: String = "text", audioUrl: String? = nil) async throws -> APIMessage {
-        var body: [String: Any] = ["sender_id": senderId, "content": content, "type": type]
+    func sendMessage(matchId: String, content: String, type: String = "text", audioUrl: String? = nil) async throws -> APIMessage {
+        // Backend derives sender_id from the JWT — never from the body.
+        var body: [String: Any] = ["content": content, "type": type]
         if let audioUrl { body["audio_url"] = audioUrl }
         return try await request(path: "/messages/\(matchId)", method: "POST", body: body)
     }
 
     func markMessagesRead(matchId: String) async {
-        guard let userId = AuthService.shared.userId else { return }
-        try? await requestVoid(path: "/messages/\(matchId)/read", method: "PATCH", body: ["reader_id": userId])
+        // Backend derives reader_id from the JWT — no guard, no body param needed.
+        guard Session.hasSession else { return }
+        try? await requestVoid(path: "/messages/\(matchId)/read", method: "PATCH")
     }
 }
 
