@@ -1163,13 +1163,20 @@ struct BuddyChatView: View {
                         } else if line.hasPrefix("data:"),
                                   let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces).data(using: .utf8) {
                             if eventType == "match" {
-                                // Cambio de estado del match (el buddy cerró la ayuda)
                                 if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                                   let status = obj["status"] as? String, status == "completed" {
+                                   let newStatus = obj["status"] as? String,
+                                   let matchId   = obj["id"] as? String,
+                                   matchId == match.id,
+                                   ["completed", "cancelled"].contains(newStatus) {
                                     await MainActor.run {
-                                        // Dispara la encuesta de cierre (2 preguntas)
-                                        NotificationCenter.default.post(name: .matchCompleted, object: nil)
+                                        // Actualiza el estado visible: cambia el input bar a "Conexión cerrada"
+                                        matchStatus = newStatus
+                                        // Solo el viajero recibe la encuesta; el buddy solo ve el chat cerrarse.
+                                        if newStatus == "completed" && !isCurrentUserBuddy {
+                                            NotificationCenter.default.post(name: .matchCompleted, object: nil)
+                                        }
                                     }
+                                    await ChatStore.shared.load()
                                 }
                             } else if let msg = try? JSONDecoder.buddy.decode(APIMessage.self, from: data) {
                                 await MainActor.run {
