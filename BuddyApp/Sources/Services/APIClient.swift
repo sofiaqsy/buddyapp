@@ -332,9 +332,10 @@ final class APIClient {
         try await request(path: "/journeys/\(journeyId)/pages", method: "GET")
     }
 
-    // Upload binary data to Supabase Storage, returns public URL
+    // Upload binary data to Supabase Storage, returns public URL.
+    // Uses Supabase JWT (not Traveler JWT) — Storage RLS only understands Supabase auth.
     private func uploadToStorage(bucket: String, path: String, data: Data) async throws -> String {
-        let token = TravelerService.shared.token ?? AuthService.shared.accessToken ?? anonKey
+        let token = AuthService.shared.accessToken ?? anonKey
         let urlStr = "\(supabaseURL)/storage/v1/object/\(bucket)/\(path)"
         guard let url = URL(string: urlStr) else { throw APIError.unknown }
 
@@ -342,15 +343,29 @@ final class APIClient {
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        req.setValue("origin", forHTTPHeaderField: "x-upsert")  // overwrite if exists
+        req.setValue("true", forHTTPHeaderField: "x-upsert")  // overwrite existing file
         req.httpBody = data
 
-        let (_, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw APIError.unknown
-        }
+        let (body, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
+
+        let statusOK = (200..<300).contains(http.statusCode)
+        print("🖼️ [Storage] \(http.statusCode) \(bucket)/\(path) (\(data.count / 1024) KB)" +
+              (statusOK ? "" : " — \(String(data: body.prefix(200), encoding: .utf8) ?? "")"))
+
+        guard statusOK else { throw APIError.server(http.statusCode, "Storage upload failed") }
 
         return "\(supabaseURL)/storage/v1/object/public/\(bucket)/\(path)"
+    }
+
+    func uploadAvatar(userId: String, imageData: Data) async throws -> String {
+        let path = "avatars/\(userId).jpg"
+        print("🖼️ [APIClient] uploadAvatar → Storage bucket=memoir-photos path=\(path)")
+        let url = try await uploadToStorage(bucket: "memoir-photos", path: path, data: imageData)
+        print("🖼️ [APIClient] Storage ✅ — PATCH /users/\(userId.prefix(8))… avatar_url=\(url.suffix(40))")
+        try await requestVoid(path: "/users/\(userId)", method: "PATCH", body: ["avatar_url": url])
+        print("🖼️ [APIClient] PATCH ✅ — avatar guardado en DB")
+        return url
     }
 
     func collectPlace(journeyId: String, placeId: String) async throws -> APIJourneyPlace {
@@ -448,13 +463,6 @@ final class APIClient {
         if let d = details  { body["details"]  = d }
         if let m = matchId  { body["match_id"] = m }
         try await requestVoid(path: "/users/report", method: "POST", body: body)
-    }
-
-    func uploadAvatar(userId: String, imageData: Data) async throws -> String {
-        let path = "avatars/\(userId).jpg"
-        let url = try await uploadToStorage(bucket: "memoir-photos", path: path, data: imageData)
-        try await requestVoid(path: "/users/\(userId)", method: "PATCH", body: ["avatar_url": url])
-        return url
     }
 
     // MARK: – Generic helpers (for services like PushService)
