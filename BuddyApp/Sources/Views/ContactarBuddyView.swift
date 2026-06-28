@@ -452,7 +452,7 @@ struct CategoryPickerView: View {
                             selected = isSelected ? nil : cat
                         }
                         Haptic.light()
-                        fieldFocused = false
+
                     } label: {
                         HStack(alignment: .top, spacing: 12) {
                             ZStack {
