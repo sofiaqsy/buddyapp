@@ -36,17 +36,20 @@ final class TravelerService {
     /// Returns the valid JWT to use in Authorization headers.
     @discardableResult
     func ensureSession() async throws -> String {
+        print("🧳 [TravelerService.ensureSession] hasSession=\(hasSession) travelerId=\(travelerId?.prefix(8) ?? "NIL")")
         // Already have a traveler — just ensure the token is fresh
         if let tid = travelerId {
             return try await refreshIfNeeded(travelerId: tid)
         }
         // First meaningful action: create a new guest traveler
+        print("🧳 [TravelerService.ensureSession] → no session found, calling /travelers/init")
         return try await createGuestSession()
     }
 
     // MARK: – Create guest session
 
     private func createGuestSession() async throws -> String {
+        print("🧳 [TravelerService] POST /travelers/init → device_id=\(deviceId.prefix(8))…")
         let url = URL(string: "\(coreURL)/init")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -55,22 +58,25 @@ final class TravelerService {
 
         let (data, response) = try await URLSession.shared.data(for: req)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        print("🧳 [TravelerService] /travelers/init → statusCode=\(statusCode) bytes=\(data.count)")
         guard (200...299).contains(statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tid    = json["traveler_id"] as? String,
-              let token  = json["token"]       as? String,
-              let secret = json["secret"]      as? String
+              let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tid   = json["traveler_id"] as? String,
+              let token = json["token"]       as? String
         else {
-            throw TravelerError.initFailed(String(data: data, encoding: .utf8) ?? "")
+            let body = String(data: data, encoding: .utf8) ?? ""
+            print("❌ [TravelerService] /travelers/init FAILED status=\(statusCode) body=\(body)")
+            throw TravelerError.initFailed(body)
         }
 
-        // Persist
+        // Persist — secret only present on first creation; on idempotent returns it's omitted
         UserDefaults.standard.set(tid,     forKey: "buddy.traveler.id")
         UserDefaults.standard.set(token,   forKey: "buddy.traveler.token")
         UserDefaults.standard.set("guest", forKey: "buddy.traveler.status")
-        saveSecretToKeychain(secret)
+        if let secret = json["secret"] as? String { saveSecretToKeychain(secret) }
 
-        print("✅ [TravelerService] guest created → \(tid)")
+        print("✅ [TravelerService] guest created → \(tid) (persisted)")
+        print("✅ [TravelerService] Session.hasSession is now: \(travelerId != nil)")
         return token
     }
 
@@ -101,6 +107,10 @@ final class TravelerService {
         guard let secret = loadSecretFromKeychain() else {
             let ok = await AuthService.shared.tryRefresh()
             guard ok, let t = TravelerService.shared.token, !t.isEmpty else {
+                // Both refresh paths exhausted — wipe stored session so
+                // Session.hasSession becomes false and the retry loop stops.
+                print("🧹 [TravelerService] verified refresh failed — clearing stale session")
+                clearSession()
                 throw TravelerError.sessionExpired
             }
             return t
@@ -123,7 +133,12 @@ final class TravelerService {
               let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let token = json["token"] as? String
         else {
-            if statusCode == 401 { throw TravelerError.sessionExpired }
+            if statusCode == 401 {
+                // Guest secret rejected — session permanently expired.
+                print("🧹 [TravelerService] guest refresh 401 — clearing stale session")
+                clearSession()
+                throw TravelerError.sessionExpired
+            }
             throw TravelerError.refreshFailed(String(data: data, encoding: .utf8) ?? "")
         }
 

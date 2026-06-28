@@ -615,10 +615,10 @@ struct YoView: View {
                                 .foregroundStyle(Color.sand)
                         }
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Guarda tu historia de viaje")
+                            Text("Tu historia viaja contigo")
                                 .font(BT.footnoteBold)
                                 .foregroundStyle(Color.ink)
-                            Text("Crea tu perfil para que Buddy recuerde todo lo que importa.")
+                            Text("Crea tu perfil para que Buddy recuerde cada parte del camino.")
                                 .font(BT.caption1)
                                 .foregroundStyle(Color.inkMuted)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -633,16 +633,16 @@ struct YoView: View {
                     VStack(alignment: .leading, spacing: Spacing.md) {
                         anonymousBenefit(icon: "mappin",
                                          title: "Tus viajes",
-                                         subtitle: "Accede a ellos desde cualquier dispositivo")
+                                         subtitle: "Cada destino pasa a ser parte de tu historia.")
                         anonymousBenefit(icon: "camera",
                                          title: "Tus momentos",
-                                         subtitle: "Fotos y memorias guardadas en tu memoir")
-                        anonymousBenefit(icon: "bubble.left.and.bubble.right",
-                                         title: "Tus conversaciones",
-                                         subtitle: "Continúa donde lo dejaste con tus buddies")
+                                         subtitle: "Las fotos y recuerdos que guardaste te siguen a donde vayas.")
+                        anonymousBenefit(icon: "sparkles",
+                                         title: "Tus stickers",
+                                         subtitle: "Recuerdos de los lugares que te recibieron.")
                         anonymousBenefit(icon: "person.2",
-                                         title: "Tus buddies",
-                                         subtitle: "Conecta con personas que ya te ayudaron")
+                                         title: "Tu perfil de Buddy",
+                                         subtitle: "Si decides ayudar a otros viajeros, puedes configurarlo desde aquí.")
                     }
                     .padding(.bottom, Spacing.xl)
 
@@ -1014,7 +1014,7 @@ private struct BuddyNavRow: View {
     private var badgeColor: Color {
         switch profile.verificationStatus {
         case "approved": return Color.teal
-        case "pending":  return Color(hex: "#D97706")
+        case "pending":  return Color.warningAmber
         default:         return Color.inkMuted
         }
     }
@@ -1104,7 +1104,7 @@ private struct BuddyStatusCard: View {
     private var verificationColor: Color {
         switch profile.verificationStatus {
         case "approved": return Color.teal
-        case "pending":  return Color(hex: "#F59E0B")
+        case "pending":  return Color.warningAmber
         default:         return Color.inkMuted
         }
     }

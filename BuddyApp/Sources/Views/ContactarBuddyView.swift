@@ -41,6 +41,7 @@ struct ContactarBuddyView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var phase: Phase = .loading
 
     private var effectiveUserId: String? { Session.travelerId }
@@ -49,6 +50,10 @@ struct ContactarBuddyView: View {
     @State private var sseMatchTask: Task<Void, Never>? = nil
     @State private var buddyCount: Int = 0
     @State private var activeRequestId: String? = nil   // solicitud en curso (para cancelarla)
+    /// true cuando el backend ya escaló al menos una vez — cambia el copy de la UI.
+    @State private var isExpandingSearch: Bool = false
+    /// Evita que el timer y el SSE disparen pollForMatch() simultáneamente.
+    @State private var isPollInFlight: Bool = false
 
     enum Phase: Equatable {
         case loading, selectCategory, searching, matched, error(String)
@@ -61,7 +66,7 @@ struct ContactarBuddyView: View {
                 switch phase {
                 case .loading:        loadingView
                 case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, onRequest: handleRequest)
-                case .searching:      SearchingView(buddyCount: buddyCount, onCancel: cancelSearch)
+                case .searching:      SearchingView(buddyCount: buddyCount, isExpandingSearch: isExpandingSearch, onCancel: cancelSearch)
                 case .matched:        chatView
                 case .error(let m):   errorView(m)
                 }
@@ -84,9 +89,23 @@ struct ContactarBuddyView: View {
         }
         .task { await checkStatus() }
         .task { await loadBuddyCount() }
-        .onDisappear { pollTimer?.invalidate() }
+        .onDisappear {
+            // Limpiar ambos mecanismos para evitar recursos colgados si el sheet se cierra
+            // sin pasar por cancelSearch() (p.ej. swipe-dismiss del sheet).
+            pollTimer?.invalidate()
+            stopSSEMatch()
+        }
+        // Reconexión tras volver al primer plano: el SSE del matching cae cuando iOS
+        // suspende la app. Reiniciamos el SSE y consultamos el estado de inmediato
+        // (sin esperar el próximo tick del timer de 30 s).
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active, phase == .searching, let requestId = activeRequestId else { return }
+            stopSSEMatch()
+            startSSEMatch(requestId: requestId)
+            Task { await pollForMatch() }
+        }
         // Dirigido por evento: el push "¡Tienes un buddy!" llega al aceptar → consulta UNA vez.
-        // El timer queda solo como red de seguridad (15s), no como mecanismo principal.
+        // El timer queda solo como red de seguridad (30 s), no como mecanismo principal.
         .onReceive(NotificationCenter.default.publisher(for: .pushReceivedForeground)) { _ in
             if phase == .searching { Task { await pollForMatch() } }
         }
@@ -135,6 +154,22 @@ struct ContactarBuddyView: View {
 
     private func checkStatus() async {
         phase = .loading
+        print("🔍 [checkStatus] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
+        // Ensure a Traveler session exists before doing anything.
+        // On a fresh install Session.travelerId is nil — this call hits /travelers/init
+        // and persists the guest JWT so all subsequent guards and API calls succeed.
+        if !Session.hasSession {
+            do {
+                try await TravelerService.shared.ensureSession()
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .travelerSessionCreated, object: nil)
+                }
+                print("🔍 [checkStatus] guest session created → travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
+            } catch {
+                phase = .error("No se pudo iniciar sesión. Verifica tu conexión.")
+                return
+            }
+        }
         guard let userId = effectiveUserId else { phase = .error("Sin sesión."); return }
         do {
             let matches = try await APIClient.shared.fetchMatches()
@@ -159,6 +194,7 @@ struct ContactarBuddyView: View {
             if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
                 print("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) → searching")
                 activeRequestId = open.id
+                isExpandingSearch = false
                 phase = .searching; startPolling(); startSSEMatch(requestId: open.id)
             } else if let seed = initialRequest {
                 // La Home ya eligió → crear la solicitud directamente.
@@ -172,7 +208,11 @@ struct ContactarBuddyView: View {
     }
 
     func handleRequest(category: String, description: String?) async {
-        guard let userId = effectiveUserId else { return }
+        print("📤 [handleRequest] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL") category=\(category)")
+        guard let userId = effectiveUserId else {
+            print("❌ [handleRequest] effectiveUserId=nil — session missing at request time")
+            return
+        }
         let destIdOpt2: String? = resolvedDestinationId
         guard let destId = destIdOpt2 else { return }
         phase = .searching
@@ -186,6 +226,7 @@ struct ContactarBuddyView: View {
                 destinationId: destId, journeyId: journey?.id,
                 category: category, description: description, arrivalAt: journey?.arrivalAt)
             activeRequestId = req.id
+            isExpandingSearch = false
             startPolling(); startSSEMatch(requestId: req.id)
         } catch { phase = .error(error.localizedDescription) }
     }
@@ -216,25 +257,65 @@ struct ContactarBuddyView: View {
 
     private func startSSEMatch(requestId: String) {
         sseMatchTask?.cancel()
-        guard let token = Session.token,
-              let url = URL(string: "\(APIClient.shared.baseURL)/matching/request/\(requestId)/stream") else { return }
-
         sseMatchTask = Task {
-            var request = URLRequest(url: url)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-            request.timeoutInterval = 300
-
-            guard let (stream, _) = try? await URLSession.shared.bytes(for: request) else { return }
-            do {
-                for try await line in stream.lines {
-                    guard !Task.isCancelled else { break }
-                    if line.hasPrefix("event: matched") || line.hasPrefix("data:") {
-                        await pollForMatch()
-                    }
+            // Bucle de reconexión: como ChatStore.eventStreamTask, el SSE de búsqueda
+            // no muere en el primer error de red — reintenta hasta que se cancele explícitamente.
+            while !Task.isCancelled {
+                guard let token = Session.token else {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000); continue
                 }
-            } catch { }
+                guard let url = URL(string: "\(APIClient.shared.baseURL)/matching/request/\(requestId)/stream") else { return }
+
+                var req = URLRequest(url: url)
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                req.timeoutInterval = 300
+
+                guard let (stream, _) = try? await URLSession.shared.bytes(for: req) else {
+                    if Task.isCancelled { return }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000); continue
+                }
+
+                do {
+                    for try await line in stream.lines {
+                        guard !Task.isCancelled else { return }
+                        if line.hasPrefix("event: matched") {
+                            // El SSE es la fuente de verdad primaria: cuando confirma el match
+                            // transitamos directamente, sin pasar por el guard de isPollInFlight
+                            // que pertenece al camino de recuperación del timer.
+                            await transitionToMatched()
+                            return   // tarea completada — el match está abierto
+                        } else if line.hasPrefix("data:") {
+                            // Línea de datos sin event header: usamos el poll de recuperación
+                            // (con guard) para no duplicar si el timer también está activo.
+                            await pollForMatch()
+                        }
+                    }
+                } catch { }
+
+                // Conexión caída — breve pausa antes de reconectar (no thundering herd).
+                if !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
         }
+    }
+
+    /// Transición directa al chat, activada SOLO por el SSE cuando confirma el match.
+    /// No respeta isPollInFlight porque el SSE es el mecanismo primario — su señal
+    /// debe procesarse aunque el timer de recuperación esté en vuelo.
+    private func transitionToMatched() async {
+        let userId = effectiveUserId
+        guard let matches = try? await APIClient.shared.fetchMatches() else { return }
+        let activeStatuses = ["pending", "accepted", "active"]
+        guard let active = matches.first(where: {
+            activeStatuses.contains($0.status ?? "") && $0.travelerId == userId
+        }) else { return }
+        pollTimer?.invalidate()
+        match = active
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
+        // La tarea SSE sale por sí sola vía `return` en startSSEMatch —
+        // no hace falta llamar stopSSEMatch() desde aquí.
     }
 
     private func stopSSEMatch() {
@@ -243,15 +324,56 @@ struct ContactarBuddyView: View {
     }
 
     private func pollForMatch() async {
-        guard let userId = effectiveUserId else { return }
+        // Un solo poll en vuelo a la vez — evita llamadas paralelas del timer y del SSE.
+        guard !isPollInFlight else { return }
+        guard let requestId = activeRequestId else { return }
+        isPollInFlight = true
+        defer { isPollInFlight = false }
+
         do {
-            let matches = try await APIClient.shared.fetchMatches()
-            let activeStatuses = ["pending", "accepted", "active"]
-            if let active = matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
+            let status = try await APIClient.shared.fetchMatchingStatus(requestId: requestId)
+            switch status.status {
+
+            case "matched":
+                // Confirmado por el backend → recuperar el objeto completo del match.
+                // Solo en este caso hacemos el segundo fetch (fetchMatches); durante
+                // el estado "searching" basta con el endpoint de estado (barato).
+                let userId = effectiveUserId
+                let matches = try await APIClient.shared.fetchMatches()
+                let activeStatuses = ["pending", "accepted", "active"]
+                if let active = matches.first(where: {
+                    activeStatuses.contains($0.status ?? "") && $0.travelerId == userId
+                }) {
+                    pollTimer?.invalidate()
+                    stopSSEMatch()
+                    match = active
+                    withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
+                }
+
+            case "searching":
+                // El backend escala lazy si el candidato actual expiró.
+                // position > 1 significa que ya estamos en el segundo candidato o más.
+                if let pos = status.position { isExpandingSearch = pos > 1 }
+
+            case "failed":
+                // Se agotaron todos los candidatos del Top-N.
                 pollTimer?.invalidate()
                 stopSSEMatch()
-                match = active
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
+                phase = .error("No encontramos un buddy disponible en este momento. Intenta de nuevo en unos minutos.")
+
+            case "cancelled":
+                // El viajero (u operador) canceló la solicitud desde otro dispositivo.
+                pollTimer?.invalidate()
+                stopSSEMatch()
+                phase = .selectCategory
+
+            default:
+                // "none" → la cola no existe (solicitud inválida o borrada).
+                // Tratamos como si no hubiera solicitud activa → volver al selector.
+                pollTimer?.invalidate()
+                stopSSEMatch()
+                activeRequestId = nil
+                phase = .selectCategory
             }
         } catch { }
     }
@@ -284,6 +406,15 @@ struct CategoryPickerView: View {
         .init(icon: "shield",           label: "Seguridad",   apiKey: "emergency"),
     ]
 
+    private let subtitles: [String: String] = [
+        "transport":     "Rutas y transporte",
+        "food":          "Comida y restaurantes",
+        "translation":   "Frases, señales y más",
+        "activities":    "Tours y actividades",
+        "accommodation": "Hoteles, hostales y más",
+        "emergency":     "Emergencias y consejos útiles",
+    ]
+
     private var canRequest: Bool {
         selected != nil || !customText.trimmingCharacters(in: .whitespaces).isEmpty
     }
@@ -298,48 +429,64 @@ struct CategoryPickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Title — sin etiqueta redundante; el título ya explica la sección.
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 0) {
-                    Text("¿En qué ").font(BT.title1).foregroundStyle(Color.ink)
-                    Text("te ayudamos?").font(BT.displayLarge).foregroundStyle(Color.sand)
+            // Hero heading
+            VStack(alignment: .leading, spacing: 6) {
+                Group {
+                    Text("¿Qué ").foregroundColor(Color.ink)
+                    + Text("necesitas").foregroundColor(Color.brand)
+                    + Text(" hoy?").foregroundColor(Color.ink)
                 }
-                Text("Pregunta lo que sea, un buddy te responde en minutos.")
-                    .font(BT.callout).foregroundStyle(Color.inkMuted)
+                .font(BT.displayLarge)
+                Text("Cuéntanos y un buddy te ayudará en minutos.")
+                    .font(BT.callout)
+                    .foregroundStyle(Color.inkMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, Spacing.edge)
             .padding(.top, Spacing.md)
+            .padding(.bottom, Spacing.lg)
 
-            Spacer().frame(height: Spacing.xl)
-
-            // 2×2 grid
+            // 2×3 grid — icon circle + title + subtitle
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 ForEach(categories) { cat in
+                    let isSelected = selected?.id == cat.id
+                    let subtitle   = subtitles[cat.apiKey] ?? ""
                     Button {
-                        withAnimation(.spring(response: 0.28)) {
-                            selected = selected?.id == cat.id ? nil : cat
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selected = isSelected ? nil : cat
                         }
                         Haptic.light()
                         fieldFocused = false
                     } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: cat.icon)
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(Color.teal)   // iconos teal — voz de iconografía del app
-                            Text(cat.label)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(selected?.id == cat.id ? Color.teal : Color.ink)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
-                            Spacer()
+                        HStack(alignment: .top, spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(isSelected ? Color.brand.opacity(0.12) : Color.groupedBg)
+                                    .frame(width: 40, height: 40)
+                                Image(systemName: cat.icon)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(isSelected ? Color.brand : Color.accent)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(cat.label)
+                                    .font(BT.footnoteBold)
+                                    .foregroundStyle(isSelected ? Color.brand : Color.ink)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                                Text(subtitle)
+                                    .font(BT.caption1)
+                                    .foregroundStyle(Color.inkMuted)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 16).padding(.vertical, 18)
-                        .background(selected?.id == cat.id ? Color.teal.opacity(0.10) : Color.surface)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.surface)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.md))
                         .overlay(RoundedRectangle(cornerRadius: Radius.md)
-                            .stroke(selected?.id == cat.id ? Color.teal : Color.border,
-                                    lineWidth: selected?.id == cat.id ? 1.5 : 1))
+                            .stroke(isSelected ? Color.brand.opacity(0.4) : Color.border, lineWidth: isSelected ? 1.5 : 1))
                     }
                     .buttonStyle(.pressable)
                 }
@@ -348,42 +495,68 @@ struct CategoryPickerView: View {
 
             Spacer().frame(height: Spacing.md)
 
-            // Free text
-            TextField("Cuéntanos qué necesitas…", text: $customText, axis: .vertical)
-                .font(BT.callout).lineLimit(3).focused($fieldFocused)
-                .onChange(of: customText) { _, v in if !v.isEmpty { selected = nil } }
-                .padding(.horizontal, 16).padding(.vertical, 14)
-                .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                .overlay(RoundedRectangle(cornerRadius: Radius.md)
-                    .stroke(fieldFocused ? Color.teal : Color.border, lineWidth: 1))
-                .padding(.horizontal, Spacing.edge)
-
-            Spacer()
-
-            VStack(spacing: 10) {
-                Button {
-                    guard canRequest else { return }
-                    Haptic.medium()
-                    let cat  = selected?.apiKey ?? "general"
-                    let desc = customText.trimmingCharacters(in: .whitespaces)
-                    Task { await onRequest(cat, desc.isEmpty ? nil : desc) }
-                } label: {
-                    Text("Hablar con un buddy")
-                        .font(BT.headline).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .background(canRequest ? Color.teal : Color.teal.opacity(0.35))
-                        .clipShape(Capsule())
-                }
-                .disabled(!canRequest)
-
-                HStack(spacing: 5) {
-                    Circle().fill(buddyCount > 0 ? Color.onlineGreen : Color.sand).frame(width: 6, height: 6)
-                    Text(availabilityText).font(BT.caption1).foregroundStyle(Color.inkMuted)
-                }
+            // Free text input
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.inkFaint)
+                TextField("Cuéntanos qué necesitas...", text: $customText, axis: .vertical)
+                    .font(BT.callout).lineLimit(3).focused($fieldFocused)
+                    .foregroundStyle(Color.ink)
+                    .onChange(of: customText) { _, v in if !v.isEmpty { selected = nil } }
             }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+            .overlay(RoundedRectangle(cornerRadius: Radius.md)
+                .stroke(fieldFocused ? Color.brand : Color.border, lineWidth: 1))
             .padding(.horizontal, Spacing.edge)
-            .padding(.bottom, Spacing.lg)
+
+            Spacer().frame(height: Spacing.md)
+
+            // Primary CTA — dark brown pill with icon + arrow
+            Button {
+                guard canRequest else { return }
+                Haptic.medium()
+                let cat  = selected?.apiKey ?? "general"
+                let desc = customText.trimmingCharacters(in: .whitespaces)
+                Task { await onRequest(cat, desc.isEmpty ? nil : desc) }
+            } label: {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.15))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "bubble.left.fill")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Hablar con un buddy")
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(.white)
+                        Text(availabilityText)
+                            .font(BT.caption1)
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                    Spacer()
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.white.opacity(0.15))
+                            .frame(width: 36, height: 36)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(canRequest ? Color.brand : Color.brandDisabled)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+            }
+            .disabled(!canRequest)
+            .padding(.horizontal, Spacing.edge)
+            .padding(.bottom, Spacing.sm)
         }
         .onAppear {
             if let key = preselectedCategory, selected == nil {
@@ -397,12 +570,22 @@ struct CategoryPickerView: View {
 
 private struct SearchingView: View {
     let buddyCount: Int
+    var isExpandingSearch: Bool = false
     let onCancel: () -> Void
     @State private var appear = false
+
+    private var statusDot: Color { buddyCount > 0 ? Color.onlineGreen : Color.sand }
 
     private var statusText: String {
         if buddyCount <= 0 { return "Avisaremos al primer buddy disponible" }
         return buddyCount == 1 ? "1 buddy disponible cerca" : "\(buddyCount) buddies disponibles cerca"
+    }
+
+    // Copy calmante que describe lo que pasa sin exponer detalles del backend.
+    private var subtitleText: String {
+        isExpandingSearch
+            ? "Ampliando la búsqueda para encontrarte\nel mejor buddy disponible."
+            : "Estamos buscando el mejor buddy cerca de ti.\nSuele tomar solo unos minutos."
     }
 
     var body: some View {
@@ -419,12 +602,13 @@ private struct SearchingView: View {
             }
             .multilineTextAlignment(.center)
 
-            Text("Avisamos a los buddies disponibles cerca.\nSuele tomar solo unos minutos.")
+            Text(subtitleText)
                 .font(BT.callout).foregroundStyle(Color.inkMuted)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, Spacing.sm)
                 .padding(.horizontal, Spacing.edge)
+                .animation(.easeInOut(duration: 0.5), value: isExpandingSearch)
 
             Spacer().frame(height: 52)
 
@@ -706,6 +890,7 @@ struct BuddyChatView: View {
         .toast(isPresented: $reportSent, message: "Reporte enviado. Lo revisaremos pronto.")
         .task {
             matchStatus = match.status
+            ChatPresenceTracker.shared.activeChatMatchId = match.id
             await loadMessages()
             startSSE()
             await APIClient.shared.markMessagesRead(matchId: match.id)
@@ -713,7 +898,12 @@ struct BuddyChatView: View {
             // global; aquí solo manejamos el cierre iniciado por el viajero.
             await ChatStore.shared.load()
         }
-        .onDisappear { sseTask?.cancel() }
+        .onDisappear {
+            sseTask?.cancel()
+            if ChatPresenceTracker.shared.activeChatMatchId == match.id {
+                ChatPresenceTracker.shared.activeChatMatchId = nil
+            }
+        }
         // Re-evalúa la card cada 60s (por si el tiempo supera los 10 min mientras el chat está abierto)
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
             if shouldShowCloseCard { closeCardDismissed = false }
@@ -765,7 +955,7 @@ struct BuddyChatView: View {
                     // Blinking red dot + timer
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(Color.red)
+                            .fill(Color.errorRed)
                             .frame(width: 8, height: 8)
                             .opacity(recVM.seconds % 2 == 0 ? 1 : 0.25)
                             .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true),
@@ -785,7 +975,7 @@ struct BuddyChatView: View {
                         Text("Desliza para cancelar")
                             .font(BT.callout)
                     }
-                    .foregroundStyle(cancelled ? Color.red : Color.inkMuted)
+                    .foregroundStyle(cancelled ? Color.errorRed : Color.inkMuted)
                     .offset(x: max(micDragX, -120))
                     .animation(.interactiveSpring(), value: micDragX)
 
@@ -794,16 +984,16 @@ struct BuddyChatView: View {
                     // Mic button (held, draggable, red pulse)
                     ZStack {
                         Circle()
-                            .fill(cancelled ? Color.red.opacity(0.15) : Color.teal.opacity(0.15))
+                            .fill(cancelled ? Color.errorRed.opacity(0.15) : Color.teal.opacity(0.15))
                             .frame(width: 54, height: 54)
                             .scaleEffect(1.1)
                             .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true),
                                        value: recVM.isRecording)
                         Image(systemName: "mic.fill")
                             .font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(cancelled ? Color.red : Color.teal)
+                            .foregroundStyle(cancelled ? Color.errorRed : Color.teal)
                             .frame(width: 42, height: 42)
-                            .background(cancelled ? Color.red.opacity(0.1) : Color.teal.opacity(0.1))
+                            .background(cancelled ? Color.errorRed.opacity(0.1) : Color.teal.opacity(0.1))
                             .clipShape(Circle())
                     }
                     .offset(x: max(micDragX * 0.3, -40))

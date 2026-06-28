@@ -38,9 +38,12 @@ private struct ReAuthPhoneStep: View {
     @Binding var phone: String
     var onContinue: () -> Void
 
+    @State private var country   = Country.defaultCountry
     @State private var isSending = false
     @State private var error: String?
     @FocusState private var focused: Bool
+
+    private var canContinue: Bool { phone.filter(\.isNumber).count >= 5 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -59,31 +62,12 @@ private struct ReAuthPhoneStep: View {
                 .foregroundStyle(Color.inkMuted)
                 .padding(.bottom, Spacing.xl)
 
-            // Phone field
-            HStack(spacing: Spacing.sm) {
-                Text("+51")
-                    .font(BT.callout)
-                    .foregroundStyle(Color.inkMuted)
-                    .padding(.leading, Spacing.md)
-
-                TextField("9XX XXX XXX", text: $phone)
-                    .font(BT.callout)
-                    .keyboardType(.phonePad)
-                    .focused($focused)
-                    .onChange(of: phone) { _, v in
-                        phone = String(v.filter(\.isNumber).prefix(9))
-                    }
-                    .padding(.trailing, Spacing.md)
-            }
-            .frame(height: 52)
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+            PhoneCountryField(phone: $phone, country: $country, focused: $focused)
 
             if let error {
                 Text(error)
                     .font(BT.caption1)
-                    .foregroundStyle(Color.red)
+                    .foregroundStyle(Color.errorRed)
                     .padding(.top, Spacing.sm)
             }
 
@@ -99,11 +83,11 @@ private struct ReAuthPhoneStep: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 17)
-                .background(phone.count == 9 ? Color.ink : Color.inkMuted.opacity(0.25))
+                .background(canContinue ? Color.ink : Color.inkMuted.opacity(0.25))
                 .foregroundStyle(Color.inkInverse)
                 .clipShape(Capsule())
             }
-            .disabled(phone.count < 9 || isSending)
+            .disabled(!canContinue || isSending)
             .padding(.bottom, 40)
         }
         .padding(.horizontal, Spacing.edge)
@@ -113,9 +97,11 @@ private struct ReAuthPhoneStep: View {
     private func sendCode() {
         isSending = true
         error = nil
+        let fullPhone = country.e164(rawInput: phone)
         Task {
             do {
-                try await AuthService.shared.sendOTP(phone: "+51\(phone)")
+                await MainActor.run { phone = fullPhone }
+                try await AuthService.shared.sendOTP(phone: fullPhone)
                 await MainActor.run { isSending = false; onContinue() }
             } catch {
                 await MainActor.run {
@@ -175,7 +161,7 @@ private struct ReAuthCodeStep: View {
             if let error {
                 Text(error)
                     .font(BT.caption1)
-                    .foregroundStyle(Color.red)
+                    .foregroundStyle(Color.errorRed)
                     .padding(.top, Spacing.sm)
             }
 

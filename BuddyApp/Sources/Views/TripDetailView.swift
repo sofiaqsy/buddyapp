@@ -136,7 +136,7 @@ struct TripDetailView: View {
                     }
                 }
 
-                guard let userId = AuthService.shared.userId else { return }
+                guard let userId = Session.travelerId else { return }
                 if let userStickers = try? await APIClient.shared.fetchUserStickers(userId: userId) {
                     await routeStore.syncCollectedStickers(userStickers: userStickers)
                 }
@@ -220,7 +220,7 @@ struct TripDetailView: View {
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, unreadCount > 9 ? 4 : 0)
                                 .frame(minWidth: 17, minHeight: 17)
-                                .background(Color.red)
+                                .background(Color.errorRed)
                                 .clipShape(Capsule())
                                 .offset(x: 5, y: -5)
                         }
@@ -421,10 +421,10 @@ struct TripDetailView: View {
 
     private func placeDetail(_ place: Place) -> some View {
         let palettes: [[Color]] = [
-            [Color(hex: "4a6741"), Color(hex: "2d5a27")],
-            [Color(hex: "6b4226"), Color(hex: "3d2010")],
-            [Color(hex: "2a6b7a"), Color(hex: "1a4a5a")],
-            [Color(hex: "8b6914"), Color(hex: "6a4a0a")],
+            [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
+            [Color(hex: "3D2B1A"), Color(hex: "6B4226")],
+            [Color(hex: "4A3D35"), Color(hex: "7A6558")],
+            [Color(hex: "5C3E1A"), Color(hex: "8B6428")],
         ]
         let idx = abs(place.name.hashValue) % palettes.count
 
@@ -451,7 +451,7 @@ struct TripDetailView: View {
                     } label: {
                         Image(systemName: isFav(place) ? "heart.fill" : "heart")
                             .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(isFav(place) ? Color.red : Color.ink.opacity(0.45))
+                            .foregroundStyle(isFav(place) ? Color.errorRed : Color.ink.opacity(0.45))
                             .frame(width: 32, height: 32)
                             .background(Circle().fill(Color.secondary.opacity(0.12)))
                             .symbolEffect(.bounce, value: isFav(place))
@@ -631,10 +631,10 @@ struct PlacePhotoCard: View {
     var onToggleFavorite: () -> Void = {}
 
     private let palettes: [[Color]] = [
-        [Color(hex: "4a6741"), Color(hex: "2d5a27")],
-        [Color(hex: "6b4226"), Color(hex: "3d2010")],
-        [Color(hex: "2a6b7a"), Color(hex: "1a4a5a")],
-        [Color(hex: "8b6914"), Color(hex: "6a4a0a")],
+        [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
+        [Color(hex: "3D2B1A"), Color(hex: "6B4226")],
+        [Color(hex: "4A3D35"), Color(hex: "7A6558")],
+        [Color(hex: "5C3E1A"), Color(hex: "8B6428")],
     ]
 
     var body: some View {
@@ -677,7 +677,7 @@ struct PlacePhotoCard: View {
                 Button(action: onToggleFavorite) {
                     Image(systemName: isFavorite ? "heart.fill" : "heart")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(isFavorite ? Color.red : Color.ink.opacity(0.45))
+                        .foregroundStyle(isFavorite ? Color.errorRed : Color.ink.opacity(0.45))
                         .frame(width: 30, height: 30)
                         .background(Circle().fill(.white))
                         .shadow(color: .black.opacity(0.18), radius: 3, y: 1)

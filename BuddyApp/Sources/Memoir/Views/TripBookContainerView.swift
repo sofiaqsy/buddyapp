@@ -691,7 +691,7 @@ struct TripCanvasEditorView: View {
                             Circle()
                                 .fill(entry.color == .clear ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(entry.color))
                                 .frame(width: 32, height: 32)
-                                .overlay(Circle().strokeBorder(isActive ? Color.yellow : .white.opacity(0.3),
+                                .overlay(Circle().strokeBorder(isActive ? Color.warningAmber : .white.opacity(0.3),
                                                                lineWidth: isActive ? 2.5 : 1))
                         }.buttonStyle(.plain)
                     }
@@ -1022,7 +1022,7 @@ struct EdgeShapePreview: View {
     var body: some View {
         GeometryReader { _ in
             ZStack {
-                Color.gray.opacity(0.25).clipShape(previewShape())
+                Color.groupedBg.opacity(0.6).clipShape(previewShape())
                 previewShape().stroke(.white.opacity(0.6), lineWidth: 1)
             }
         }

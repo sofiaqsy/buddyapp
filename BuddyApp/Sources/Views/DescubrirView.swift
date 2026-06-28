@@ -195,10 +195,10 @@ struct PlaceDetailSheet: View {
 
     private var palette: [Color] {
         let all: [[Color]] = [
-            [Color(hex: "0A3D38"), Color(hex: "0F766E")],
-            [Color(hex: "4a2a0a"), Color(hex: "7C4A1E")],
-            [Color(hex: "1e3a5f"), Color(hex: "2a6b7a")],
-            [Color(hex: "4a3200"), Color(hex: "B45309")],
+            [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
+            [Color(hex: "3D2B1A"), Color(hex: "6B4226")],
+            [Color(hex: "4A3D35"), Color(hex: "7A6558")],
+            [Color(hex: "5C3E1A"), Color(hex: "8B6428")],
         ]
         return all[abs(place.name.hashValue) % all.count]
     }
@@ -266,10 +266,10 @@ struct PlaceCard: View {
 
     private var cardColors: [Color] {
         let palettes: [[Color]] = [
-            [Color(hex: "0A3D38"), Color(hex: "0F766E")],
-            [Color(hex: "4a2a0a"), Color(hex: "7C4A1E")],
-            [Color(hex: "1e3a5f"), Color(hex: "2a6b7a")],
-            [Color(hex: "4a3200"), Color(hex: "B45309")],
+            [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
+            [Color(hex: "3D2B1A"), Color(hex: "6B4226")],
+            [Color(hex: "4A3D35"), Color(hex: "7A6558")],
+            [Color(hex: "5C3E1A"), Color(hex: "8B6428")],
         ]
         return palettes[index % palettes.count]
     }

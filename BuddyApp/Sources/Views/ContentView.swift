@@ -58,23 +58,50 @@ struct RootView: View {
         .ignoresSafeArea(edges: .bottom)
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task { await chatStore.load() }
-                chatStore.startEventStream()
+                // Solo carga y stream si hay sesión activa
+                if authState.isLoggedIn {
+                    Task { await chatStore.load() }
+                    chatStore.startEventStream()
+                }
             } else if phase == .background {
                 chatStore.stopEventStream()
             }
         }
+        // Cuando el usuario se autentica: arrancar SSE + pedir push
+        .onChange(of: authState.isLoggedIn) { _, loggedIn in
+            if loggedIn {
+                Task { await chatStore.load() }
+                chatStore.startEventStream()
+                // Pedir permiso de push la primera vez que el usuario se autentica
+                UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .first?.windows.first.map { _ in }
+                // Delegamos a appDelegate a través de BuddyAppApp — evita referencia circular
+                NotificationCenter.default.post(name: .requestPushPermission, object: nil)
+            } else {
+                // Logout: limpiar estado de chat
+                chatStore.stopEventStream()
+                Task { await chatStore.clearAfterLogout() }
+            }
+        }
         .onChange(of: selectedTab) { _, tab in
-            if tab == .conexiones { Task { await chatStore.load() } }
+            if tab == .conexiones, authState.isLoggedIn {
+                Task { await chatStore.load() }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
-            Task { await chatStore.load() }
+            if authState.isLoggedIn { Task { await chatStore.load() } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .switchToTab)) { note in
             if let raw = note.userInfo?["tab"] as? Int, let tab = AppTab(rawValue: raw) {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
                     selectedTab = tab
                 }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openBuddyProfile)) { _ in
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
+                selectedTab = .yo
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openPlaceInMap)) { note in
@@ -91,8 +118,10 @@ struct RootView: View {
             // Remove native tab bar — replaced by GlassTabBar
             UITabBar.appearance().isHidden = true
 
-            // UN solo SSE (offer + message + match) → badge y lista en tiempo real
-            chatStore.startEventStream()
+            // SSE solo si hay sesión activa — los usuarios anónimos no tienen stream
+            if authState.isLoggedIn {
+                chatStore.startEventStream()
+            }
 
             locationService.requestPermission()
             locationService.onRegionEnter = { id in
@@ -176,7 +205,7 @@ struct GlassTabBar: View {
                         ZStack(alignment: .topTrailing) {
                             Image(systemName: active ? tab.activeIcon : tab.icon)
                                 .font(.system(size: 20, weight: active ? .semibold : .regular))
-                                .foregroundStyle(active ? Color.teal : Color.inkMuted)
+                                .foregroundStyle(active ? Color.brand : Color.tabBarInactive)
                                 .scaleEffect(active ? 1.05 : 1)
                                 .animation(.spring(response: 0.3, dampingFraction: 0.65), value: active)
                                 .padding(.trailing, badge > 0 ? 10 : 0)
@@ -187,7 +216,7 @@ struct GlassTabBar: View {
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, badge > 9 ? 4 : 0)
                                     .frame(minWidth: 17, minHeight: 17)
-                                    .background(Color.red)
+                                    .background(Color.errorRed)
                                     .clipShape(Capsule())
                                     .offset(x: 8, y: -5)
                             }

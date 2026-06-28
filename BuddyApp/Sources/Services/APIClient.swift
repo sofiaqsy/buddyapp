@@ -36,7 +36,17 @@ final class APIClient {
                (try? await TravelerService.shared.forceRefresh(travelerId: tid)) != nil {
                 return true
             }
-            return await AuthService.shared.tryRefresh()
+            let ok = await AuthService.shared.tryRefresh()
+            if !ok {
+                // All refresh paths exhausted. forceRefresh already called clearSession()
+                // if it had a chance to run; call it again defensively so Session.hasSession
+                // is guaranteed false before we fire the notification.
+                TravelerService.shared.clearSession()
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .sessionExpired, object: nil)
+                }
+            }
+            return ok
         }
         refreshTask = task
         return await task.value
@@ -59,7 +69,9 @@ final class APIClient {
         // This creates a guest Traveler lazily on the first meaningful action.
         let writeMethods = ["POST", "PATCH", "PUT", "DELETE"]
         let needsIdentity = writeMethods.contains(method) && !Session.hasSession
+        print("🌐 [APIClient] \(method) \(path) — Session.hasSession=\(Session.hasSession) needsIdentity=\(needsIdentity)")
         if needsIdentity, !TravelerService.shared.hasSession {
+            print("🌐 [APIClient] → lazy session creation triggered by \(method) \(path)")
             let token = try await TravelerService.shared.ensureSession()
             print("🧳 [APIClient] guest session created → token prefix: \(token.prefix(20))…")
             await MainActor.run {
@@ -532,6 +544,12 @@ final class APIClient {
     /// Cancela la solicitud de ayuda (is_active=false) → deja de mostrarse a buddies
     func cancelHelpRequest(requestId: String) async throws {
         try await requestVoid(path: "/matching/request/\(requestId)", method: "DELETE")
+    }
+
+    /// Estado actual del matching para una solicitud.
+    /// Dispara la escalación lazy en el backend si el candidato actual expiró.
+    func fetchMatchingStatus(requestId: String) async throws -> APIMatchingStatus {
+        try await request(path: "/matching/status/\(requestId)")
     }
 
     /// Ayudas recién completadas en un destino (comunidad viva)

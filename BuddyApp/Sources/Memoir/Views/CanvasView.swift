@@ -54,7 +54,7 @@ struct CanvasView: View {
     private func snapGuideLines(in size: CGSize) -> some View {
         // Vertical centre ──────────────────────────────────────────────────────
         Rectangle()
-            .fill(Color.blue.opacity(vm.snapGuides.contains(.verticalCenter) ? 0.55 : 0))
+            .fill(Color.accent.opacity(vm.snapGuides.contains(.verticalCenter) ? 0.55 : 0))
             .frame(width: 1, height: size.height)
             .position(x: size.width / 2, y: size.height / 2)
             .allowsHitTesting(false)
@@ -62,7 +62,7 @@ struct CanvasView: View {
 
         // Horizontal centre ────────────────────────────────────────────────────
         Rectangle()
-            .fill(Color.blue.opacity(vm.snapGuides.contains(.horizontalCenter) ? 0.55 : 0))
+            .fill(Color.accent.opacity(vm.snapGuides.contains(.horizontalCenter) ? 0.55 : 0))
             .frame(width: size.width, height: 1)
             .position(x: size.width / 2, y: size.height / 2)
             .allowsHitTesting(false)

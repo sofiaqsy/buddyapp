@@ -105,7 +105,7 @@ struct SkeletonBox: View {
     var cornerRadius: CGFloat = 0
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(Color.gray.opacity(0.18))
+            .fill(Color.groupedBg)
             .shimmer()
     }
 }
@@ -181,7 +181,7 @@ extension CachedImage where Placeholder == Color {
         self.init(
             url: urlString.flatMap { URL(string: $0) },
             content: content,
-            placeholder: { Color.gray.opacity(0.15) }
+            placeholder: { Color.groupedBg.opacity(0.8) }
         )
     }
 }

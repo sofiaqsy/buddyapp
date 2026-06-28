@@ -296,7 +296,7 @@ struct ConexionesView: View {
     @EnvironmentObject var chatStore: ChatStore
     @EnvironmentObject var authState: AuthState
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
-    @State private var showIdentitySheet = false
+    @State private var identityMode: IdentityMode? = nil
 
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["pending","accepted","active"].contains($0.match.status) }
@@ -364,6 +364,18 @@ struct ConexionesView: View {
                 Task { await chatStore.load() }
             }
         }
+        // Push de nuevo mensaje o buddy accepted tapeado → abrir el chat correcto
+        .onReceive(NotificationCenter.default.publisher(for: .openChatForMatch)) { note in
+            guard let matchId = note.userInfo?["match_id"] as? String else { return }
+            Task {
+                await chatStore.load()
+                await MainActor.run {
+                    if let item = chatStore.connections.first(where: { $0.match.id == matchId }) {
+                        chatTarget = item
+                    }
+                }
+            }
+        }
         // Recarga ofertas en tiempo real cuando el matching elige a este buddy
         .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
             Task {
@@ -385,8 +397,8 @@ struct ConexionesView: View {
                 }
             }
         }
-        .sheet(isPresented: $showIdentitySheet) {
-            IdentitySheet(contextMessage: "Identifícate para ver tus conversaciones con buddies.") {
+        .sheet(item: $identityMode) { mode in
+            IdentitySheet(skipName: mode == .login) {
                 Task { await chatStore.load() }
                 chatStore.startEventStream()
             }
@@ -397,36 +409,111 @@ struct ConexionesView: View {
     // MARK: – Estado anónimo del tab Conexiones
 
     private var anonymousConnectionState: some View {
-        VStack(spacing: Spacing.lg) {
-            Spacer()
-            Image(systemName: "person.2")
-                .font(.system(size: 42, weight: .light))
-                .foregroundStyle(Color.inkMuted.opacity(0.4))
-            VStack(spacing: Spacing.sm) {
-                Text("Tus conexiones te esperan")
-                    .font(BT.title3)
-                    .foregroundStyle(Color.ink)
-                Text("Cuando hables con un buddy o alguien te pida ayuda,\naparecerá aquí.")
-                    .font(BT.callout)
-                    .foregroundStyle(Color.inkMuted)
-                    .multilineTextAlignment(.center)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top, spacing: 14) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.sandLight)
+                                .frame(width: 44, height: 44)
+                            Image(systemName: "point.topright.arrow.triangle.backward.to.point.bottomleft.scurvepath")
+                                .font(.system(size: 18, weight: .light))
+                                .foregroundStyle(Color.sand)
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Las personas son parte del viaje")
+                                .font(BT.footnoteBold)
+                                .foregroundStyle(Color.ink)
+                            Text("Crea tu perfil para que Buddy recuerde a quienes estuvieron contigo en el camino.")
+                                .font(BT.caption1)
+                                .foregroundStyle(Color.inkMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.bottom, Spacing.lg)
+
+                    Divider().overlay(Color.border)
+                        .padding(.bottom, Spacing.lg)
+
+                    VStack(alignment: .leading, spacing: Spacing.md) {
+                        anonymousBenefit(icon: "bubble.left.and.bubble.right",
+                                         title: "Tus conversaciones",
+                                         subtitle: "Consulta el historial de lo que hablaste con tus buddies.")
+                        anonymousBenefit(icon: "person.fill.checkmark",
+                                         title: "Tus buddies",
+                                         subtitle: "Las personas que te ayudaron, siempre a un mensaje de distancia.")
+                        anonymousBenefit(icon: "heart",
+                                         title: "Tu impacto",
+                                         subtitle: "Recuerda también a quienes ayudaste tú.")
+                    }
+                    .padding(.bottom, Spacing.xl)
+
+                    Button {
+                        Haptic.medium()
+                        identityMode = .newUser
+                    } label: {
+                        Text("Crear mi perfil")
+                            .font(BT.footnoteBold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 17)
+                            .background(Color.ink)
+                            .foregroundStyle(Color.inkInverse)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.pressable)
+                    .padding(.bottom, Spacing.sm)
+
+                    Button {
+                        Haptic.light()
+                        identityMode = .login
+                    } label: {
+                        Text("Ya tengo una cuenta")
+                            .font(BT.callout)
+                            .foregroundStyle(Color.inkMuted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(Spacing.lg)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
+                .padding(.horizontal, Spacing.edge)
+
+                Text("Nombre y teléfono. Nada más.")
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted.opacity(0.7))
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, Spacing.sm)
             }
-            Button {
-                Haptic.medium()
-                showIdentitySheet = true
-            } label: {
-                Text("Identificarme")
+            .padding(.top, Spacing.lg)
+        }
+        .background(Color.canvas)
+    }
+
+    private func anonymousBenefit(icon: String, title: String, subtitle: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color.canvas)
+                    .frame(width: 30, height: 30)
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.sand)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
                     .font(BT.footnoteBold)
-                    .padding(.horizontal, Spacing.xl)
-                    .padding(.vertical, 15)
-                    .background(Color.ink)
-                    .foregroundStyle(Color.inkInverse)
-                    .clipShape(Capsule())
+                    .foregroundStyle(Color.ink)
+                Text(subtitle)
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
             }
-            .buttonStyle(.pressable)
             Spacer()
         }
-        .frame(maxWidth: .infinity)
     }
 
     private var connectionList: some View {
@@ -434,7 +521,7 @@ struct ConexionesView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // ALGUIEN LLEGA — ofertas pendientes para buddies
                 if !chatStore.offers.isEmpty {
-                    listHeader("ALGUIEN LLEGA", count: chatStore.offers.count, color: Color(hex: "#B45309"))
+                    listHeader("ALGUIEN LLEGA", count: chatStore.offers.count, color: Color.brand)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
 
@@ -455,7 +542,7 @@ struct ConexionesView: View {
 
                 // ACOMPAÑAMIENTO ABIERTO — viajeros a los que YO ayudo ahora
                 if !activeAsBuddy.isEmpty {
-                    activeSection("ACOMPAÑAMIENTO ABIERTO", items: activeAsBuddy, color: Color(hex: "#2B8A7A"))
+                    activeSection("ACOMPAÑAMIENTO ABIERTO", items: activeAsBuddy, color: Color.accent)
                 }
 
                 // VÍNCULO ABIERTO — la persona que ME ayuda ahora
@@ -586,12 +673,12 @@ struct OfferCard: View {
             // Header — traveler + context
             HStack(spacing: 10) {
                 Circle()
-                    .fill(Color(hex: "#FFF3E0"))
+                    .fill(Color.groupedBg)
                     .frame(width: 44, height: 44)
                     .overlay(
                         Text(String(travelerName.prefix(1)))
                             .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(Color(hex: "#B45309"))
+                            .foregroundStyle(Color.brand)
                     )
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -605,7 +692,7 @@ struct OfferCard: View {
                                 .font(BT.caption1).foregroundStyle(Color.inkMuted)
                         }
                         Text(categoryLabel)
-                            .font(BT.caption1).foregroundStyle(Color(hex: "#B45309"))
+                            .font(BT.caption1).foregroundStyle(Color.brand)
                     }
                 }
 
@@ -643,7 +730,7 @@ struct OfferCard: View {
                         }
                     }
                     .frame(maxWidth: .infinity).frame(height: 40)
-                    .background(Color(hex: "#2B8A7A"))
+                    .background(Color.brand)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
@@ -675,7 +762,7 @@ struct OfferCard: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .overlay(
             RoundedRectangle(cornerRadius: Radius.lg)
-                .stroke(Color(hex: "#B45309").opacity(0.35), lineWidth: 1)
+                .stroke(Color.brand.opacity(0.25), lineWidth: 1)
         )
         .cardShadow()
     }
@@ -779,7 +866,7 @@ struct ConnectionRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, item.unreadCount > 9 ? 6 : 0)
                             .frame(minWidth: 20, minHeight: 20)
-                            .background(Color.red)
+                            .background(Color.errorRed)
                             .clipShape(Capsule())
                     } else {
                         Image(systemName: "chevron.right")

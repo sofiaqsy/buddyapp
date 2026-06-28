@@ -11,18 +11,35 @@ struct BuddyAppApp: App {
         WindowGroup {
             // RootView es siempre el punto de entrada.
             // La autenticación controla capacidades, no navegación.
+            let _ = {
+                print("🚀 [AppLaunch] ─────────────────────────────────────")
+                print("🚀 [AppLaunch] TravelerService.hasSession=\(TravelerService.shared.hasSession)")
+                print("🚀 [AppLaunch] travelerId=\(TravelerService.shared.travelerId?.prefix(8) ?? "NIL")")
+                print("🚀 [AppLaunch] travelerStatus=\(TravelerService.shared.status)")
+                print("🚀 [AppLaunch] AuthService.isLoggedIn=\(AuthService.shared.isLoggedIn)")
+                print("🚀 [AppLaunch] Session.hasSession=\(Session.hasSession)")
+                print("🚀 [AppLaunch] ─────────────────────────────────────")
+            }()
             RootView()
                 .environmentObject(locationService)
                 .environmentObject(routeStore)
                 .environmentObject(authState)
                 .onAppear {
-                    // Solo pedir push si hay sesión activa — los usuarios anónimos
-                    // no reciben notificaciones push.
-                    if authState.isLoggedIn { appDelegate.requestPushPermission() }
+                    if authState.isLoggedIn {
+                        appDelegate.requestPushPermission()
+                    } else if Session.hasSession {
+                        // Guest with existing session: request permission and re-register
+                        // any stored token that may not have been sent to the server yet.
+                        appDelegate.requestPushPermission()
+                        if let stored = UserDefaults.standard.string(forKey: "apns_device_token") {
+                            Task { await PushService.shared.registerToken(stored) }
+                        }
+                    }
                 }
                 // Validación en background: si el token almacenado ya no es válido,
                 // AuthState lo marca y la UI transiciona a estado anónimo.
                 .task { await authState.validate() }
+                .tint(Color.brand)
                 .preferredColorScheme(.light)
                 .animation(.easeInOut(duration: 0.3), value: authState.isLoggedIn)
         }
@@ -64,6 +81,7 @@ final class AuthState: ObservableObject {
     /// Puede explorar home, destinos, feed — siempre true.
     var canBrowse:       Bool { true }
     /// Pedir ayuda, crear trips, chatear, crear momentos — todos los Travelers (guest + verified).
+    /// La sesión guest se crea lazily en el primer POST via APIClient/TravelerService.
     var canRequestHelp:  Bool { true }
     var canChat:         Bool { true }
     var canManageTrip:   Bool { true }
@@ -101,6 +119,9 @@ final class AuthState: ObservableObject {
         ) { [weak self] _ in
             print("🧳 travelerSessionCreated — guest session activa")
             self?.travelerStatus = "guest"
+            // Request push now — guest has done their first meaningful action
+            // (requested help), so they need to receive buddy-accepted notifications.
+            NotificationCenter.default.post(name: .requestPushPermission, object: nil)
         }
     }
 

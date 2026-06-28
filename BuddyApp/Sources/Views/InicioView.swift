@@ -10,14 +10,15 @@ struct InicioView: View {
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var locationService: LocationService
     @State private var navPath = NavigationPath()
-    @State private var showContactSheet         = false
     @State private var showPendingContactSheet  = false
     @State private var isFindingBuddy           = false   // creando/reusando trip en background
     @State private var homeBuddyCount           = 0       // buddies cerca, para el composer de la Home
     @State private var homeHelpSeed: (category: String, description: String?)? = nil  // categoría elegida en Home
     @State private var confirmedHelpSeed: (category: String, description: String?)? = nil  // seed confirmado para la sheet
-    @State private var homeHelpDestId: String?  = nil     // destino del flujo de ayuda sin trip
-    @State private var showHomeHelpSheet        = false
+    /// Drives the home-help sheet. Non-nil = sheet open. Atom­ically carries
+    /// both destinationId and the optional seed so SwiftUI never renders the
+    /// sheet content with a nil destination (avoids blank-screen race).
+    @State private var homeHelpSheet: HomeHelpItem? = nil
     /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
     @State private var locationPromptDestination: APIDestination? = nil
     @State private var destinations: [APIDestination] = []
@@ -51,8 +52,10 @@ struct InicioView: View {
     @State private var showIdentitySheet = false
     /// Acción pendiente que se ejecuta después de que el usuario se autentique
     @State private var pendingIdentityAction: (() -> Void)? = nil
-    /// Journey capturado al abrir showContactSheet — no se borra con loadData.
+    /// Journey activo en el sheet de contacto — presentar con .sheet(item:) elimina el race con isPresented.
     @State private var contactSheetJourney: APIJourney? = nil
+    /// Copia del journey para el onDismiss (item ya es nil cuando onDismiss dispara).
+    @State private var lastContactSheetJourney: APIJourney? = nil
 
     private var pendingReply: Bool {
         chatStore.connections
@@ -125,11 +128,10 @@ struct InicioView: View {
                                 }
                             }
                         } else {
-                            VStack(alignment: .leading, spacing: Spacing.lg) {
+                            VStack(alignment: .leading, spacing: Spacing.xs) {
                                 // 1. Contexto — ubicación detectada, o invitación a activarla.
                                 locationContext
-                                // 2. Ayuda — el composer ES la Home: "¿En qué te ayudamos?".
-                                // El Trip se crea/reusa automáticamente al enviar.
+                                // 2. Ayuda — el composer ES la Home.
                                 CategoryPickerView(buddyCount: homeBuddyCount) { cat, desc in
                                     requireIdentity {
                                         Task { await submitHelpFromHome(category: cat, description: desc) }
@@ -170,8 +172,8 @@ struct InicioView: View {
                             confirmedHelpSeed = homeHelpSeed  // preservar antes de limpiar
                             homeHelpSeed = nil
                             activeJourney = journey
+                            lastContactSheetJourney = journey
                             contactSheetJourney = journey
-                            showContactSheet = true
                         } else {
                             navPath.append(journey)
                         }
@@ -236,10 +238,10 @@ struct InicioView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    (Text("BU").foregroundColor(Color.ink)
-                     + Text("DDY").foregroundColor(Color.sand))
-                        .font(BT.eyebrow)
-                        .tracking(4)
+                    Image("BuddyLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 30)
                 }
             }
             // Re-tap del tab Inicio → vuelve arriba + recarga
@@ -263,47 +265,45 @@ struct InicioView: View {
                                             userInfo: ["tab": AppTab.inicio.rawValue])
             navPath.append("tripDetail")
         }
-        .sheet(isPresented: $showContactSheet, onDismiss: {
+        .sheet(item: $contactSheetJourney, onDismiss: {
             confirmedHelpSeed = nil
             // Optimistic: si ya tenemos un journey capturado (puede ser planning)
             // mostrarlo de inmediato; refreshTripState lo confirmará con el status real.
-            if activeJourney == nil, let j = contactSheetJourney {
+            if activeJourney == nil, let j = lastContactSheetJourney {
                 activeJourney = j
                 liveJourneys  = [j]
             }
-            contactSheetJourney = nil
+            lastContactSheetJourney = nil
             Task { await refreshTripState() }
-        }) {
-            if let journey = contactSheetJourney {
-                ContactarBuddyView(
-                    journey: journey,
-                    initialRequest: confirmedHelpSeed,
-                    onCancelled: {
-                        // Usuario canceló sin aceptar buddy → cancelar el journey
-                        let jid = journey.id
-                        Task {
-                            try? await APIClient.shared.updateJourneyStatus(journeyId: jid, status: "cancelled")
-                        }
-                        activeJourney  = nil
-                        pendingJourney = nil
-                        liveJourneys   = []
-                        contactSheetJourney = nil
+        }) { journey in
+            let _ = print("🟡 [sheet:contact] render — journey=\(journey.id)")
+            ContactarBuddyView(
+                journey: journey,
+                initialRequest: confirmedHelpSeed,
+                onCancelled: {
+                    // Usuario canceló sin aceptar buddy → cancelar el journey
+                    let jid = journey.id
+                    Task {
+                        try? await APIClient.shared.updateJourneyStatus(journeyId: jid, status: "cancelled")
                     }
-                )
-            }
+                    activeJourney  = nil
+                    pendingJourney = nil
+                    liveJourneys   = []
+                    contactSheetJourney = nil
+                }
+            )
         }
         // Flujo de la Home SIN trip previo: se pide ayuda solo con el destino.
         // El Trip se crea recién cuando un buddy ACEPTA (backend). Si se cancela
         // y nadie acepta, no queda ningún trip huérfano.
-        .sheet(isPresented: $showHomeHelpSheet, onDismiss: {
-            homeHelpSeed = nil; homeHelpDestId = nil
-            Task { await refreshTripState() }   // si hubo match, el trip ya existe
-        }) {
-            if let destId = homeHelpDestId {
-                ContactarBuddyView(destinationId: destId, initialRequest: homeHelpSeed)
-            }
+        .sheet(item: $homeHelpSheet, onDismiss: {
+            homeHelpSeed = nil
+            Task { await refreshTripState() }
+        }) { item in
+            ContactarBuddyView(destinationId: item.destinationId, initialRequest: item.seed)
         }
         .sheet(isPresented: $showPendingContactSheet) {
+            let _ = print("🟡 [sheet:pending] render — pendingJourney=\(pendingJourney?.id ?? "nil")")
             if let journey = pendingJourney {
                 ContactarBuddyView(journey: journey, preselectedCategory: "transport")
             }
@@ -377,20 +377,18 @@ struct InicioView: View {
     @ViewBuilder
     private var locationContext: some View {
         if let city = nearestDestination?.city {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: "location.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("ESTÁS EN \(city.uppercased())")
-                    .font(BT.eyebrow).tracking(1.5)
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Estás en \(city)")
+                    .font(BT.caption1.weight(.semibold))
             }
-            .foregroundStyle(Color.sand)
+            .foregroundStyle(Color.brand)
         } else {
-            // Sin ubicación → invitación discreta a activarla (no bloquea pedir ayuda).
             Button {
                 Haptic.light()
                 switch locationService.authorizationStatus {
                 case .denied, .restricted:
-                    // Ya negado: solo se puede reactivar desde Ajustes.
                     if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                 default:
                     locationService.requestPermission()
@@ -399,13 +397,13 @@ struct InicioView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "location.circle.fill")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Activa tu ubicación para ver ayuda cerca de ti")
+                    Text("Activa tu ubicación para conectarte con ayuda cerca")
                         .font(BT.caption1)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.sand.opacity(0.6))
+                        .foregroundStyle(Color.brand.opacity(0.5))
                 }
-                .foregroundStyle(Color.sand)
+                .foregroundStyle(Color.brand)
             }
             .buttonStyle(.plain)
         }
@@ -438,9 +436,9 @@ struct InicioView: View {
     /// El trip se crea recién cuando un buddy acepta.
     private func openHelp(forDestinationId destId: String) async {
         await MainActor.run {
-            homeHelpDestId = destId
+            print("🔵 [openHelp] destId=\(destId)")
             homeHelpSeed = nil
-            showHomeHelpSheet = true
+            homeHelpSheet = HomeHelpItem(destinationId: destId, seed: nil)
         }
     }
 
@@ -449,15 +447,14 @@ struct InicioView: View {
     private func submitHelpFromHome(category: String, description: String?) async {
         guard let dest = nearestDestination else {
             await MainActor.run {
-                homeHelpSeed = (category, description)  // guardamos para abrir ContactarBuddy tras crear el trip
+                homeHelpSeed = (category, description)
                 navPath.append("register")
             }
             return
         }
         await MainActor.run {
-            homeHelpDestId = dest.id
-            homeHelpSeed   = (category, description)
-            showHomeHelpSheet = true
+            homeHelpSeed  = (category, description)
+            homeHelpSheet = HomeHelpItem(destinationId: dest.id, seed: (category, description))
         }
     }
 
@@ -490,9 +487,14 @@ struct InicioView: View {
             recentHelperTotal: help.count,
             onContactBuddy: {
                 if isActive {
+                    print("🔵 [onContactBuddy] active — opening sheet journey=\(journey.id)")
+                    lastContactSheetJourney = journey
                     contactSheetJourney = journey
-                    showContactSheet = true
-                } else { showPendingContactSheet = true }
+                } else {
+                    print("🔵 [onContactBuddy] pending — journey=\(journey.id) pendingJourney_before=\(pendingJourney?.id ?? "nil")")
+                    pendingJourney = journey
+                    showPendingContactSheet = true
+                }
             },
             onOpenDetail: {
                 if isActive { navPath.append("tripDetail") } else { navPath.append(journey) }
@@ -1088,7 +1090,7 @@ struct FindBuddyPrimaryCTA: View {
                 .font(BT.footnoteBold)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(Color(hex: "#2B8A7A"))
+                .background(Color.brand)
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             }
@@ -1099,6 +1101,15 @@ struct FindBuddyPrimaryCTA: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
     }
+}
+
+// Carries both pieces the home-help sheet needs atomically.
+// Using this as the .sheet(item:) driver eliminates the Bool/optional
+// desync that caused blank screens on first open.
+struct HomeHelpItem: Identifiable {
+    let id = UUID()
+    let destinationId: String
+    let seed: (category: String, description: String?)?
 }
 
 // Tarjeta SECUNDARIA: planear un viaje es opcional, no compite con pedir ayuda.
@@ -1117,12 +1128,13 @@ struct RegisterCTACard: View {
                         .foregroundStyle(Color.sand)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("¿Planeas un viaje?")
+                    Text("¿Vas a viajar?")
                         .font(BT.footnoteBold)
                         .foregroundStyle(Color.ink)
-                    Text("Regístralo y prepara tu llegada.")
+                    Text("Regístralo y prepara tu llegada para aprovechar al máximo.")
                         .font(BT.caption1)
                         .foregroundStyle(Color.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -1147,10 +1159,10 @@ struct DestinationThumbCard: View {
 
     // Fallback gradient per destination index
     private let gradients: [[Color]] = [
-        [Color(hex: "0A3D38"), Color(hex: "0F766E")],
-        [Color(hex: "1e3a5f"), Color(hex: "2a6b7a")],
-        [Color(hex: "4a2a0a"), Color(hex: "7C4A1E")],
-        [Color(hex: "4a3200"), Color(hex: "B45309")],
+        [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
+        [Color(hex: "3D2B1A"), Color(hex: "6B4226")],
+        [Color(hex: "4A3D35"), Color(hex: "7A6558")],
+        [Color(hex: "5C3E1A"), Color(hex: "8B6428")],
     ]
 
     var body: some View {
@@ -1684,7 +1696,7 @@ struct ActiveTripCard: View {
                                         .overlay(Circle().stroke(.white, lineWidth: 2))
                                     if pendingReply {
                                         Circle()
-                                            .fill(Color.red)
+                                            .fill(Color.errorRed)
                                             .frame(width: 13, height: 13)
                                             .overlay(Circle().stroke(.white, lineWidth: 1.5))
                                             .offset(x: 3, y: -3)
@@ -1764,7 +1776,7 @@ struct TripHeroBanner: View {
     let title: String
     let dateLine: String
     var statusText: String? = "PLANIFICADO"
-    var statusColor: Color = Color(hex: "6EE7B7")
+    var statusColor: Color = Color.accent
     var topEyebrow: String? = nil
     var height: CGFloat = 200
     var trailing: (() -> AnyView)? = nil
@@ -1946,7 +1958,7 @@ struct PendingTripCard: View {
             title: destName,
             dateLine: tripArrivalLine(journey.arrivalAt),
             statusText: arrivalToday ? "POR LLEGAR" : "TE ESPERAMOS",
-            statusColor: arrivalToday ? Color(hex: "F59E0B") : Color(hex: "6EE7B7"),
+            statusColor: arrivalToday ? Color.warningAmber : Color.accent,
             topEyebrow: "TU TRIP · \(arrivalToday ? "HOY" : "PRÓXIMO")",
             height: 200,
             trailing: {
@@ -1965,7 +1977,7 @@ struct PendingTripCard: View {
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, unreadCount > 9 ? 4 : 0)
                                     .frame(minWidth: 17, minHeight: 17)
-                                    .background(Color.red)
+                                    .background(Color.errorRed)
                                     .clipShape(Capsule())
                                     .overlay(Capsule().stroke(.white, lineWidth: 1.5))
                                     .offset(x: 4, y: -4)
