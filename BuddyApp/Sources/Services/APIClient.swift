@@ -284,56 +284,63 @@ final class APIClient {
 
     /// Sube las portadas de un journey y guarda sus URLs (sin tocar el status).
     /// Reutilizable para publicar journey por journey dentro de un trip.
+    // Sube las miniaturas del memoir a través de buddy-core (service_role),
+    // evitando el RLS de Supabase Storage que rechaza tokens anon.
     private func uploadAndSavePages(journeyId: String, pages: [CollagePage]) async throws {
         print("⬆️ [uploadAndSavePages] journeyId=\(journeyId) pages.count=\(pages.count)")
-        let results: [(Int, String)] = await withTaskGroup(of: (Int, String)?.self) { group in
-            for (index, page) in pages.enumerated() {
-                group.addTask {
-                    print("⬆️ [uploadAndSavePages] page[\(index)] id=\(page.id) thumbFile=\(page.thumbnailFileName ?? "NIL")")
-                    guard let filename = page.thumbnailFileName else {
-                        print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — thumbnailFileName is nil")
-                        return nil
-                    }
-                    guard let image = MemoirPersistence.shared.loadThumbnail(filename, journeyId: journeyId) else {
-                        print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — loadThumbnail returned nil for file=\(filename)")
-                        return nil
-                    }
-                    guard let data = image.jpegData(compressionQuality: 0.82) else {
-                        print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — jpegData failed (image size=\(image.size))")
-                        return nil
-                    }
-                    print("⬆️ [uploadAndSavePages] page[\(index)] uploading \(data.count) bytes → memoir-photos/memoirs/\(journeyId)/page_\(index).jpg")
-                    let path = "memoirs/\(journeyId)/page_\(index).jpg"
-                    do {
-                        guard let url = try? await self.uploadToStorage(bucket: "memoir-photos", path: path, data: data) else {
-                            print("⬆️ [uploadAndSavePages] page[\(index)] UPLOAD FAILED — uploadToStorage returned nil")
-                            return nil
-                        }
-                        print("⬆️ [uploadAndSavePages] page[\(index)] UPLOAD OK → \(url)")
-                        return (index, url)
-                    }
-                }
-            }
-            var collected: [(Int, String)] = []
-            for await r in group { if let r { collected.append(r) } }
-            return collected
-        }
-        print("⬆️ [uploadAndSavePages] uploaded \(results.count)/\(pages.count) page(s)")
-        let pagePayload: [[String: Any]] = results
-            .sorted { $0.0 < $1.0 }
-            .map { ["page_index": $0.0, "thumbnail_url": $0.1] }
 
-        if !pagePayload.isEmpty {
-            print("⬆️ [uploadAndSavePages] POSTing \(pagePayload.count) page(s) to /journeys/\(journeyId)/pages")
-            try await requestVoid(
-                path: "/journeys/\(journeyId)/pages",
-                method: "POST",
-                body: ["pages": pagePayload] as [String: Any]
-            )
-            print("⬆️ [uploadAndSavePages] POST /pages SUCCESS")
-        } else {
-            print("⬆️ [uploadAndSavePages] pagePayload is EMPTY — POST /pages skipped entirely")
+        // Recolectar los JPEG de cada página antes de armar el multipart
+        var parts: [(index: Int, data: Data)] = []
+        for (index, page) in pages.enumerated() {
+            print("⬆️ [uploadAndSavePages] page[\(index)] id=\(page.id) thumbFile=\(page.thumbnailFileName ?? "NIL")")
+            guard let filename = page.thumbnailFileName else {
+                print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — thumbnailFileName is nil")
+                continue
+            }
+            guard let image = MemoirPersistence.shared.loadThumbnail(filename, journeyId: journeyId) else {
+                print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — loadThumbnail returned nil for file=\(filename)")
+                continue
+            }
+            guard let data = image.jpegData(compressionQuality: 0.82) else {
+                print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — jpegData failed")
+                continue
+            }
+            print("⬆️ [uploadAndSavePages] page[\(index)] queued \(data.count) bytes")
+            parts.append((index: index, data: data))
         }
+
+        guard !parts.isEmpty else {
+            print("⬆️ [uploadAndSavePages] no valid pages — skipping upload")
+            return
+        }
+
+        // Construir multipart/form-data y enviar a buddy-core
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        for part in parts {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"page_\(part.index)\"; filename=\"page_\(part.index).jpg\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+            body.append(part.data)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        let url = URL(string: "\(baseURL)/journeys/\(journeyId)/pages/upload")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(Session.token ?? anonKey)", forHTTPHeaderField: "Authorization")
+        req.httpBody = body
+
+        print("⬆️ [uploadAndSavePages] POST /journeys/\(journeyId)/pages/upload — \(parts.count) file(s) \(body.count) bytes total")
+        let (respData, response) = try await URLSession.shared.data(for: req)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        print("⬆️ [uploadAndSavePages] response status=\(statusCode) body=\(String(data: respData, encoding: .utf8) ?? "")")
+        guard (200...299).contains(statusCode) else {
+            throw APIError.server(statusCode, String(data: respData, encoding: .utf8) ?? "")
+        }
+        print("⬆️ [uploadAndSavePages] SUCCESS — \(parts.count) page(s) stored")
     }
 
     // MARK: - Trip (contenedor de varios lugares = una publicación)
