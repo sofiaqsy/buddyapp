@@ -720,7 +720,7 @@ struct YoView: View {
         isSavingBio = true
         Task {
             do {
-                try await APIClient.shared.updateUserBio(userId: userId, bio: bioText)
+                try await APIClient.shared.updateUserBio(travelerId: userId, bio: bioText)
                 await MainActor.run {
                     user = user.map { u in var copy = u; copy.bio = bioText; return copy }
                     editingBio = false
@@ -801,8 +801,8 @@ struct YoView: View {
 
         // ── Fase 2: contenido inferior (paralelo) ──────────────────────────────
         print("👤 [YoView] cargando stickers/trips/buddy para id=\(me.id.prefix(8))…")
-        async let stickersTask = try? APIClient.shared.fetchUserStickers(userId: me.id)
-        async let tripsTask    = try? APIClient.shared.fetchUserTrips(userId: me.id)
+        async let stickersTask = try? APIClient.shared.fetchUserStickers(travelerId: me.id)
+        async let tripsTask    = try? APIClient.shared.fetchUserTrips(travelerId: me.id)
         async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
         async let destsTask    = try? APIClient.shared.fetchDestinations()
 
@@ -825,7 +825,7 @@ struct YoView: View {
         print("👤 [YoView] loadMoreTrips — cursor=\(tripsNextCursor ?? "nil")")
         isLoadingMoreTrips = true
         defer { isLoadingMoreTrips = false }
-        guard let page = try? await APIClient.shared.fetchUserTrips(userId: userId, cursor: tripsNextCursor) else { return }
+        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: userId, cursor: tripsNextCursor) else { return }
         journeys        += page.items
         tripsNextCursor  = page.nextCursor
         tripsHasMore     = page.hasMore

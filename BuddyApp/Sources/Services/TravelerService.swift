@@ -231,13 +231,13 @@ enum Session {
         // while the app is in an authenticated state.
     }
     static var token: String? {
-        TravelerService.shared.token ?? AuthService.shared.accessToken
+        TravelerService.shared.token
     }
     static var hasSession: Bool {
-        TravelerService.shared.hasSession || AuthService.shared.isLoggedIn
+        TravelerService.shared.hasSession
     }
     static var isVerified: Bool {
-        TravelerService.shared.isVerified || AuthService.shared.isLoggedIn
+        TravelerService.shared.isVerified
     }
 }
 

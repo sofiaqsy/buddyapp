@@ -137,7 +137,7 @@ struct TripDetailView: View {
                 }
 
                 guard let userId = Session.travelerId else { return }
-                if let userStickers = try? await APIClient.shared.fetchUserStickers(userId: userId) {
+                if let userStickers = try? await APIClient.shared.fetchUserStickers(travelerId: userId) {
                     await routeStore.syncCollectedStickers(userStickers: userStickers)
                 }
             }

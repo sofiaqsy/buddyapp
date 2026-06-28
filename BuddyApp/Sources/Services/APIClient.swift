@@ -15,10 +15,8 @@ final class APIClient {
     private var refreshTask: Task<Bool, Never>?
 
     private var headers: [String: String] {
-        // Priority: Traveler JWT (guest or verified) → legacy Supabase token → anon key
-        let token = TravelerService.shared.token
-            ?? AuthService.shared.accessToken
-            ?? anonKey
+        // Priority: Traveler JWT (guest or verified) → anon key
+        let token = TravelerService.shared.token ?? anonKey
         return [
             "Content-Type":  "application/json",
             "Authorization": "Bearer \(token)"
@@ -208,16 +206,12 @@ final class APIClient {
         knowsHowToGet: Bool = false,
         hasLodging: Bool = false
     ) async throws -> APIJourney {
-        // Backend derives owner from the JWT (traveler_id or legacy user_id).
-        // Send user_id in body only for pure legacy Supabase sessions (no Traveler token).
+        // Backend derives owner from the Traveler JWT — no identity param in body.
         var body: [String: Any] = [
             "destination_id":   destinationId,
             "knows_how_to_get": knowsHowToGet,
             "has_lodging":      hasLodging
         ]
-        if !TravelerService.shared.hasSession, let uid = AuthService.shared.userId {
-            body["user_id"] = uid
-        }
         if let title     { body["title"]      = title }
         if let arrivalAt { body["arrival_at"] = ISO8601DateFormatter().string(from: arrivalAt) }
         return try await request(path: "/journeys", method: "POST", body: body)
@@ -356,7 +350,7 @@ final class APIClient {
                              filename: "avatar.jpg", mime: "image/jpeg", data: imageData)
         body.append("--\(boundary)--\r\n")
 
-        let token = TravelerService.shared.token ?? AuthService.shared.accessToken ?? anonKey
+        let token = TravelerService.shared.token ?? anonKey
         guard let url = URL(string: baseURL + "/users/me/avatar") else { throw APIError.invalidURL }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -462,8 +456,8 @@ final class APIClient {
         return try await request(path: "/buddy/me", method: "PATCH", body: body)
     }
 
-    func fetchUserStickers(userId: String) async throws -> [APIUserSticker] {
-        try await request(path: "/users/\(userId)/stickers")
+    func fetchUserStickers(travelerId: String) async throws -> [APIUserSticker] {
+        try await request(path: "/users/\(travelerId)/stickers")
     }
 
     struct StickerUnlockResponse: Decodable {
@@ -476,8 +470,8 @@ final class APIClient {
         try await request(path: "/stickers/\(stickerId)/unlock", method: "POST")
     }
 
-    func fetchUserJourneys(userId: String) async throws -> [APIJourney] {
-        try await request(path: "/users/\(userId)/journeys")
+    func fetchUserJourneys(travelerId: String) async throws -> [APIJourney] {
+        try await request(path: "/users/\(travelerId)/journeys")
     }
 
     /// Journeys del Traveler actual (guest o verified) — no requiere userId,
@@ -488,16 +482,16 @@ final class APIClient {
 
     /// Publicaciones del perfil AGRUPADAS por viaje (una por trip, con momentos
     /// y lugares agregados). Devuelve una página cursor-based (max 12 por página).
-    func fetchUserTrips(userId: String, cursor: String? = nil) async throws -> FeedPage {
-        var path = "/users/\(userId)/trips"
+    func fetchUserTrips(travelerId: String, cursor: String? = nil) async throws -> FeedPage {
+        var path = "/users/\(travelerId)/trips"
         if let cursor, let encoded = cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
             path += "?cursor=\(encoded)"
         }
         return try await request(path: path)
     }
 
-    func updateUserBio(userId: String, bio: String) async throws {
-        try await requestVoid(path: "/users/\(userId)", method: "PATCH", body: ["bio": bio])
+    func updateUserBio(travelerId: String, bio: String) async throws {
+        try await requestVoid(path: "/users/\(travelerId)", method: "PATCH", body: ["bio": bio])
     }
 
     func deleteAccount() async throws {
