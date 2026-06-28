@@ -1249,20 +1249,22 @@ struct PublishedTripCard: View {
                 .contentShape(Rectangle())
                 .onTapGesture { Haptic.light(); showStory = true }
             } else {
+                let cardWidth = UIScreen.main.bounds.width - Spacing.edge * 2
                 TabView(selection: $page) {
                     ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
                         // scaledToFit → el momento NUNCA se recorta
                         CachedImage(urlString: url) { img in
                             img.resizable().scaledToFit()
                         } placeholder: { Color(white: 0.96) }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(width: cardWidth, height: carouselHeight)
                         .contentShape(Rectangle())
                         .onTapGesture { Haptic.light(); showStory = true }
                         .tag(i)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(height: carouselHeight)
+                .frame(width: cardWidth, height: carouselHeight)
+                .clipped()
 
                 if thumbs.count > 1 {
                     HStack(spacing: 6) {
