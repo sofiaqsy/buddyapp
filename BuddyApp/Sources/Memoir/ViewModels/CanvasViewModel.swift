@@ -52,6 +52,15 @@ class CanvasViewModel: ObservableObject {
         let item = CollageItem(type: .photo(resized), position: randomCenter(in: canvasSize), zIndex: nextZ())
         items.append(item)
         selectedItemId = item.id
+
+        // Primera foto de la página → llena todo el espacio, como "Diseño 1 foto".
+        let photoCount = items.reduce(0) { acc, it in
+            if case .photo = it.type { return acc + 1 }; return acc
+        }
+        if photoCount == 1, canvasSize != .zero {
+            applyLayout(.one, in: canvasSize)
+            selectedItemId = item.id
+        }
     }
 
     // MARK: - Sticker toggle

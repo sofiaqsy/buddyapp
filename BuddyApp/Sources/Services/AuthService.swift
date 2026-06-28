@@ -195,12 +195,21 @@ final class AuthService {
                    let ttok = json["traveler_token"] as? String {
                     let tstatus = json["traveler_status"] as? String ?? "verified"
                     TravelerService.shared.hydrate(travelerId: tid, token: ttok, status: tstatus)
+                } else {
+                    // Server returned no traveler identity — clear any stale traveler token
+                    // so APIClient falls back to the Supabase token and doesn't loop.
+                    print("⚠️ refresh returned no traveler_id — clearing stale traveler token")
+                    UserDefaults.standard.removeObject(forKey: "buddy.traveler.token")
+                    UserDefaults.standard.removeObject(forKey: "buddy.traveler.id")
                 }
                 print("🔄 session refreshed silently")
                 return true
             } else {
-                // Server rejected refresh token (truly invalid) → go to login
-                print("❌ refresh failed with status \(status) — redirecting to login")
+                // Server rejected refresh token (truly invalid) → clear stale tokens
+                // so APIClient falls back to anonKey instead of looping with a dead token.
+                print("❌ refresh failed with status \(status) — clearing stale tokens")
+                UserDefaults.standard.removeObject(forKey: "buddy.accessToken")
+                UserDefaults.standard.removeObject(forKey: "buddy.refreshToken")
                 await MainActor.run {
                     NotificationCenter.default.post(name: .sessionExpired, object: nil)
                 }

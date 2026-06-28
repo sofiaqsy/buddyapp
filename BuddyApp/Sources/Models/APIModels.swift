@@ -308,6 +308,15 @@ struct APIBuddyOffer: Decodable, Identifiable {
     }
 }
 
+// MARK: Matching Status (polling endpoint)
+
+struct APIMatchingStatus: Decodable {
+    let status: String      // "searching" | "matched" | "failed" | "cancelled" | "none"
+    let position: Int?      // candidato actual (1-based), solo cuando searching
+    let total: Int?         // total de candidatos, solo cuando searching
+    let buddy: APIUserRef?  // solo cuando status == "matched"
+}
+
 // MARK: Message
 
 struct APIMessage: Decodable, Identifiable {

@@ -56,6 +56,7 @@ struct RegisterTripView: View {
                                 .font(.system(size: 15))
                             TextField("Buscar destino…", text: $searchText)
                                 .font(BT.callout)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .onChange(of: searchText) { _, _ in
                                     // Si el texto ya no coincide con el destino elegido, la selección expira
                                     if let sel = selectedDest, sel.name != searchText {
@@ -94,9 +95,56 @@ struct RegisterTripView: View {
                             .padding(.top, Spacing.lg)
                         }
 
-                        // Chips — 5 populares o resultados filtrados
-                        if !visibleChips.isEmpty {
-                            Text(searchText.isEmpty ? "POPULARES" : "RESULTADOS")
+                        if !searchText.isEmpty && selectedDest == nil {
+                            // Autocompletado: lista vertical de coincidencias bajo el campo
+                            if visibleChips.isEmpty {
+                                HStack(spacing: Spacing.sm) {
+                                    Image(systemName: "mappin.slash")
+                                        .foregroundStyle(Color.inkMuted)
+                                        .font(.system(size: 15))
+                                    Text("Sin resultados para “\(searchText)”")
+                                        .font(BT.callout)
+                                        .foregroundStyle(Color.inkMuted)
+                                }
+                                .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.lg)
+                            } else {
+                                VStack(spacing: 0) {
+                                    ForEach(Array(visibleChips.prefix(6).enumerated()), id: \.element.id) { idx, dest in
+                                        if idx > 0 {
+                                            Divider().padding(.horizontal, Spacing.md)
+                                        }
+                                        Button {
+                                            Haptic.select()
+                                            withAnimation(.spring(response: 0.25)) {
+                                                selectedDest = dest
+                                                searchText = dest.name
+                                            }
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text(dest.name)
+                                                    .font(BT.callout)
+                                                    .foregroundStyle(Color.ink)
+                                                Text(dest.city)
+                                                    .font(BT.caption1)
+                                                    .foregroundStyle(Color.inkMuted)
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, Spacing.md)
+                                            .padding(.vertical, 12)
+                                            .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.pressable)
+                                    }
+                                }
+                                .background(Color.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+                                .padding(.horizontal, Spacing.edge)
+                            }
+                        } else if searchText.isEmpty, !visibleChips.isEmpty {
+                            // Sin texto → chips de destinos populares
+                            Text("POPULARES")
                                 .font(BT.eyebrow)
                                 .tracking(1.5)
                                 .foregroundStyle(Color.inkMuted)
@@ -241,13 +289,11 @@ struct RegisterTripView: View {
     // MARK: – Create trip via buddy-core
 
     private func createTrip() {
-        guard let dest = selectedDest,
-              let userId = AuthService.shared.userId else { return }
+        guard let dest = selectedDest else { return }
         isCreating = true
         Task {
             do {
                 let journey = try await APIClient.shared.createJourney(
-                    userId: userId,
                     destinationId: dest.id,
                     title: nil,
                     arrivalAt: quickOption == .here ? nil : selectedDate,

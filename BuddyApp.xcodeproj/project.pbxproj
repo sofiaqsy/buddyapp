@@ -13,6 +13,8 @@
 		16806C841F19F77869CC6BD0 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 865375DE2EB61A0476DD78D6 /* ContentView.swift */; };
 		1D9F3BF7BA4FA64A5EC0B58F /* UIImage+Resize.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDB9AC3F084217DB4CFF236E /* UIImage+Resize.swift */; };
 		20E6BC763C6F7E5F7F449B50 /* Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F652273A2520941B54F8768 /* Extensions.swift */; };
+		AA11223344556677AABBCCDD /* NotificationType.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABBCC00 /* NotificationType.swift */; };
+		BB11223344556677AABBCCDD /* NotificationRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB11223344556677AABBCC00 /* NotificationRouter.swift */; };
 		24A2DF8977CA902672B95DAE /* Memory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 367FAC5C6A5FB47851AFBF45 /* Memory.swift */; };
 		317FD185CD79925326CC8C51 /* RouteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14D08D2068CA373725398FF /* RouteStore.swift */; };
 		3F17D6E8DAE570071F615D95 /* SubjectLiftService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97E7CB7E2EAEDA1A629DB06 /* SubjectLiftService.swift */; };
@@ -21,6 +23,7 @@
 		6D8D399EF5406F2E1CE52948 /* CanvasViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70667ADBB4611F842AC0CB15 /* CanvasViewModel.swift */; };
 		7017D95996AAD51175F585C3 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0EB252C314CCE2E4E806F6C /* ImageCache.swift */; };
 		73A61490AADEBA96068CB68A /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A9C67F4EF4667A52E7D1795 /* AuthService.swift */; };
+		C3D4E5F6A7B80819304A5B6C /* TravelerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6A7B8C90819304A5B6C /* TravelerService.swift */; };
 		79964DB7B77D18DE34C68907 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D98971ED94DF90F50A76D2 /* AppDelegate.swift */; };
 		7D5AC180719A4AE8D8D60408 /* CGFloat+Clamped.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDD3DE0B4B76E6A6B2351A47 /* CGFloat+Clamped.swift */; };
 		7D894E3A9391A35A28D5AFF6 /* StickerUnlockSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29B086DF5F80D1E7AB8CD488 /* StickerUnlockSheet.swift */; };
@@ -42,6 +45,8 @@
 		DCB9B93DBB8A05CC03033116 /* TripBookViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B9EA708A5B1EE7250130A5 /* TripBookViewModel.swift */; };
 		E15F3877DF4D6D393128EC2B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 670E157765E203EABD5FBA3A /* Assets.xcassets */; };
 		E21F732FC23D560F5698B3AD /* ReAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD0899C2A97D5A54ABD26FD /* ReAuthView.swift */; };
+		FC11BB22CC33DD44EE55FF66 /* PhoneCountryField.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC11BB22CC33DD44EE55FF67 /* PhoneCountryField.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* IdentitySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5C /* IdentitySheet.swift */; };
 		E665E7BFB5526A156F150269 /* TripDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01EFCF96967D60B87824D7E0 /* TripDetailView.swift */; };
 		E80965B430145F158456F8E5 /* BuddyAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E52DF08CFC799C87146A0FA3 /* BuddyAppApp.swift */; };
 		E8B4382315209A7B4ABEEEBA /* PhotoEdgeShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3AF782CDA984B0767C1E55 /* PhotoEdgeShape.swift */; };
@@ -68,6 +73,7 @@
 		29B086DF5F80D1E7AB8CD488 /* StickerUnlockSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickerUnlockSheet.swift; sourceTree = "<group>"; };
 		2A3AF782CDA984B0767C1E55 /* PhotoEdgeShape.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhotoEdgeShape.swift; sourceTree = "<group>"; };
 		2A9C67F4EF4667A52E7D1795 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		D4E5F6A7B8C90819304A5B6C /* TravelerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelerService.swift; sourceTree = "<group>"; };
 		2F86A484605FC5E66B0582CA /* Route.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Route.swift; sourceTree = "<group>"; };
 		367FAC5C6A5FB47851AFBF45 /* Memory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Memory.swift; sourceTree = "<group>"; };
 		38F4D2A463C90BA8FB62B976 /* CanvasView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CanvasView.swift; sourceTree = "<group>"; };
@@ -89,6 +95,8 @@
 		865375DE2EB61A0476DD78D6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		911DD4B95D8E0D47599B312C /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		98D98971ED94DF90F50A76D2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		AA11223344556677AABBCC00 /* NotificationType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationType.swift; sourceTree = "<group>"; };
+		BB11223344556677AABBCC00 /* NotificationRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationRouter.swift; sourceTree = "<group>"; };
 		A14D08D2068CA373725398FF /* RouteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteStore.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF67 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		AD6AE5A52F5BCEE6709FB9A8 /* CameraPickerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraPickerView.swift; sourceTree = "<group>"; };
@@ -103,6 +111,8 @@
 		E52DF08CFC799C87146A0FA3 /* BuddyAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuddyAppApp.swift; sourceTree = "<group>"; };
 		EAFBE299D69767E57D35F51A /* UIImage+Trim.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "UIImage+Trim.swift"; sourceTree = "<group>"; };
 		EFD0899C2A97D5A54ABD26FD /* ReAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReAuthView.swift; sourceTree = "<group>"; };
+		FC11BB22CC33DD44EE55FF67 /* PhoneCountryField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneCountryField.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5A60718293A4B5C /* IdentitySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentitySheet.swift; sourceTree = "<group>"; };
 		F0EB252C314CCE2E4E806F6C /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		F2D003577BED1B1E0C70DF53 /* ContactarBuddyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactarBuddyView.swift; sourceTree = "<group>"; };
 		F628F0672FDB6B0000912F14 /* BuddyApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = BuddyApp.entitlements; path = BuddyApp/BuddyApp.entitlements; sourceTree = "<group>"; };
@@ -131,6 +141,7 @@
 			children = (
 				DA30CFE9A8B0E789377C3BA7 /* APIClient.swift */,
 				2A9C67F4EF4667A52E7D1795 /* AuthService.swift */,
+				D4E5F6A7B8C90819304A5B6C /* TravelerService.swift */,
 				F0EB252C314CCE2E4E806F6C /* ImageCache.swift */,
 				911DD4B95D8E0D47599B312C /* LocationService.swift */,
 				DB5C072C41D7E0167F465CD6 /* PushService.swift */,
@@ -200,7 +211,9 @@
 				C40DBD43402EEE4C2BD84DFF /* DescubrirView.swift */,
 				1E0114A77091C2B311FCEC98 /* InicioView.swift */,
 				84154B0F926E18D1C654A29F /* OnboardingView.swift */,
+				B1C2D3E4F5A60718293A4B5C /* IdentitySheet.swift */,
 				EFD0899C2A97D5A54ABD26FD /* ReAuthView.swift */,
+				FC11BB22CC33DD44EE55FF67 /* PhoneCountryField.swift */,
 				39F9C2A360C161EB25C11452 /* RegisterTripView.swift */,
 				29B086DF5F80D1E7AB8CD488 /* StickerUnlockSheet.swift */,
 				AA11BB22CC33DD44EE55FF67 /* QRScannerView.swift */,
@@ -233,6 +246,8 @@
 				E52DF08CFC799C87146A0FA3 /* BuddyAppApp.swift */,
 				0FAB1FFBA5D8CD53C619B5E7 /* DesignSystem.swift */,
 				0F652273A2520941B54F8768 /* Extensions.swift */,
+				AA11223344556677AABBCC00 /* NotificationType.swift */,
+				BB11223344556677AABBCC00 /* NotificationRouter.swift */,
 				0BEC0E39ABFDC318936135EB /* Info.plist */,
 			);
 			path = App;
@@ -341,7 +356,10 @@
 				C27AB2C097828BE5792CB200 /* APIClient.swift in Sources */,
 				FA1D59F90452DED91CDBA41C /* APIModels.swift in Sources */,
 				79964DB7B77D18DE34C68907 /* AppDelegate.swift in Sources */,
+				AA11223344556677AABBCCDD /* NotificationType.swift in Sources */,
+				BB11223344556677AABBCCDD /* NotificationRouter.swift in Sources */,
 				73A61490AADEBA96068CB68A /* AuthService.swift in Sources */,
+				C3D4E5F6A7B80819304A5B6C /* TravelerService.swift in Sources */,
 				E80965B430145F158456F8E5 /* BuddyAppApp.swift in Sources */,
 				F3EEECD5011BA7E4A28BE3FA /* ConexionesView.swift in Sources */,
 				EB885BCD790BE8F8588C7161 /* ContactarBuddyView.swift in Sources */,
@@ -356,9 +374,11 @@
 				633BE3C2902AC0BAE8E53E9F /* LocationService.swift in Sources */,
 				24A2DF8977CA902672B95DAE /* Memory.swift in Sources */,
 				F54F0D6BE451B311AD40C151 /* OnboardingView.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* IdentitySheet.swift in Sources */,
 				FC6B09C37551B5F75A60983D /* Place.swift in Sources */,
 				ECFDF38E9DE6F2FF708A8E25 /* PushService.swift in Sources */,
 				E21F732FC23D560F5698B3AD /* ReAuthView.swift in Sources */,
+				FC11BB22CC33DD44EE55FF66 /* PhoneCountryField.swift in Sources */,
 				AD0551703655E368513C797D /* RegisterTripView.swift in Sources */,
 				88410F8131ADCC4534D1EA76 /* Route.swift in Sources */,
 				317FD185CD79925326CC8C51 /* RouteStore.swift in Sources */,

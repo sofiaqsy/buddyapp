@@ -6,11 +6,16 @@ final class PushService {
     private init() {}
 
     func registerToken(_ token: String) async {
-        guard AuthService.shared.isLoggedIn else { return }
+        guard Session.hasSession else { return }
+        #if DEBUG
+        let environment = "sandbox"
+        #else
+        let environment = "production"
+        #endif
         do {
             _ = try await APIClient.shared.post(
                 path: "/notifications/token",
-                body: ["token": token, "platform": "ios"]
+                body: ["token": token, "platform": "ios", "environment": environment]
             )
             print("[PushService] Token registered ✓")
         } catch {

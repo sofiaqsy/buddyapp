@@ -155,10 +155,11 @@ struct PhoneStep: View {
     var onContinue: () -> Void
 
     @FocusState private var focused: Bool
+    @State private var country   = Country.defaultCountry
     @State private var isSending = false
     @State private var errorMsg: String? = nil
 
-    private var canContinue: Bool { phone.filter(\.isNumber).count >= 9 }
+    private var canContinue: Bool { phone.filter(\.isNumber).count >= 5 }
 
     var body: some View {
         OnboardingShell(
@@ -177,27 +178,7 @@ struct PhoneStep: View {
                     .padding(.top, Spacing.sm)
                     .padding(.bottom, Spacing.xl)
 
-                // Phone input — Perú 🇵🇪 +51 (único país por ahora)
-                HStack(spacing: Spacing.sm) {
-                    Text("🇵🇪 +51")
-                        .font(BT.callout)
-                        .foregroundStyle(Color.inkMuted)
-                    Rectangle()
-                        .fill(Color.border)
-                        .frame(width: 1, height: 22)
-                    TextField("999 312 458", text: $phone)
-                        .font(.system(size: 20, weight: .regular))
-                        .keyboardType(.phonePad)
-                        .textContentType(.telephoneNumber)
-                        .focused($focused)
-                }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 14)
-                .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(
-                    focused ? Color.sand : Color.border, lineWidth: focused ? 1.5 : 1
-                ))
+                PhoneCountryField(phone: $phone, country: $country, focused: $focused)
 
                 if let err = errorMsg {
                     Text(err)
@@ -229,17 +210,15 @@ struct PhoneStep: View {
         guard canContinue else { return }
         Haptic.medium()
         isSending = true
-        errorMsg = nil
-
-        let digits = phone.filter(\.isNumber)
-        let fullPhone = "+51\(digits)"
+        errorMsg  = nil
+        let fullPhone = country.e164(rawInput: phone)
 
         Task {
             do {
                 try await AuthService.shared.sendOTP(phone: fullPhone)
                 await MainActor.run {
                     isSending = false
-                    phone = fullPhone   // ← guarda el número completo con +51
+                    phone = fullPhone
                     onContinue()
                 }
             } catch {
@@ -270,13 +249,20 @@ struct CodeStep: View {
     private var canVerify: Bool { code.count == 6 }
 
     private var displayPhone: String {
-        // Format +51XXXXXXXXX → +51 XXX XXX XXX
-        let d = phone.replacingOccurrences(of: "+51", with: "").filter(\.isNumber)
-        guard d.count == 9 else { return phone }
-        let a = d.prefix(3)
-        let b = d.dropFirst(3).prefix(3)
-        let c = d.dropFirst(6)
-        return "+51 \(a) \(b) \(c)"
+        // Mostrar el número E.164 con espacios cada 3 dígitos para legibilidad
+        guard phone.hasPrefix("+") else { return phone }
+        let parts = phone.dropFirst() // quitar el +
+        let digits = parts.filter(\.isNumber)
+        guard digits.count >= 6 else { return phone }
+        // Separar código de país (hasta 3 dígitos) del número local
+        let countryDigits = String(digits.prefix(min(3, digits.count - 6)))
+        let local = String(digits.dropFirst(countryDigits.count))
+        let chunks = stride(from: 0, to: local.count, by: 3).map {
+            let start = local.index(local.startIndex, offsetBy: $0)
+            let end   = local.index(start, offsetBy: min(3, local.count - $0))
+            return String(local[start..<end])
+        }
+        return "+\(countryDigits) \(chunks.joined(separator: " "))"
     }
 
     var body: some View {
