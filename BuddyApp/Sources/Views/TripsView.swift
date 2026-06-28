@@ -407,7 +407,7 @@ struct TripsView: View {
 
             Button {
                 Haptic.medium()
-                showIdentitySheet = true
+                navPath.append("register")
             } label: {
                 Label("Empezar", systemImage: "plus")
                     .font(BT.footnoteBold)
@@ -422,10 +422,6 @@ struct TripsView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
-        .sheet(isPresented: $showIdentitySheet) {
-            IdentitySheet { Task { await loadJourneys() } }
-                .environmentObject(authState)
-        }
     }
 
     @ViewBuilder
