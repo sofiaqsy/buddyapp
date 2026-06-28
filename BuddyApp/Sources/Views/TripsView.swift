@@ -340,13 +340,16 @@ struct TripsView: View {
             await MainActor.run {
                 isPublishing = false
                 Haptic.success()
-                // Optimista: el viaje publicado sale del tab al instante.
                 let removed = Set(journeys.filter { $0.tripId == tripId }.map { $0.id })
                 withAnimation {
                     journeys.removeAll { removed.contains($0.id) }
                     selectedTripId = nil
                 }
                 NotificationCenter.default.post(name: .journeyPublished, object: tripId)
+                // Navegar a Inicio y recargar el feed para mostrar la publicación
+                NotificationCenter.default.post(name: .switchToTab,
+                                                object: nil,
+                                                userInfo: ["tab": AppTab.inicio.rawValue])
             }
         }
     }
@@ -905,8 +908,11 @@ struct TripFeedCard: View {
                 tripStatus = "completed"
                 isPublishing = false
                 Haptic.success()
-                // El tab vuelve de inmediato al estado "crea tu próximo trip"
                 NotificationCenter.default.post(name: .journeyPublished, object: jId)
+                // Navegar a Inicio y recargar el feed para mostrar la publicación
+                NotificationCenter.default.post(name: .switchToTab,
+                                                object: nil,
+                                                userInfo: ["tab": AppTab.inicio.rawValue])
             }
         }
     }
