@@ -285,31 +285,54 @@ final class APIClient {
     /// Sube las portadas de un journey y guarda sus URLs (sin tocar el status).
     /// Reutilizable para publicar journey por journey dentro de un trip.
     private func uploadAndSavePages(journeyId: String, pages: [CollagePage]) async throws {
+        print("⬆️ [uploadAndSavePages] journeyId=\(journeyId) pages.count=\(pages.count)")
         let results: [(Int, String)] = await withTaskGroup(of: (Int, String)?.self) { group in
             for (index, page) in pages.enumerated() {
                 group.addTask {
-                    guard let filename = page.thumbnailFileName,
-                          let image = MemoirPersistence.shared.loadThumbnail(filename, journeyId: journeyId),
-                          let data = image.jpegData(compressionQuality: 0.82) else { return nil }
+                    print("⬆️ [uploadAndSavePages] page[\(index)] id=\(page.id) thumbFile=\(page.thumbnailFileName ?? "NIL")")
+                    guard let filename = page.thumbnailFileName else {
+                        print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — thumbnailFileName is nil")
+                        return nil
+                    }
+                    guard let image = MemoirPersistence.shared.loadThumbnail(filename, journeyId: journeyId) else {
+                        print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — loadThumbnail returned nil for file=\(filename)")
+                        return nil
+                    }
+                    guard let data = image.jpegData(compressionQuality: 0.82) else {
+                        print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — jpegData failed (image size=\(image.size))")
+                        return nil
+                    }
+                    print("⬆️ [uploadAndSavePages] page[\(index)] uploading \(data.count) bytes → memoir-photos/memoirs/\(journeyId)/page_\(index).jpg")
                     let path = "memoirs/\(journeyId)/page_\(index).jpg"
-                    guard let url = try? await self.uploadToStorage(bucket: "memoir-photos", path: path, data: data) else { return nil }
-                    return (index, url)
+                    do {
+                        guard let url = try? await self.uploadToStorage(bucket: "memoir-photos", path: path, data: data) else {
+                            print("⬆️ [uploadAndSavePages] page[\(index)] UPLOAD FAILED — uploadToStorage returned nil")
+                            return nil
+                        }
+                        print("⬆️ [uploadAndSavePages] page[\(index)] UPLOAD OK → \(url)")
+                        return (index, url)
+                    }
                 }
             }
             var collected: [(Int, String)] = []
             for await r in group { if let r { collected.append(r) } }
             return collected
         }
+        print("⬆️ [uploadAndSavePages] uploaded \(results.count)/\(pages.count) page(s)")
         let pagePayload: [[String: Any]] = results
             .sorted { $0.0 < $1.0 }
             .map { ["page_index": $0.0, "thumbnail_url": $0.1] }
 
         if !pagePayload.isEmpty {
+            print("⬆️ [uploadAndSavePages] POSTing \(pagePayload.count) page(s) to /journeys/\(journeyId)/pages")
             try await requestVoid(
                 path: "/journeys/\(journeyId)/pages",
                 method: "POST",
                 body: ["pages": pagePayload] as [String: Any]
             )
+            print("⬆️ [uploadAndSavePages] POST /pages SUCCESS")
+        } else {
+            print("⬆️ [uploadAndSavePages] pagePayload is EMPTY — POST /pages skipped entirely")
         }
     }
 

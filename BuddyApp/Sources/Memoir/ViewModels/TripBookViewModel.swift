@@ -34,11 +34,17 @@ final class TripBookViewModel: ObservableObject {
     }
 
     func exitEdit(canvasSize: CGSize = .zero) {
+        let jId = journeyId
+        print("📓 [exitEdit] journeyId=\(jId) pageCount=\(pages.count) canvasSize=\(canvasSize)")
         if canvasSize != .zero { editingVM.canvasSize = canvasSize }
+        print("📓 [exitEdit] vm.canvasSize after update=\(editingVM.canvasSize) items=\(editingVM.items.count)")
         vmCache[pages[currentPageIndex].id] = editingVM
         flushCacheToDisk()
         vmCache.removeAll()
         isEditing = false
+        for (i, p) in pages.enumerated() {
+            print("📓 [exitEdit] page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumbFile=\(p.thumbnailFileName ?? "nil")")
+        }
         saveAsync()
     }
 
@@ -122,11 +128,19 @@ final class TripBookViewModel: ObservableObject {
     // MARK: - Private helpers
 
     private func flushCacheToDisk() {
+        print("📓 [flushCacheToDisk] journeyId=\(journeyId) vmCache.count=\(vmCache.count)")
         for (pageId, vm) in vmCache {
-            guard let idx = pages.firstIndex(where: { $0.id == pageId }) else { continue }
+            guard let idx = pages.firstIndex(where: { $0.id == pageId }) else {
+                print("📓 [flushCacheToDisk] WARN pageId=\(pageId) not found in pages — skipped")
+                continue
+            }
+            print("📓 [flushCacheToDisk] page[\(idx)] id=\(pageId) vm.items=\(vm.items.count) vm.canvasSize=\(vm.canvasSize) vm.backgroundImage=\(vm.backgroundImage != nil ? "YES" : "nil")")
             var snap = persistence.snapshot(from: vm, existing: pages[idx], journeyId: journeyId)
-            if let thumb = persistence.generateThumbnail(
-                vm: vm, canvasSize: vm.canvasSize, pageId: pageId, journeyId: journeyId) {
+            print("📓 [flushCacheToDisk] page[\(idx)] snapshot.itemSnapshots=\(snap.itemSnapshots.count)")
+            let thumb = persistence.generateThumbnail(
+                vm: vm, canvasSize: vm.canvasSize, pageId: pageId, journeyId: journeyId)
+            print("📓 [flushCacheToDisk] page[\(idx)] generateThumbnail → \(thumb ?? "NIL — canvasSize was \(vm.canvasSize)")")
+            if let thumb {
                 snap.thumbnailFileName = thumb
             }
             snap.editVersion = pages[idx].editVersion + 1

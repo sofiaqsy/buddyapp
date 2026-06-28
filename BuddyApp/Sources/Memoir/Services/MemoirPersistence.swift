@@ -65,10 +65,19 @@ final class MemoirPersistence {
     }
 
     func load(journeyId: String) -> [CollagePage] {
-        guard let data = try? Data(contentsOf: bookFile(for: journeyId)) else { return [] }
+        let url = bookFile(for: journeyId)
+        guard let data = try? Data(contentsOf: url) else {
+            print("📖 [MemoirPersistence.load] journeyId=\(journeyId) — book.json NOT FOUND at \(url.path)")
+            return []
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([CollagePage].self, from: data)) ?? []
+        let pages = (try? decoder.decode([CollagePage].self, from: data)) ?? []
+        print("📖 [MemoirPersistence.load] journeyId=\(journeyId) — loaded \(pages.count) page(s)")
+        for (i, p) in pages.enumerated() {
+            print("📖 [MemoirPersistence.load]   page[\(i)] id=\(p.id) itemSnapshots=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumbFile=\(p.thumbnailFileName ?? "nil")")
+        }
+        return pages
     }
 
     // MARK: - CanvasViewModel ↔ CollagePage

@@ -321,8 +321,16 @@ struct TripsView: View {
             return
         }
         let places = visibleTrips.map { j -> (String, [CollagePage]) in
-            let pages = MemoirPersistence.shared.load(journeyId: j.id)
-                .filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+            let allPages = MemoirPersistence.shared.load(journeyId: j.id)
+            print("📤 [publishActiveTrip] journey=\(j.id.prefix(8)) BEFORE filter: \(allPages.count) page(s)")
+            for (i, p) in allPages.enumerated() {
+                let kept = !p.itemSnapshots.isEmpty || p.backgroundImageFile != nil
+                let reason = p.itemSnapshots.isEmpty ? "itemSnapshots=0" : ""
+                let bgReason = p.backgroundImageFile == nil ? (reason.isEmpty ? "bgFile=nil" : "+bgFile=nil") : ""
+                print("📤 [publishActiveTrip]   page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumb=\(p.thumbnailFileName ?? "nil") → \(kept ? "KEPT" : "DISCARDED(\(reason)\(bgReason))")")
+            }
+            let pages = allPages.filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+            print("📤 [publishActiveTrip] journey=\(j.id.prefix(8)) AFTER filter: \(pages.count) page(s)")
             return (j.id, pages)
         }
         print("📤 [publishActiveTrip] tripId=\(tripId) lugares=\(places.map { "\($0.0.prefix(6)):\($0.1.count)pgs" })")
@@ -876,11 +884,25 @@ struct TripFeedCard: View {
     }
 
     private func publishTrip() {
-        guard hasPublishableContent else { showBlankPublishAlert = true; return }
-        // Solo se publican las portadas con contenido real; las vacías se descartan
-        let currentPages = pages.filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
-        isPublishing = true
         let jId = journey.id
+        print("📤 [publishTrip] journeyId=\(jId) pages.count=\(pages.count)")
+        guard hasPublishableContent else {
+            print("📤 [publishTrip] BLOQUEADO: hasPublishableContent=false — no hay páginas con items ni bgFile")
+            showBlankPublishAlert = true
+            return
+        }
+        // Solo se publican las portadas con contenido real; las vacías se descartan
+        let currentPages: [CollagePage]
+        do {
+            print("📤 [publishTrip] BEFORE filter: \(pages.count) page(s)")
+            for (i, p) in pages.enumerated() {
+                let kept = !p.itemSnapshots.isEmpty || p.backgroundImageFile != nil
+                print("📤 [publishTrip]   page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumb=\(p.thumbnailFileName ?? "nil") → \(kept ? "KEPT" : "DISCARDED")")
+            }
+            currentPages = pages.filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+            print("📤 [publishTrip] AFTER filter: \(currentPages.count) page(s)")
+        }
+        isPublishing = true
         Task {
             try? await APIClient.shared.publishJourney(journeyId: jId, pages: currentPages)
             await MainActor.run {
