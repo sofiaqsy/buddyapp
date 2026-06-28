@@ -389,8 +389,6 @@ struct CategoryPickerView: View {
     let onRequest: (String, String?) async -> Void
 
     @State private var selected: BuddyCategory? = nil
-    @State private var customText = ""
-    @FocusState private var fieldFocused: Bool
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -415,9 +413,7 @@ struct CategoryPickerView: View {
         "emergency":     "Emergencias y consejos útiles",
     ]
 
-    private var canRequest: Bool {
-        selected != nil || !customText.trimmingCharacters(in: .whitespaces).isEmpty
-    }
+    private var canRequest: Bool { selected != nil }
 
     /// Nunca un "0" desangelado — la promesa es que siempre habrá alguien.
     private var availabilityText: String {
@@ -495,32 +491,12 @@ struct CategoryPickerView: View {
 
             Spacer().frame(height: Spacing.md)
 
-            // Free text input
-            HStack(spacing: 10) {
-                Image(systemName: "bubble.left")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.inkFaint)
-                TextField("Cuéntanos qué necesitas...", text: $customText, axis: .vertical)
-                    .font(BT.callout).lineLimit(3).focused($fieldFocused)
-                    .foregroundStyle(Color.ink)
-                    .onChange(of: customText) { _, v in if !v.isEmpty { selected = nil } }
-            }
-            .padding(.horizontal, 16).padding(.vertical, 14)
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(RoundedRectangle(cornerRadius: Radius.md)
-                .stroke(fieldFocused ? Color.brand : Color.border, lineWidth: 1))
-            .padding(.horizontal, Spacing.edge)
-
-            Spacer().frame(height: Spacing.md)
-
             // Primary CTA — dark brown pill with icon + arrow
             Button {
                 guard canRequest else { return }
                 Haptic.medium()
-                let cat  = selected?.apiKey ?? "general"
-                let desc = customText.trimmingCharacters(in: .whitespaces)
-                Task { await onRequest(cat, desc.isEmpty ? nil : desc) }
+                let cat = selected?.apiKey ?? "general"
+                Task { await onRequest(cat, nil) }
             } label: {
                 HStack(spacing: 14) {
                     ZStack {
