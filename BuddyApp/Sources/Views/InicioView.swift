@@ -1218,11 +1218,14 @@ struct PublishedTripCard: View {
         guard let d = journey.durationDays else { return nil }
         return "en \(d) \(d == 1 ? "día" : "días")"
     }
-    /// Alto = ancho de la tarjeta a la PROPORCIÓN real de un momento → se ve completo
-    private var carouselHeight: CGFloat {
-        let w = UIScreen.main.bounds.width - Spacing.edge * 2
-        return w * CanvasViewModel.pageSize.height / max(1, CanvasViewModel.pageSize.width)
-    }
+
+    // Aspect ratio of the memoir canvas (height ÷ width).
+    // Derived once from CanvasViewModel.pageSize — a process-level constant that
+    // represents the memoir page format, not a runtime window dimension.
+    // Using the ratio (not the absolute values) means the carousel height is always
+    // derived from the actual container width at layout time via aspectRatio(_:).
+    private let memoirRatio: CGFloat =
+        CanvasViewModel.pageSize.height / max(1, CanvasViewModel.pageSize.width)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1236,52 +1239,86 @@ struct PublishedTripCard: View {
         .sheet(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
     }
 
+    // Height is derived from the actual container width via aspectRatio — zero
+    // dependency on UIScreen.main.bounds. GeometryReader in the overlay reads the
+    // already-resolved frame so content receives exact pixel-perfect dimensions.
     private var carousel: some View {
-        ZStack(alignment: .bottom) {
-            if thumbs.isEmpty {
-                CachedImage(urlString: journey.destination?.coverUrl) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    LinearGradient(colors: [Color.tealDeep, Color.teal],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                }
-                .frame(maxWidth: .infinity).frame(height: carouselHeight).clipped()
-                .contentShape(Rectangle())
-                .onTapGesture { Haptic.light(); showStory = true }
-            } else {
-                let cardWidth = UIScreen.main.bounds.width - Spacing.edge * 2
-                TabView(selection: $page) {
-                    ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
-                        // scaledToFit → el momento NUNCA se recorta
-                        CachedImage(urlString: url) { img in
-                            img.resizable().scaledToFit()
-                        } placeholder: { Color(white: 0.96) }
-                        .frame(width: cardWidth, height: carouselHeight)
-                        .contentShape(Rectangle())
-                        .onTapGesture { Haptic.light(); showStory = true }
-                        .tag(i)
+        Color.clear
+            .aspectRatio(1 / memoirRatio, contentMode: .fit)
+            .overlay {
+                GeometryReader { geo in
+                    ZStack(alignment: .bottom) {
+                        carouselMedia(width: geo.size.width, height: geo.size.height)
+                        if thumbs.count > 1 { pageIndicator }
                     }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(width: cardWidth, height: carouselHeight)
-                .clipped()
-
-                if thumbs.count > 1 {
-                    HStack(spacing: 6) {
-                        ForEach(0..<thumbs.count, id: \.self) { i in
-                            Circle()
-                                .fill(i == page ? Color.white : Color.white.opacity(0.5))
-                                .frame(width: 6, height: 6)
-                        }
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: page)
-                    .padding(.vertical, 6).padding(.horizontal, 10)
-                    .background(Capsule().fill(.black.opacity(0.28)))
-                    .padding(.bottom, 10)
+                    // Pin ZStack to the resolved frame so it cannot report a larger
+                    // layout size back up the tree (guards against any future child
+                    // view that might over-expand).
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
                 }
             }
+            .background(Color(white: 0.96))
+            .clipped()
+    }
+
+    @ViewBuilder
+    private func carouselMedia(width w: CGFloat, height h: CGFloat) -> some View {
+        if thumbs.isEmpty {
+            // No memoir pages: show destination cover with scaledToFill.
+            CachedImage(urlString: journey.destination?.coverUrl) { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                LinearGradient(colors: [Color.tealDeep, Color.teal],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+            .frame(width: w, height: h)
+            .clipped()
+            .contentShape(Rectangle())
+            .onTapGesture { Haptic.light(); showStory = true }
+
+        } else if thumbs.count == 1 {
+            // Single memoir page: plain CachedImage — no TabView, no UIPageViewController,
+            // no horizontal UIScrollView in the hierarchy → eliminates the overflow vector.
+            CachedImage(urlString: thumbs[0]) { img in
+                img.resizable().scaledToFit()
+            } placeholder: { Color(white: 0.96) }
+            .frame(width: w, height: h)
+            .contentShape(Rectangle())
+            .onTapGesture { Haptic.light(); showStory = true }
+
+        } else {
+            // Multiple memoir pages: TabView with fully pinned width × height so the
+            // UIPageViewController never reports an ambiguous contentSize to the ancestor
+            // UIScrollView (which is the root cause of the horizontal layout corruption).
+            TabView(selection: $page) {
+                ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
+                    CachedImage(urlString: url) { img in
+                        img.resizable().scaledToFit()
+                    } placeholder: { Color(white: 0.96) }
+                    .frame(width: w, height: h)
+                    .contentShape(Rectangle())
+                    .onTapGesture { Haptic.light(); showStory = true }
+                    .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(width: w, height: h)
         }
-        .background(Color(white: 0.96))
+    }
+
+    private var pageIndicator: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<thumbs.count, id: \.self) { i in
+                Circle()
+                    .fill(i == page ? Color.white : Color.white.opacity(0.5))
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: page)
+        .padding(.vertical, 6).padding(.horizontal, 10)
+        .background(Capsule().fill(.black.opacity(0.28)))
+        .padding(.bottom, 10)
     }
 
     // Pie minimalista: solo viajero + duración (sin destino ni "Ver álbum")
