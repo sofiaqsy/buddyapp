@@ -21,7 +21,7 @@ struct BuddyProfileView: View {
     @State private var savingZones        = false
     @State private var savingSpecs        = false
     @State private var showZonePicker     = false
-    @State private var placeGuide: APIPlaceGuide? = nil
+    @State private var placeGuides: [String: APIPlaceGuide] = [:]
 
     init(profile: APIBuddyMeProfile, destinations: [APIDestination], onUpdated: @escaping (APIBuddyMe) -> Void) {
         self.profile      = profile
@@ -98,7 +98,7 @@ struct BuddyProfileView: View {
         .navigationTitle("Tu perfil de Buddy")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { resolveZoneNames() }
-        .task(id: zones.first?.id) { await loadGuide() }
+        .task(id: zones.map(\.id).joined()) { await loadGuides() }
         .sheet(isPresented: $showZonePicker) {
             PlaceZonePickerSheet { result in
                 guard !zones.contains(where: { $0.id == result.id }) else { return }
@@ -156,13 +156,22 @@ struct BuddyProfileView: View {
 
             Divider().padding(.horizontal, Spacing.edge)
 
-            presenceCard(isPending: false)
+            // Una card por lugar
+            ForEach(zones) { zone in
+                zoneCard(zone: zone)
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.top, Spacing.md)
+            }
+
+            // Botón agregar ciudad
+            addZoneButton
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.sm)
+
+            // Especialidades globales
+            specialtiesCard
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.xl)
-
-            guideCard
-                .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.md)
 
             if (profile.totalHelps ?? 0) > 0 {
                 let n = profile.totalHelps!
@@ -180,22 +189,25 @@ struct BuddyProfileView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text("Tu solicitud\nestá en camino.")
-                    .font(BT.title2)
-                    .foregroundStyle(Color.brandDeep)
-                    .lineSpacing(2)
+                    .font(BT.title2).foregroundStyle(Color.brandDeep).lineSpacing(2)
                 Text("Estamos revisando tu perfil. Mientras tanto puedes preparar dónde y cómo quieres ayudar.")
-                    .font(BT.callout)
-                    .foregroundStyle(Color.brand)
-                    .lineSpacing(2)
+                    .font(BT.callout).foregroundStyle(Color.brand).lineSpacing(2)
             }
-            .padding(Spacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, Spacing.edge)
-            .padding(.top, Spacing.lg)
+            .padding(Spacing.md).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.canvas).clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, Spacing.edge).padding(.top, Spacing.lg)
 
-            presenceCard(isPending: true)
+            ForEach(zones) { zone in
+                zoneCard(zone: zone)
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.top, Spacing.md)
+            }
+
+            addZoneButton
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.sm)
+
+            specialtiesCard
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.xl)
         }
@@ -240,49 +252,67 @@ struct BuddyProfileView: View {
         }
     }
 
-    // MARK: – Guía del lugar
+    // MARK: – Card por zona (guía + header del lugar)
 
-    @ViewBuilder
-    private var guideCard: some View {
+    private func zoneCard(zone: ZoneEntry) -> some View {
         VStack(alignment: .leading, spacing: 0) {
 
+            // Header: nombre del lugar + botón eliminar
+            HStack(spacing: 8) {
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 14)).foregroundStyle(Color.teal)
+                Text(zone.name)
+                    .font(BT.callout).fontWeight(.semibold).foregroundStyle(Color.ink)
+                Spacer()
+                Button {
+                    withAnimation(.spring(duration: 0.3)) { zones.removeAll { $0.id == zone.id } }
+                    Haptic.select()
+                    Task { await saveZones() }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold)).foregroundStyle(Color.inkMuted)
+                        .padding(6)
+                        .background(Color.surface).clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+
+            Divider().padding(.horizontal, 14)
+
+            // Guía del lugar
             Text("Guía del lugar")
-                .font(BT.eyebrow).tracking(1.5).foregroundStyle(Color.inkMuted)
-                .padding(.horizontal, 14).padding(.top, 14)
+                .font(BT.eyebrow).tracking(1.2).foregroundStyle(Color.inkMuted)
+                .padding(.horizontal, 14).padding(.top, 10)
 
-            Divider().padding(.horizontal, 14).padding(.top, 10)
-
-            if zones.isEmpty {
-                Text("Agrega una ciudad para ver la guía.")
-                    .font(BT.caption1).foregroundStyle(Color.inkMuted)
-                    .padding(.horizontal, 14).padding(.vertical, 14)
-            } else if let guide = placeGuide {
-                if guide.spotCount == 0 {
-                    VStack(alignment: .leading, spacing: 4) {
+            let guide = placeGuides[zone.id]
+            if let g = guide {
+                if g.spotCount == 0 {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Ningún lugar todavía.")
                             .font(BT.callout).foregroundStyle(Color.ink)
-                        Text("Comienza agregando el primer lugar de la guía.")
-                            .font(BT.caption1).foregroundStyle(Color.inkMuted).lineSpacing(2)
+                        Text("Comienza agregando el primero.")
+                            .font(BT.caption1).foregroundStyle(Color.inkMuted)
                     }
-                    .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 14)
+                    .padding(.horizontal, 14).padding(.top, 6).padding(.bottom, 14)
                 } else {
                     HStack(spacing: 20) {
-                        GuideStatView(value: guide.spotCount,
-                                      label: guide.spotCount == 1 ? "lugar" : "lugares")
-                        if guide.visitCount > 0 {
-                            GuideStatView(value: guide.visitCount,
-                                          label: guide.visitCount == 1 ? "visita" : "visitas")
+                        GuideStatView(value: g.spotCount,
+                                      label: g.spotCount == 1 ? "lugar" : "lugares")
+                        if g.visitCount > 0 {
+                            GuideStatView(value: g.visitCount,
+                                          label: g.visitCount == 1 ? "visita" : "visitas")
                         }
-                        if guide.stickerCount > 0 {
-                            GuideStatView(value: guide.stickerCount,
-                                          label: guide.stickerCount == 1 ? "sticker" : "stickers")
+                        if g.stickerCount > 0 {
+                            GuideStatView(value: g.stickerCount,
+                                          label: g.stickerCount == 1 ? "sticker" : "stickers")
                         }
                     }
-                    .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 14)
+                    .padding(.horizontal, 14).padding(.top, 6).padding(.bottom, 14)
                 }
             } else {
                 ProgressView().controlSize(.small).tint(Color.inkMuted)
-                    .padding(.horizontal, 14).padding(.vertical, 14)
+                    .padding(.horizontal, 14).padding(.vertical, 12)
             }
         }
         .background(Color.surface)
@@ -290,98 +320,68 @@ struct BuddyProfileView: View {
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
     }
 
-    // MARK: – Tarjeta de presencia (compartida entre estados)
+    // MARK: – Botón agregar ciudad
 
-    private func presenceCard(isPending: Bool) -> some View {
+    private var addZoneButton: some View {
+        Button { showZonePicker = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(zones.isEmpty ? "Agregar mi primera ciudad" : "Agregar ciudad")
+                    .font(BT.callout).fontWeight(.medium)
+            }
+            .foregroundStyle(Color.teal)
+            .frame(maxWidth: .infinity).padding(.vertical, 13)
+            .background(Color.teal.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.teal.opacity(0.3),
+                              style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: – Especialidades (globales — aplican a todas las ciudades)
+
+    private var specialtiesCard: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // ── Zonas ──────────────────────────────────────────
-            VStack(alignment: .leading, spacing: 10) {
-                Text(isPending ? "Prepara tu perfil" : "Ayuda a viajeros")
-                    .font(BT.eyebrow).tracking(1.5)
-                    .foregroundStyle(Color.inkMuted)
+            Text("Cómo puedo ayudar")
+                .font(BT.eyebrow).tracking(1.5).foregroundStyle(Color.inkMuted)
+                .padding(.horizontal, 14).padding(.top, 14)
 
-                Text("Dónde estaré")
-                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
-
-                // Pills de zonas + botón añadir
-                FlowLayout(spacing: 6) {
-                    ForEach(zones) { entry in
-                        ZonePill(
-                            name: entry.name,
-                            onRemove: {
-                                withAnimation(.spring(duration: 0.3)) {
-                                    zones.removeAll { $0.id == entry.id }
-                                }
-                                Haptic.select()
-                                Task { await saveZones() }
-                            }
-                        )
-                    }
-                    // Botón añadir zona
+            FlowLayout(spacing: 6) {
+                ForEach(BuddyProfileView.categoryOptions, id: \.key) { opt in
+                    let on = specialties.contains(opt.key)
                     Button {
-                        showZonePicker = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text(zones.isEmpty ? "Elegir mi ciudad" : "Agregar")
-                                .font(BT.caption1).fontWeight(.medium)
+                        Haptic.select()
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            if on { specialties.remove(opt.key) } else { specialties.insert(opt.key) }
                         }
-                        .padding(.horizontal, 11).padding(.vertical, 6)
-                        .foregroundStyle(Color.inkMuted)
-                        .background(Color.surface)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().strokeBorder(Color.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                        Task { await saveSpecialties() }
+                    } label: {
+                        Text(opt.label)
+                            .font(BT.caption1).fontWeight(on ? .semibold : .regular)
+                            .padding(.horizontal, 11).padding(.vertical, 6)
+                            .background(on ? Color.teal.opacity(0.12) : Color.surface)
+                            .foregroundStyle(on ? Color.teal : Color.inkMuted)
+                            .clipShape(Capsule())
+                            .overlay(Capsule().stroke(on ? Color.teal : Color.border, lineWidth: on ? 1 : 0.5))
+                            .animation(.easeInOut(duration: 0.18), value: on)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 12)
+            .padding(.horizontal, 14).padding(.top, 10)
 
-            Divider().padding(.horizontal, 14)
-
-            // ── Categorías — toggles inline ────────────────────
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Cómo puedo ayudar")
-                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
-
-                FlowLayout(spacing: 6) {
-                    ForEach(BuddyProfileView.categoryOptions, id: \.key) { opt in
-                        let on = specialties.contains(opt.key)
-                        Button {
-                            Haptic.select()
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                if on { specialties.remove(opt.key) }
-                                else  { specialties.insert(opt.key) }
-                            }
-                            Task { await saveSpecialties() }
-                        } label: {
-                            Text(opt.label)
-                                .font(BT.caption1).fontWeight(on ? .semibold : .regular)
-                                .padding(.horizontal, 11).padding(.vertical, 6)
-                                .background(on ? Color.teal.opacity(0.12) : Color.surface)
-                                .foregroundStyle(on ? Color.teal : Color.inkMuted)
-                                .clipShape(Capsule())
-                                .overlay(Capsule().stroke(on ? Color.teal : Color.border, lineWidth: on ? 1 : 0.5))
-                                .animation(.easeInOut(duration: 0.18), value: on)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 14)
-
-            // ── Preview line — actualiza en tiempo real ────────
             if let preview = previewText {
-                Divider().padding(.horizontal, 14)
+                Divider().padding(.horizontal, 14).padding(.top, 12)
                 Text(preview)
-                    .font(BT.caption1).foregroundStyle(Color.inkMuted)
-                    .lineSpacing(2)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentTransition(.opacity)
-                    .animation(.easeInOut(duration: 0.25), value: previewText)
+                    .font(BT.caption1).foregroundStyle(Color.inkMuted).lineSpacing(2)
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    .contentTransition(.opacity).animation(.easeInOut(duration: 0.25), value: previewText)
+            } else {
+                Spacer().frame(height: 14)
             }
         }
         .background(Color.surface)
@@ -467,18 +467,26 @@ struct BuddyProfileView: View {
         }
     }
 
-    private func loadGuide() async {
-        guard let primary = zones.first else {
-            await MainActor.run { placeGuide = nil }
-            return
-        }
-        print("🗺️ [BuddyProfileView] loadGuide zone=\(primary.id.prefix(8)) source=\(primary.source)")
-        do {
-            let guide = try await APIClient.shared.fetchPlaceGuide(id: primary.id, source: primary.source)
-            print("🗺️ [BuddyProfileView] guide spots=\(guide.spotCount) visits=\(guide.visitCount) stickers=\(guide.stickerCount)")
-            await MainActor.run { placeGuide = guide }
-        } catch {
-            print("❌ [BuddyProfileView] loadGuide error: \(error)")
+    private func loadGuides() async {
+        let currentZones = zones
+        guard !currentZones.isEmpty else { return }
+        print("🗺️ [BuddyProfileView] loadGuides count=\(currentZones.count)")
+        await withTaskGroup(of: (String, APIPlaceGuide?).self) { group in
+            for zone in currentZones {
+                group.addTask {
+                    print("🗺️ [BuddyProfileView] loadGuide zone=\(zone.id.prefix(8)) source=\(zone.source)")
+                    let guide = try? await APIClient.shared.fetchPlaceGuide(id: zone.id, source: zone.source)
+                    if let g = guide {
+                        print("🗺️ [BuddyProfileView] guide[\(zone.id.prefix(8))] spots=\(g.spotCount) visits=\(g.visitCount) stickers=\(g.stickerCount)")
+                    }
+                    return (zone.id, guide)
+                }
+            }
+            for await (zoneId, guide) in group {
+                if let g = guide {
+                    await MainActor.run { placeGuides[zoneId] = g }
+                }
+            }
         }
     }
 }
