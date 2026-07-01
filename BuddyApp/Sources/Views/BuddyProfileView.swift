@@ -68,13 +68,7 @@ struct BuddyProfileView: View {
 
     private var status: String { profile.verificationStatus ?? "" }
 
-    // Nombre del primer lugar resuelto (no UUID) — nil hasta que resolveZoneNames() completa
-    private var primaryZoneName: String? {
-        guard let first = zones.first, first.name != first.id else { return nil }
-        return first.name
-    }
-
-    // MARK: – Body
+// MARK: – Body
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -110,13 +104,8 @@ struct BuddyProfileView: View {
 
             // Bloque de pertenencia / contribución
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                if let name = primaryZoneName {
-                    Text("Ayuda a viajeros hoy y construye la guía de \(name) para quienes lleguen mañana.")
-                        .font(BT.title2).foregroundStyle(Color.teal).lineSpacing(2)
-                } else {
-                    Text("Ya formas parte\nde la comunidad.")
-                        .font(BT.title2).foregroundStyle(Color.teal).lineSpacing(2)
-                }
+                Text("Ayuda a viajeros hoy y construye la guía para quienes lleguen mañana.")
+                    .font(BT.title2).foregroundStyle(Color.teal).lineSpacing(2)
             }
             .padding(Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
