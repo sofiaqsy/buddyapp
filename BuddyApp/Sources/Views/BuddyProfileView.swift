@@ -48,19 +48,13 @@ struct BuddyProfileView: View {
         ("emergency",     "Seguridad"),
     ]
 
-    // MARK: – Preview line
+    // MARK: – Preview contextual por zona
 
-    private var previewText: String? {
-        let zones = zones.map { $0.name }
-        let cats  = specialties.compactMap { key in
+    private func previewText(forZone zone: ZoneEntry) -> String? {
+        let cats = specialties.compactMap { key in
             BuddyProfileView.categoryOptions.first(where: { $0.key == key })?.label
         }.sorted()
-
-        guard !zones.isEmpty, !cats.isEmpty else { return nil }
-
-        let zonesStr: String
-        if zones.count == 1 { zonesStr = zones[0] }
-        else { zonesStr = zones.dropLast().joined(separator: ", ") + " y \(zones.last!)" }
+        guard !cats.isEmpty, zone.name != zone.id else { return nil }
 
         let catsStr: String
         if cats.count == 1 { catsStr = cats[0].lowercased() }
@@ -69,8 +63,7 @@ struct BuddyProfileView: View {
             let first = cats.prefix(2).map { $0.lowercased() }.joined(separator: ", ")
             catsStr = "\(first) +\(cats.count - 2)"
         }
-
-        return "Los viajeros en \(zonesStr) que busquen ayuda con \(catsStr) podrán encontrarte."
+        return "Los viajeros en \(zone.name) que busquen ayuda con \(catsStr) podrán encontrarte."
     }
 
     private var status: String { profile.verificationStatus ?? "" }
@@ -168,11 +161,6 @@ struct BuddyProfileView: View {
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.sm)
 
-            // Especialidades globales
-            specialtiesCard
-                .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.xl)
-
             if (profile.totalHelps ?? 0) > 0 {
                 let n = profile.totalHelps!
                 Text(n == 1 ? "1 viajero acompañado" : "\(n) viajeros acompañados")
@@ -206,10 +194,6 @@ struct BuddyProfileView: View {
             addZoneButton
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.sm)
-
-            specialtiesCard
-                .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.xl)
         }
     }
 
@@ -252,7 +236,7 @@ struct BuddyProfileView: View {
         }
     }
 
-    // MARK: – Card por zona (guía + header del lugar)
+    // MARK: – Card por zona (especialidades + guía del lugar)
 
     private func zoneCard(zone: ZoneEntry) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -280,6 +264,37 @@ struct BuddyProfileView: View {
 
             Divider().padding(.horizontal, 14)
 
+            // Especialidades: cómo ayudo en este lugar
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Cómo puedo ayudar")
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                FlowLayout(spacing: 6) {
+                    ForEach(BuddyProfileView.categoryOptions, id: \.key) { opt in
+                        let on = specialties.contains(opt.key)
+                        Button {
+                            Haptic.select()
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                if on { specialties.remove(opt.key) } else { specialties.insert(opt.key) }
+                            }
+                            Task { await saveSpecialties() }
+                        } label: {
+                            Text(opt.label)
+                                .font(BT.caption1).fontWeight(on ? .semibold : .regular)
+                                .padding(.horizontal, 11).padding(.vertical, 6)
+                                .background(on ? Color.teal.opacity(0.12) : Color.surface)
+                                .foregroundStyle(on ? Color.teal : Color.inkMuted)
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(on ? Color.teal : Color.border, lineWidth: on ? 1 : 0.5))
+                                .animation(.easeInOut(duration: 0.18), value: on)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 12)
+
+            Divider().padding(.horizontal, 14)
+
             // Guía del lugar
             Text("Guía del lugar")
                 .font(BT.eyebrow).tracking(1.2).foregroundStyle(Color.inkMuted)
@@ -294,7 +309,7 @@ struct BuddyProfileView: View {
                         Text("Comienza agregando el primero.")
                             .font(BT.caption1).foregroundStyle(Color.inkMuted)
                     }
-                    .padding(.horizontal, 14).padding(.top, 6).padding(.bottom, 14)
+                    .padding(.horizontal, 14).padding(.top, 6).padding(.bottom, 12)
                 } else {
                     HStack(spacing: 20) {
                         GuideStatView(value: g.spotCount,
@@ -308,11 +323,20 @@ struct BuddyProfileView: View {
                                           label: g.stickerCount == 1 ? "sticker" : "stickers")
                         }
                     }
-                    .padding(.horizontal, 14).padding(.top, 6).padding(.bottom, 14)
+                    .padding(.horizontal, 14).padding(.top, 6).padding(.bottom, 12)
                 }
             } else {
                 ProgressView().controlSize(.small).tint(Color.inkMuted)
                     .padding(.horizontal, 14).padding(.vertical, 12)
+            }
+
+            // Preview contextual por zona
+            if let preview = previewText(forZone: zone) {
+                Divider().padding(.horizontal, 14)
+                Text(preview)
+                    .font(BT.caption1).foregroundStyle(Color.inkMuted).lineSpacing(2)
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    .contentTransition(.opacity).animation(.easeInOut(duration: 0.25), value: preview)
             }
         }
         .background(Color.surface)
@@ -341,53 +365,6 @@ struct BuddyProfileView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: – Especialidades (globales — aplican a todas las ciudades)
-
-    private var specialtiesCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-
-            Text("Cómo puedo ayudar")
-                .font(BT.eyebrow).tracking(1.5).foregroundStyle(Color.inkMuted)
-                .padding(.horizontal, 14).padding(.top, 14)
-
-            FlowLayout(spacing: 6) {
-                ForEach(BuddyProfileView.categoryOptions, id: \.key) { opt in
-                    let on = specialties.contains(opt.key)
-                    Button {
-                        Haptic.select()
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            if on { specialties.remove(opt.key) } else { specialties.insert(opt.key) }
-                        }
-                        Task { await saveSpecialties() }
-                    } label: {
-                        Text(opt.label)
-                            .font(BT.caption1).fontWeight(on ? .semibold : .regular)
-                            .padding(.horizontal, 11).padding(.vertical, 6)
-                            .background(on ? Color.teal.opacity(0.12) : Color.surface)
-                            .foregroundStyle(on ? Color.teal : Color.inkMuted)
-                            .clipShape(Capsule())
-                            .overlay(Capsule().stroke(on ? Color.teal : Color.border, lineWidth: on ? 1 : 0.5))
-                            .animation(.easeInOut(duration: 0.18), value: on)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 14).padding(.top, 10)
-
-            if let preview = previewText {
-                Divider().padding(.horizontal, 14).padding(.top, 12)
-                Text(preview)
-                    .font(BT.caption1).foregroundStyle(Color.inkMuted).lineSpacing(2)
-                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                    .contentTransition(.opacity).animation(.easeInOut(duration: 0.25), value: previewText)
-            } else {
-                Spacer().frame(height: 14)
-            }
-        }
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
-    }
 
     // MARK: – Actions
 
