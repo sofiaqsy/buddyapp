@@ -170,10 +170,36 @@ final class APIClient {
         try await request(path: "/destinations/\(id)")
     }
 
+    // MARK: – Place Search (unified: destination + place table)
+
+    private struct PlaceSearchResponse: Decodable {
+        let items: [APIPlaceResult]
+    }
+
+    func searchPlaces(query: String) async throws -> [APIPlaceResult] {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let response: PlaceSearchResponse = try await request(path: "/search/places?q=\(encoded)")
+        print("🔍 [APIClient] searchPlaces q=\(query) → \(response.items.count) results")
+        return response.items
+    }
+
     // MARK: – Places
 
     func fetchPlaces(destinationId: String) async throws -> [APIPlace] {
         try await request(path: "/places?destination_id=\(destinationId)")
+    }
+
+    func fetchPlaceContext(id: String, source: String) async throws -> APIPlaceContext {
+        let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let ctx: APIPlaceContext = try await request(path: "/places/\(encodedId)/context?source=\(source)")
+        print("🏙 [APIClient] placeContext id=\(id) source=\(source) → buddies=\(ctx.buddies) stories=\(ctx.stories) status=\(ctx.status)")
+        return ctx
+    }
+
+    func fetchPlaceGuide(id: String, source: String) async throws -> APIPlaceGuide {
+        let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        print("🗺️ [APIClient] fetchPlaceGuide id=\(id.prefix(8)) source=\(source)")
+        return try await request(path: "/places/\(encodedId)/guide?source=\(source)")
     }
 
     // MARK: – Favorites (per-user)
@@ -200,20 +226,27 @@ final class APIClient {
     }
 
     func createJourney(
-        destinationId: String,
-        title: String?,
-        arrivalAt: Date?,
+        destinationId: String? = nil,
+        placeId: String? = nil,
+        lat: Double? = nil,
+        lng: Double? = nil,
+        title: String? = nil,
+        arrivalAt: Date? = nil,
         knowsHowToGet: Bool = false,
         hasLodging: Bool = false
     ) async throws -> APIJourney {
         // Backend derives owner from the Traveler JWT — no identity param in body.
         var body: [String: Any] = [
-            "destination_id":   destinationId,
             "knows_how_to_get": knowsHowToGet,
             "has_lodging":      hasLodging
         ]
-        if let title     { body["title"]      = title }
-        if let arrivalAt { body["arrival_at"] = ISO8601DateFormatter().string(from: arrivalAt) }
+        if let destinationId { body["destination_id"] = destinationId }
+        if let placeId       { body["place_id"]       = placeId }
+        if let lat           { body["lat"]             = lat }
+        if let lng           { body["lng"]             = lng }
+        if let title         { body["title"]           = title }
+        if let arrivalAt     { body["arrival_at"]      = ISO8601DateFormatter().string(from: arrivalAt) }
+        print("🧳 [APIClient] createJourney destination_id=\(destinationId ?? "nil") place_id=\(placeId ?? "nil") lat=\(lat.map { "\($0)" } ?? "nil") lng=\(lng.map { "\($0)" } ?? "nil")")
         return try await request(path: "/journeys", method: "POST", body: body)
     }
 
@@ -221,6 +254,41 @@ final class APIClient {
     /// planificación o lo crea automáticamente. El Trip deja de ser una tarea
     /// del usuario: pedir ayuda nunca exige crearlo a mano.
     /// Reusa fetchUserJourneys / createJourney / updateJourneyStatus.
+    /// Resuelve o crea un Place geográfico a partir de coordenadas GPS.
+    func resolvePlace(lat: Double, lng: Double) async throws -> APIResolvedPlace {
+        print("📍 [APIClient] resolvePlace lat=\(lat) lng=\(lng)")
+        return try await request(path: "/places/resolve", method: "POST", body: ["lat": lat, "lng": lng])
+    }
+
+    /// Garantiza que exista un Journey para el place dado (sin destination).
+    /// Usado en el flujo GPS-only / pioneer donde no hay destino registrado.
+    func ensureActiveTripForGPS(lat: Double, lng: Double) async throws -> APIJourney {
+        let place = try await resolvePlace(lat: lat, lng: lng)
+        let journeys: [APIJourney] = (try? await fetchTravelerJourneys()) ?? []
+        if let existing = journeys.first(where: {
+            $0.placeId == place.id && ["active", "planning"].contains($0.status)
+        }) {
+            if existing.status != "active" {
+                try? await updateJourneyStatus(journeyId: existing.id, status: "active")
+            }
+            print("📍 [APIClient] ensureActiveTripForGPS — reusing journey=\(existing.id) place=\(place.id)")
+            return existing
+        }
+        let created = try await createJourney(placeId: place.id, lat: lat, lng: lng)
+        try? await updateJourneyStatus(journeyId: created.id, status: "active")
+        print("📍 [APIClient] ensureActiveTripForGPS — created journey=\(created.id) place=\(place.id)")
+        return created
+    }
+
+    /// Crea una solicitud de ayuda solo con journey_id, sin destination_id.
+    /// Usado en el flujo GPS-only (pioneer) donde no hay destino registrado.
+    func createHelpRequestForJourney(journeyId: String, category: String, description: String?) async throws -> APIHelpRequest {
+        var body: [String: Any] = ["journey_id": journeyId, "category": category]
+        if let description { body["description"] = description }
+        print("📍 [APIClient] createHelpRequestForJourney journey_id=\(journeyId) category=\(category)")
+        return try await request(path: "/matching/request", method: "POST", body: body)
+    }
+
     func ensureActiveTrip(destinationId: String) async throws -> APIJourney {
         // Always use the Traveler-first path — backend resolves owner from JWT.
         let journeys: [APIJourney] = (try? await fetchTravelerJourneys()) ?? []
@@ -272,14 +340,21 @@ final class APIClient {
         try await requestVoid(path: "/journeys/\(journeyId)", method: "PATCH", body: ["status": status])
     }
 
-    func publishJourney(journeyId: String, pages: [CollagePage]) async throws {
+    func publishJourney(journeyId: String, tripId: String?, pages: [CollagePage]) async throws {
         try await uploadAndSavePages(journeyId: journeyId, pages: pages)
-        // Marca el journey como completado + público
         try await requestVoid(
             path: "/journeys/\(journeyId)",
             method: "PATCH",
             body: ["status": "completed", "is_public": true] as [String: Any]
         )
+        // El trip padre también debe ser público para aparecer en el feed
+        if let tripId {
+            try await requestVoid(
+                path: "/trips/\(tripId)",
+                method: "PATCH",
+                body: ["status": "completed", "is_public": true] as [String: Any]
+            )
+        }
     }
 
     /// Sube las portadas de un journey y guarda sus URLs (sin tocar el status).
@@ -477,13 +552,21 @@ final class APIClient {
     func updateBuddyMe(specialties: [String]? = nil,
                        destinationIds: [String]? = nil,
                        activeZoneIds: [String]? = nil,
+                       placeIds: [String]? = nil,
                        isAvailable: Bool? = nil) async throws -> APIBuddyMe {
         var body: [String: Any] = [:]
         if let specialties    { body["specialties"]     = specialties }
         if let destinationIds { body["destination_ids"] = destinationIds }
         if let activeZoneIds  { body["active_zone_ids"]  = activeZoneIds }
+        if let placeIds       { body["place_ids"]       = placeIds }
         if let isAvailable    { body["is_available"]    = isAvailable }
+        print("🤝 [APIClient] updateBuddyMe destIds=\(destinationIds ?? []) placeIds=\(placeIds ?? [])")
         return try await request(path: "/buddy/me", method: "PATCH", body: body)
+    }
+
+    func fetchGeoPlace(id: String) async throws -> APIPlaceRef {
+        print("📍 [APIClient] fetchGeoPlace id=\(id.prefix(8))")
+        return try await request(path: "/places/geo/\(id)")
     }
 
     func fetchUserStickers(travelerId: String) async throws -> [APIUserSticker] {
@@ -651,6 +734,43 @@ final class APIClient {
         var body: [String: Any] = ["content": content, "type": type]
         if let audioUrl { body["audio_url"] = audioUrl }
         return try await request(path: "/messages/\(matchId)", method: "POST", body: body)
+    }
+
+    struct HelpRequestInfo: Decodable {
+        let destinationId: String?
+        let category: String?
+    }
+    func fetchHelpRequestInfo(requestId: String) async throws -> HelpRequestInfo {
+        try await request(path: "/matching/request-info/\(requestId)")
+    }
+
+    func uploadChatImage(matchId: String, imageData: Data) async throws -> APIMessage {
+        let boundary = "BuddyBoundary.\(UUID().uuidString)"
+        var body = Data()
+        body.appendMultipart(boundary: boundary, name: "image",
+                             filename: "photo.jpg", mime: "image/jpeg", data: imageData)
+        body.append("--\(boundary)--\r\n")
+
+        let token = TravelerService.shared.token ?? anonKey
+        guard let url = URL(string: baseURL + "/messages/\(matchId)/image") else { throw APIError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = body
+
+        print("🖼️ [APIClient] POST /messages/\(matchId)/image — \(imageData.count / 1024) KB token=\(token.prefix(12))…")
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
+        print("🖼️ [APIClient] /messages/\(matchId)/image → HTTP \(http.statusCode)")
+        guard (200..<300).contains(http.statusCode) else {
+            let raw = String(data: data.prefix(300), encoding: .utf8) ?? ""
+            print("❌ [APIClient] image upload failed: \(raw)")
+            let msg = (try? JSONDecoder().decode(APIErrorResponse.self, from: data))?.error
+            throw APIError.server(http.statusCode, msg ?? "Image upload failed")
+        }
+        print("✅ [APIClient] image upload OK — raw: \(String(data: data.prefix(200), encoding: .utf8) ?? "")")
+        return try JSONDecoder.buddy.decode(APIMessage.self, from: data)
     }
 
     func markMessagesRead(matchId: String) async {

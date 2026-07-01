@@ -2,6 +2,12 @@ import SwiftUI
 
 // MARK: – BuddyProfileView
 
+struct ZoneEntry: Identifiable, Hashable {
+    let id: String       // UUID del destination o place
+    var name: String
+    let source: String   // "destination" | "place"
+}
+
 struct BuddyProfileView: View {
     let profile: APIBuddyMeProfile
     let destinations: [APIDestination]
@@ -9,13 +15,13 @@ struct BuddyProfileView: View {
 
     @State private var isAvailable: Bool
     @State private var specialties: Set<String>
-    @State private var zoneIds: [String]           // orden importa para display
-    @State private var zoneNames: [String: String] // id → nombre resuelto
+    @State private var zones: [ZoneEntry]
 
     @State private var savingAvailability = false
     @State private var savingZones        = false
     @State private var savingSpecs        = false
     @State private var showZonePicker     = false
+    @State private var placeGuide: APIPlaceGuide? = nil
 
     init(profile: APIBuddyMeProfile, destinations: [APIDestination], onUpdated: @escaping (APIBuddyMe) -> Void) {
         self.profile      = profile
@@ -23,11 +29,12 @@ struct BuddyProfileView: View {
         self.onUpdated    = onUpdated
         _isAvailable = State(initialValue: profile.isAvailable)
         _specialties = State(initialValue: Set(profile.specialties ?? []))
-        let ids = (profile.activeZoneIds?.isEmpty == false)
-            ? profile.activeZoneIds!
-            : (profile.destinationIds ?? [])
-        _zoneIds   = State(initialValue: ids)
-        _zoneNames = State(initialValue: [:])
+        // Merge destination_ids + place_ids into unified list (destinations first)
+        let destIds  = (profile.activeZoneIds?.isEmpty == false ? profile.activeZoneIds! : (profile.destinationIds ?? []))
+        let placeIds = profile.placeIds ?? []
+        let destEntries  = destIds.map  { ZoneEntry(id: $0, name: $0, source: "destination") }
+        let placeEntries = placeIds.map { ZoneEntry(id: $0, name: $0, source: "place") }
+        _zones = State(initialValue: destEntries + placeEntries)
     }
 
     // MARK: – Options
@@ -44,7 +51,7 @@ struct BuddyProfileView: View {
     // MARK: – Preview line
 
     private var previewText: String? {
-        let zones = zoneIds.compactMap { zoneNames[$0] }
+        let zones = zones.map { $0.name }
         let cats  = specialties.compactMap { key in
             BuddyProfileView.categoryOptions.first(where: { $0.key == key })?.label
         }.sorted()
@@ -68,6 +75,12 @@ struct BuddyProfileView: View {
 
     private var status: String { profile.verificationStatus ?? "" }
 
+    // Nombre del primer lugar resuelto (no UUID) — nil hasta que resolveZoneNames() completa
+    private var primaryZoneName: String? {
+        guard let first = zones.first, first.name != first.id else { return nil }
+        return first.name
+    }
+
     // MARK: – Body
 
     var body: some View {
@@ -85,12 +98,12 @@ struct BuddyProfileView: View {
         .navigationTitle("Tu perfil de Buddy")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { resolveZoneNames() }
+        .task(id: zones.first?.id) { await loadGuide() }
         .sheet(isPresented: $showZonePicker) {
-            DestinationPickerSheet(selectedId: nil) { picked in
-                guard !zoneIds.contains(picked.id) else { return }
+            PlaceZonePickerSheet { result in
+                guard !zones.contains(where: { $0.id == result.id }) else { return }
                 withAnimation(.spring(duration: 0.35)) {
-                    zoneIds.append(picked.id)
-                    zoneNames[picked.id] = picked.name
+                    zones.append(result)
                 }
                 Task { await saveZones() }
             }
@@ -102,11 +115,15 @@ struct BuddyProfileView: View {
     private var approvedView: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // Bloque de pertenencia
+            // Bloque de pertenencia / contribución
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("Ya formas parte\nde la comunidad.")
-                    .font(BT.title2).foregroundStyle(Color.teal)
-                    .lineSpacing(2)
+                if let name = primaryZoneName {
+                    Text("Ayuda a viajeros hoy y construye la guía de \(name) para quienes lleguen mañana.")
+                        .font(BT.title2).foregroundStyle(Color.teal).lineSpacing(2)
+                } else {
+                    Text("Ya formas parte\nde la comunidad.")
+                        .font(BT.title2).foregroundStyle(Color.teal).lineSpacing(2)
+                }
             }
             .padding(Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -142,6 +159,10 @@ struct BuddyProfileView: View {
             presenceCard(isPending: false)
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.xl)
+
+            guideCard
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.md)
 
             if (profile.totalHelps ?? 0) > 0 {
                 let n = profile.totalHelps!
@@ -219,6 +240,56 @@ struct BuddyProfileView: View {
         }
     }
 
+    // MARK: – Guía del lugar
+
+    @ViewBuilder
+    private var guideCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            Text("Guía del lugar")
+                .font(BT.eyebrow).tracking(1.5).foregroundStyle(Color.inkMuted)
+                .padding(.horizontal, 14).padding(.top, 14)
+
+            Divider().padding(.horizontal, 14).padding(.top, 10)
+
+            if zones.isEmpty {
+                Text("Agrega una ciudad para ver la guía.")
+                    .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    .padding(.horizontal, 14).padding(.vertical, 14)
+            } else if let guide = placeGuide {
+                if guide.spotCount == 0 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Ningún lugar todavía.")
+                            .font(BT.callout).foregroundStyle(Color.ink)
+                        Text("Comienza agregando el primer lugar de la guía.")
+                            .font(BT.caption1).foregroundStyle(Color.inkMuted).lineSpacing(2)
+                    }
+                    .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 14)
+                } else {
+                    HStack(spacing: 20) {
+                        GuideStatView(value: guide.spotCount,
+                                      label: guide.spotCount == 1 ? "lugar" : "lugares")
+                        if guide.visitCount > 0 {
+                            GuideStatView(value: guide.visitCount,
+                                          label: guide.visitCount == 1 ? "visita" : "visitas")
+                        }
+                        if guide.stickerCount > 0 {
+                            GuideStatView(value: guide.stickerCount,
+                                          label: guide.stickerCount == 1 ? "sticker" : "stickers")
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 14)
+                }
+            } else {
+                ProgressView().controlSize(.small).tint(Color.inkMuted)
+                    .padding(.horizontal, 14).padding(.vertical, 14)
+            }
+        }
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+    }
+
     // MARK: – Tarjeta de presencia (compartida entre estados)
 
     private func presenceCard(isPending: Bool) -> some View {
@@ -226,7 +297,7 @@ struct BuddyProfileView: View {
 
             // ── Zonas ──────────────────────────────────────────
             VStack(alignment: .leading, spacing: 10) {
-                Text(isPending ? "Prepara tu perfil" : "Así ayudaré a los viajeros")
+                Text(isPending ? "Prepara tu perfil" : "Ayuda a viajeros")
                     .font(BT.eyebrow).tracking(1.5)
                     .foregroundStyle(Color.inkMuted)
 
@@ -235,12 +306,12 @@ struct BuddyProfileView: View {
 
                 // Pills de zonas + botón añadir
                 FlowLayout(spacing: 6) {
-                    ForEach(zoneIds, id: \.self) { id in
+                    ForEach(zones) { entry in
                         ZonePill(
-                            name: zoneNames[id] ?? id,
+                            name: entry.name,
                             onRemove: {
                                 withAnimation(.spring(duration: 0.3)) {
-                                    zoneIds.removeAll { $0 == id }
+                                    zones.removeAll { $0.id == entry.id }
                                 }
                                 Haptic.select()
                                 Task { await saveZones() }
@@ -254,7 +325,7 @@ struct BuddyProfileView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "plus")
                                 .font(.system(size: 11, weight: .semibold))
-                            Text(zoneIds.isEmpty ? "Elegir mi ciudad" : "Agregar")
+                            Text(zones.isEmpty ? "Elegir mi ciudad" : "Agregar")
                                 .font(BT.caption1).fontWeight(.medium)
                         }
                         .padding(.horizontal, 11).padding(.vertical, 6)
@@ -321,17 +392,34 @@ struct BuddyProfileView: View {
     // MARK: – Actions
 
     private func resolveZoneNames() {
-        for id in zoneIds {
-            if let local = destinations.first(where: { $0.id == id }) {
-                zoneNames[id] = local.name; continue
-            }
-            if let dest = profile.destination, dest.id == id {
-                zoneNames[id] = dest.name; continue
-            }
-            Task {
-                let dest = try? await APIClient.shared.fetchDestination(id: id)
-                if let name = dest?.name {
-                    await MainActor.run { zoneNames[id] = name }
+        for i in zones.indices {
+            let entry = zones[i]
+            if entry.source == "destination" {
+                if let local = destinations.first(where: { $0.id == entry.id }) {
+                    zones[i].name = local.name; continue
+                }
+                if let dest = profile.destination, dest.id == entry.id {
+                    zones[i].name = dest.name; continue
+                }
+                Task {
+                    if let dest = try? await APIClient.shared.fetchDestination(id: entry.id) {
+                        await MainActor.run {
+                            if let j = zones.firstIndex(where: { $0.id == entry.id }) {
+                                zones[j].name = dest.name
+                            }
+                        }
+                    }
+                }
+            } else {
+                // place source — lookup via /places/geo/:id
+                Task {
+                    if let place = try? await APIClient.shared.fetchGeoPlace(id: entry.id) {
+                        await MainActor.run {
+                            if let j = zones.firstIndex(where: { $0.id == entry.id }) {
+                                zones[j].name = place.name
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -353,10 +441,14 @@ struct BuddyProfileView: View {
     private func saveZones() async {
         savingZones = true
         defer { savingZones = false }
+        let destIds  = zones.filter { $0.source == "destination" }.map { $0.id }
+        let placeIds = zones.filter { $0.source == "place" }.map { $0.id }
+        print("🤝 [BuddyProfileView] saveZones destIds=\(destIds) placeIds=\(placeIds)")
         do {
             let updated = try await APIClient.shared.updateBuddyMe(
-                destinationIds: zoneIds,
-                activeZoneIds: zoneIds
+                destinationIds: destIds,
+                activeZoneIds:  destIds,
+                placeIds:       placeIds
             )
             onUpdated(updated)
         } catch {
@@ -372,6 +464,177 @@ struct BuddyProfileView: View {
             onUpdated(updated)
         } catch {
             Haptic.error()
+        }
+    }
+
+    private func loadGuide() async {
+        guard let primary = zones.first else {
+            await MainActor.run { placeGuide = nil }
+            return
+        }
+        print("🗺️ [BuddyProfileView] loadGuide zone=\(primary.id.prefix(8)) source=\(primary.source)")
+        do {
+            let guide = try await APIClient.shared.fetchPlaceGuide(id: primary.id, source: primary.source)
+            print("🗺️ [BuddyProfileView] guide spots=\(guide.spotCount) visits=\(guide.visitCount) stickers=\(guide.stickerCount)")
+            await MainActor.run { placeGuide = guide }
+        } catch {
+            print("❌ [BuddyProfileView] loadGuide error: \(error)")
+        }
+    }
+}
+
+// MARK: – PlaceZonePickerSheet
+
+struct PlaceZonePickerSheet: View {
+    let onSelected: (ZoneEntry) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query           = ""
+    @State private var results:        [APIPlaceResult] = []
+    @State private var lastValidResults: [APIPlaceResult] = []
+    @State private var isSearching     = false
+    @State private var isResolving     = false
+    @State private var searchTask:     Task<Void, Never>? = nil
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(Color.inkMuted).font(.system(size: 15))
+                    TextField("Buscar ciudad o país…", text: $query)
+                        .font(BT.callout).autocorrectionDisabled()
+                    if !query.isEmpty {
+                        Button {
+                            query            = ""
+                            results          = []
+                            lastValidResults = []
+                            searchTask?.cancel()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(Color.inkMuted)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.md).padding(.bottom, Spacing.sm)
+
+                Divider()
+
+                if isSearching && results.isEmpty {
+                    Spacer(); ProgressView().tint(Color.inkMuted); Spacer()
+                } else if results.isEmpty {
+                    Spacer()
+                    VStack(spacing: Spacing.sm) {
+                        Image(systemName: "location.slash")
+                            .font(.system(size: 30, weight: .light)).foregroundStyle(Color.inkMuted)
+                        Text(query.trimmingCharacters(in: .whitespaces).count < 2
+                             ? "Escribe para buscar"
+                             : "Sin resultados para \"\(query)\"")
+                            .font(BT.callout).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
+                    }
+                    Spacer()
+                } else {
+                    List(results) { place in
+                        Button {
+                            guard !isResolving else { return }
+                            Task { await pick(place) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle().fill(Color.teal.opacity(0.1)).frame(width: 36, height: 36)
+                                    Image(systemName: place.source == "destination" ? "location.circle.fill" : "globe")
+                                        .font(.system(size: 16)).foregroundStyle(Color.teal)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(place.title).font(BT.callout).foregroundStyle(Color.ink)
+                                    if let sub = place.subtitle {
+                                        Text(sub).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                                    }
+                                }
+                                Spacer()
+                                if isResolving { ProgressView().controlSize(.small) }
+                            }
+                            .padding(.vertical, 4).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle("Elegir ciudad")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancelar") { dismiss() } }
+            }
+        }
+        .onChange(of: query) { _, _ in triggerSearch(query: query) }
+    }
+
+    private func triggerSearch(query: String) {
+        searchTask?.cancel()
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 2 else {
+            results          = []
+            lastValidResults = []
+            isSearching      = false
+            return
+        }
+        isSearching = true
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            do {
+                let items = try await APIClient.shared.searchPlaces(query: q)
+                await MainActor.run {
+                    if items.isEmpty {
+                        results = lastValidResults
+                    } else {
+                        results          = items
+                        lastValidResults = items
+                    }
+                    isSearching = false
+                }
+            } catch {
+                print("❌ [PlaceZonePickerSheet] q=\(q) error: \(error)")
+                await MainActor.run { isSearching = false }
+            }
+        }
+    }
+
+    private func pick(_ place: APIPlaceResult) async {
+        await MainActor.run { isResolving = true }
+        defer { Task { await MainActor.run { isResolving = false } } }
+        switch place.source {
+        case "destination":
+            onSelected(ZoneEntry(id: place.id, name: place.title, source: "destination"))
+            await MainActor.run { dismiss() }
+        case "place":
+            onSelected(ZoneEntry(id: place.id, name: place.title, source: "place"))
+            await MainActor.run { dismiss() }
+        default: // nominatim → resolver a place primero
+            guard let lat = place.lat, let lng = place.lng else { return }
+            if let resolved = try? await APIClient.shared.resolvePlace(lat: lat, lng: lng) {
+                onSelected(ZoneEntry(id: resolved.id, name: place.title, source: "place"))
+                await MainActor.run { dismiss() }
+            }
+        }
+    }
+}
+
+// MARK: – GuideStatView
+
+private struct GuideStatView: View {
+    let value: Int
+    let label: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(BT.title3).fontWeight(.semibold).foregroundStyle(Color.ink)
+            Text(label)
+                .font(BT.caption1).foregroundStyle(Color.inkMuted)
         }
     }
 }

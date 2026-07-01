@@ -3,6 +3,42 @@ import Foundation
 // MARK: – API Response Models
 // These map 1:1 to buddy-core JSON responses (snake_case → camelCase via decoder)
 
+// MARK: Place Search — resultado unificado de GET /search/places
+// El cliente solo conoce "lugares". Un lugar puede tener más o menos capacidades.
+
+struct APIPlaceResult: Decodable, Identifiable {
+    let id: String
+    let source: String   // "place" | "destination" | "nominatim"
+    let title: String
+    let subtitle: String?
+    let lat: Double?
+    let lng: Double?
+}
+
+// MARK: Resolved Place — POST /places/resolve (lugar geográfico, tabla `place`)
+
+struct APIResolvedPlace: Decodable {
+    let id: String
+    let name: String
+    let city: String?
+    let country: String?
+}
+
+// MARK: Place Context — GET /places/:id/context
+
+struct APIPlaceGuide: Decodable {
+    let spotCount: Int
+    let visitCount: Int
+    let stickerCount: Int
+}
+
+struct APIPlaceContext: Decodable {
+    let buddies: Int
+    let totalBuddies: Int
+    let stories: Int
+    let status: String   // "active" | "growing" | "busy" | "pioneer"
+}
+
 // MARK: Destination
 
 struct APIDestination: Decodable, Identifiable {
@@ -141,10 +177,12 @@ struct APIJourney: Decodable, Identifiable, Hashable {
     let arrivalAt: Date?
     let departureAt: Date?
     let destination: APIDestinationRef?
+    let place: APIPlaceRef?               // para journeys GPS-only (sin destination)
     let users: APIUserRef?
     let journeyPlace: [APIJourneyPlace]?
     let buddyCount: Int?
     let destinationId: String?
+    let placeId: String?         // para journeys GPS-only (sin destination)
     let tripId: String?          // contenedor: varios lugares = un viaje
     let knowsHowToGet: Bool?
     let hasLodging: Bool?
@@ -180,6 +218,12 @@ struct APIDestinationRef: Decodable {
     let coverUrl: String?
     var lat: Double? = nil
     var lng: Double? = nil
+}
+
+struct APIPlaceRef: Decodable {
+    let id: String
+    let name: String
+    let city: String?
 }
 
 // Página del feed "Historias de viajeros" (cursor pagination)
@@ -259,6 +303,7 @@ struct APIBuddyMeProfile: Decodable {
     let verificationStatus: String?
     let destinationIds: [String]?
     let activeZoneIds: [String]?
+    let placeIds: [String]?
     let destination: APIDestinationRef?
 }
 
