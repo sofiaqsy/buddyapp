@@ -12,7 +12,8 @@ struct InicioView: View {
     @State private var navPath = NavigationPath()
     @State private var showPendingContactSheet  = false
     @State private var isFindingBuddy           = false   // creando/reusando trip en background
-    @State private var homeBuddyCount           = 0       // buddies cerca, para el composer de la Home
+    @State private var homeBuddyCount           = 0
+    @State private var homeCommunityContext: APIPlaceContext? = nil
     @State private var homeHelpSeed: (category: String, description: String?)? = nil  // categoría elegida en Home
     @State private var confirmedHelpSeed: (category: String, description: String?)? = nil  // seed confirmado para la sheet
     /// Drives the home-help sheet. Non-nil = sheet open. Atom­ically carries
@@ -27,6 +28,8 @@ struct InicioView: View {
     @State private var liveJourneys: [APIJourney] = []   // active + planning, para swipe
     @State private var currentTripPage = 0
     @State private var activeMatch: APIMatch? = nil
+    @State private var pioneerConfirmation: String? = nil   // banner tras auto-crear request en lugar sin buddies
+    @State private var showPublishSuccessToast = false
     @State private var isLoadingData = true
     @State private var loadDataTask: Task<Void, Never>? = nil
     @State private var publicJourneys: [APIJourney] = []
@@ -87,172 +90,38 @@ struct InicioView: View {
 
     var body: some View {
         NavigationStack(path: $navPath) {
-          ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Color.clear.frame(height: 0).id("inicioTop")   // ancla para volver arriba
-
-                    // Inline banner: permanente mientras GPS detecte destino distinto al trip
-                    if let dest = locationPromptDestination {
-                        LocationPromptBanner(destination: dest) {
-                            requireIdentity {
-                                Task { await openHelp(forDestinationId: dest.id) }
-                            }
-                        }
-                        .padding(.horizontal, Spacing.edge)
-                        .padding(.top, Spacing.md)
-                    }
-
-                    Group {
-                        if isLoadingData {
-                            SkeletonBox(cornerRadius: 20)
-                                .frame(height: 200)
-                        } else if !liveJourneys.isEmpty {
-                            VStack(spacing: Spacing.sm) {
-                                if liveJourneys.count == 1 {
-                                    tripCard(for: liveJourneys[0])
-                                } else {
-                                    // Varios trips → carrusel: jala a la izquierda para el otro
-                                    TabView(selection: $currentTripPage) {
-                                        ForEach(Array(liveJourneys.enumerated()), id: \.element.id) { idx, j in
-                                            tripCard(for: j).tag(idx)
-                                        }
-                                    }
-                                    .tabViewStyle(.page(indexDisplayMode: .never))
-                                    .frame(height: min(360, UIScreen.main.bounds.height * 0.44))
-                                }
-
-                                // Con un trip igual se puede planear otro lugar.
-                                RegisterCTACard(destinations: destinations) {
-                                    requireIdentity { navPath.append("register") }
-                                }
-                            }
-                        } else {
-                            VStack(alignment: .leading, spacing: Spacing.xs) {
-                                // 1. Contexto — ubicación detectada, o invitación a activarla.
-                                locationContext
-                                // 2. Ayuda — el composer ES la Home.
-                                CategoryPickerView(buddyCount: homeBuddyCount) { cat, desc in
-                                    requireIdentity {
-                                        Task { await submitHelpFromHome(category: cat, description: desc) }
-                                    }
-                                }
-                                .padding(.horizontal, -Spacing.edge)   // el composer maneja su propio margen
-                                .opacity(isFindingBuddy ? 0.5 : 1)
-                                .disabled(isFindingBuddy)
-
-                                // 5. Planear un viaje — secundario, opcional.
-                                RegisterCTACard(destinations: destinations) {
-                                    requireIdentity { navPath.append("register") }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, Spacing.edge)
-                    .padding(.top, Spacing.md)
-
-                    communitySection
-                        .padding(.top, Spacing.xl)
-                }
-                .padding(.bottom, 100)
-            }
-            .background(Color.canvas)
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: APIJourney.self) { journey in
-                TripDetailGate(journey: journey, match: activeMatch, unreadCount: 0)
-                    .environmentObject(routeStore)
-            }
-            .navigationDestination(for: String.self) { route in
-                if route == "register" {
-                    // Reemplaza el formulario por el confirm → "atrás" vuelve al tab, no al form
-                    RegisterTripView { journey in
-                        navPath = NavigationPath()
-                        if homeHelpSeed != nil {
-                            // Flujo "Hablar con un buddy" sin ubicación → ir directo a buscar buddy
-                            confirmedHelpSeed = homeHelpSeed  // preservar antes de limpiar
-                            homeHelpSeed = nil
-                            activeJourney = journey
-                            lastContactSheetJourney = journey
-                            contactSheetJourney = journey
-                        } else {
-                            navPath.append(journey)
-                        }
-                    }
-                } else if route == "tripDetail", let journey = activeJourney {
-                    TripDetailView(
-                        route: routeStore.route,
-                        match: activeMatch,
-                        journey: journey,
-                        unreadCount: pendingReply ? 1 : 0
-                    )
-                    .environmentObject(routeStore)
-                }
-            }
-            // Carga UNA sola vez; los eventos (activar/publicar trip) y el
-            // pull-to-refresh disparan las recargas — no cada visita al tab
-            .task {
-                guard !hasLoaded else { return }
-                hasLoaded = true
-                await loadData()
-            }
-            // Revalidación ligera por visita: SOLO el estado del trip
-            // (1 request de ~150ms) — el hero card nunca queda obsoleto.
-            // Destinos y feed siguen en política de carga única.
-            .onAppear {
-                if hasLoaded {
-                    if skipNextRefresh { skipNextRefresh = false; return }
-                    Task { await refreshTripState() }
-                }
-            }
-            // Deep-link desde chat: reactive al cambio de pending (la vista queda
-            // viva en el TabView, así que .onAppear ya no vuelve a dispararse)
-            .onChange(of: placeDeepLink.pending != nil) { _, hasPending in
-                if hasPending, let journey = activeJourney ?? pendingJourney {
-                    navPath = NavigationPath()
-                    navPath.append(journey)
-                }
-            }
-            .refreshable { await loadData() }
-            // Al volver del flujo de registro (pop a raíz), un refresh dirigido
-            .onChange(of: navPath.count) { old, new in
-                if new == 0 && old > 0 { Task { await loadData() } }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
-                Task { await loadData() }
-            }
-            // Se cerró un apoyo → refresca "Comunidad Viva" + estado del trip
-            .onReceive(NotificationCenter.default.publisher(for: .helpCompleted)) { _ in
-                Task { await loadRecentHelp(force: true); await refreshTripState() }
-            }
-            // Aceptación/cierre en vivo (SSE): el buddy acepta → aparece su foto;
-            // se cierra → vuelve el ícono. Sin salir y entrar al Home.
-            .onChange(of: travelerMatchSignature) { _, _ in
-                Task { await refreshTripState() }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { _ in
-                skipNextRefresh = true   // evita que .onAppear sobreescriba el estado
-                activeJourney  = nil
-                pendingJourney = nil
-                navPath = NavigationPath()
-                Task { await loadData() }
-            }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Image("BuddyLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 30)
-                }
-            }
-            // Re-tap del tab Inicio → vuelve arriba + recarga
-            .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
-                guard note.object as? Int == AppTab.inicio.rawValue else { return }
-                if !navPath.isEmpty { navPath = NavigationPath() }
-                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("inicioTop", anchor: .top) }
-                Task { await loadData() }
-            }
-          }
+            scrollContent
         }
+        .overlay(alignment: .bottom) {
+            if let msg = pioneerConfirmation {
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.brand)
+                    Text(msg)
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.ink)
+                    Spacer()
+                    Button { withAnimation { pioneerConfirmation = nil } } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                }
+                .padding(Spacing.md)
+                .background(Color.sandLight)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+                .padding(.horizontal, Spacing.edge)
+                .padding(.bottom, 100)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                        withAnimation { pioneerConfirmation = nil }
+                    }
+                }
+            }
+        }
+        .toast(isPresented: $showPublishSuccessToast, message: "¡Historia publicada! 🎉")
         .onReceive(NotificationCenter.default.publisher(for: .journeyActivated)) { _ in
             navPath = NavigationPath()
             pendingNavToDetail = true
@@ -300,7 +169,13 @@ struct InicioView: View {
             homeHelpSeed = nil
             Task { await refreshTripState() }
         }) { item in
-            ContactarBuddyView(destinationId: item.destinationId, initialRequest: item.seed)
+            let destName = item.journey?.destination?.name ?? nearestDestination?.name
+            ContactarBuddyView(
+                journey: item.journey,
+                destinationId: item.destinationId,
+                destinationName: destName,
+                initialRequest: item.seed
+            )
         }
         .sheet(isPresented: $showPendingContactSheet) {
             let _ = print("🟡 [sheet:pending] render — pendingJourney=\(pendingJourney?.id ?? "nil")")
@@ -312,7 +187,7 @@ struct InicioView: View {
         // NUNCA se crea un trip en silencio: solo si el usuario confirma.
         .onChange(of: locationService.userLocation) { _, _ in
             evaluateLocationPrompt()
-            Task { await refreshHomeBuddyCount() }
+            Task { await refreshHomeCommunityContext() }
         }
         .onChange(of: authState.isLoggedIn) { _, loggedIn in
             if !loggedIn {
@@ -361,7 +236,7 @@ struct InicioView: View {
     private func evaluateLocationPrompt() {
         let near = nearestDestination
         let liveDestIds = Set(liveJourneys.compactMap { $0.destination?.id ?? $0.destinationId })
-        print("📍 [LocationPrompt] userLoc=\(locationService.userLocation != nil) dests=\(destinations.count) nearest=\(near?.name ?? "nil") liveTrips=\(liveJourneys.map { ($0.destination?.name ?? "·") }) liveDestIds=\(liveDestIds.count)")
+        print("📍 [LocationPrompt] userLoc=\(locationService.userLocation != nil) dests=\(destinations.count) nearest=\(near?.name ?? "nil") liveTrips=\(liveJourneys.map { ($0.destination?.name ?? $0.place?.name ?? "·") }) liveDestIds=\(liveDestIds.count)")
         guard let near, !liveJourneys.isEmpty else {
             print("📍 [LocationPrompt] → oculto (sin GPS-dest o sin trips vivos)")
             locationPromptDestination = nil
@@ -374,9 +249,14 @@ struct InicioView: View {
     // MARK: – Contexto de ubicación
 
     /// Muestra "ESTÁS EN {ciudad}" si hay ubicación; si no, ofrece activarla.
+    /// Si la ubicación YA está concedida pero el usuario no está cerca de ningún
+    /// destino conocido, no mostramos nada (el botón sería engañoso: ya está activa).
     @ViewBuilder
     private var locationContext: some View {
-        if let city = nearestDestination?.city {
+        let authorized = locationService.authorizationStatus == .authorizedWhenInUse ||
+                         locationService.authorizationStatus == .authorizedAlways
+        let displayCity = nearestDestination?.city ?? locationService.currentCity
+        if let city = displayCity {
             HStack(spacing: 5) {
                 Image(systemName: "location.fill")
                     .font(.system(size: 11, weight: .semibold))
@@ -384,7 +264,7 @@ struct InicioView: View {
                     .font(BT.caption1.weight(.semibold))
             }
             .foregroundStyle(Color.brand)
-        } else {
+        } else if !authorized {
             Button {
                 Haptic.light()
                 switch locationService.authorizationStatus {
@@ -426,10 +306,32 @@ struct InicioView: View {
     /// Resuelve el destino por GPS, asegura el Trip (reusa o crea) y abre el flujo
     /// de ayuda. Si no hay destino detectable, cae al registro manual existente.
     private func findABuddy() async {
-        guard let dest = nearestDestination else {
-            navPath.append("register"); return
+        if let dest = nearestDestination {
+            await openHelp(forDestinationId: dest.id)
+        } else if let loc = locationService.userLocation {
+            await pioneerHelpFlow(category: "general", description: nil, loc: loc)
+        } else {
+            navPath.append("register")
         }
-        await openHelp(forDestinationId: dest.id)
+    }
+
+    /// Flujo pioneer: el lugar no tiene buddies ni destino registrado.
+    /// Crea el Journey (GPS → place) y la Request en silencio, luego muestra
+    /// un banner de confirmación. El usuario aprende un único botón.
+    private func pioneerHelpFlow(category: String, description: String?, loc: CLLocation) async {
+        await MainActor.run { isFindingBuddy = true }
+        defer { Task { await MainActor.run { isFindingBuddy = false } } }
+        do {
+            let journey  = try await APIClient.shared.ensureActiveTripForGPS(lat: loc.coordinate.latitude, lng: loc.coordinate.longitude)
+            let _        = try await APIClient.shared.createHelpRequestForJourney(journeyId: journey.id, category: category, description: description)
+            let city     = locationService.currentCity ?? "tu zona"
+            await MainActor.run {
+                withAnimation { pioneerConfirmation = "Registramos tu solicitud en \(city). Te avisaremos cuando haya un buddy disponible." }
+            }
+        } catch {
+            print("❌ [pioneerHelpFlow] error: \(error)")
+            await MainActor.run { navPath.append("register") }
+        }
     }
 
     /// Abre el flujo de ayuda para un destino — SIN crear trip todavía.
@@ -445,10 +347,51 @@ struct InicioView: View {
     /// El usuario eligió categoría/texto DIRECTO en la Home → abre el flujo de
     /// ayuda ya en "buscando" SIN crear trip (se crea al aceptar un buddy).
     private func submitHelpFromHome(category: String, description: String?) async {
+        // Si hay un trip activo, usarlo directamente sin importar la ubicación detectada
+        if let activeJourney = liveJourneys.first {
+            // Pioneer: no hay buddies en este lugar → redirigir al tab Tu trip
+            if homeCommunityContext?.totalBuddies == 0 {
+                print("📍 [submitHelpFromHome] pioneer con trip activo → Tu trip tab")
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .switchToTab,
+                        object: nil,
+                        userInfo: ["tab": AppTab.trips.rawValue]
+                    )
+                }
+                return
+            }
+            let destIdOpt = activeJourney.destination?.id ?? activeJourney.destinationId
+            if let destId = destIdOpt {
+                await MainActor.run {
+                    homeHelpSheet = HomeHelpItem(
+                        destinationId: destId,
+                        seed: (category, description),
+                        journey: activeJourney
+                    )
+                }
+                return
+            }
+        }
         guard let dest = nearestDestination else {
-            await MainActor.run {
-                homeHelpSeed = (category, description)
-                navPath.append("register")
+            if let loc = locationService.userLocation, homeCommunityContext?.totalBuddies == 0 {
+                // Pioneer sin trip: crear el trip + request, luego ir a Tu trip
+                print("📍 [submitHelpFromHome] pioneer sin trip + cat=\(category) → crear trip + Tu trip tab")
+                await pioneerHelpFlow(category: category, description: description, loc: loc)
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .switchToTab,
+                        object: nil,
+                        userInfo: ["tab": AppTab.trips.rawValue]
+                    )
+                }
+            } else if let loc = locationService.userLocation, homeCommunityContext != nil {
+                await pioneerHelpFlow(category: category, description: description, loc: loc)
+            } else {
+                await MainActor.run {
+                    homeHelpSeed = (category, description)
+                    navPath.append("register")
+                }
             }
             return
         }
@@ -459,11 +402,238 @@ struct InicioView: View {
     }
 
     /// Cuenta de buddies cerca, para el composer de la Home.
-    private func refreshHomeBuddyCount() async {
-        guard activeJourney == nil, pendingJourney == nil,
-              let dest = nearestDestination else { return }
-        if let count = try? await APIClient.shared.fetchBuddyCount(destinationId: dest.id) {
-            await MainActor.run { homeBuddyCount = count }
+    private var scrollContent: some View {
+        ScrollViewReader { proxy in
+            scrollBody
+                .background(Color.canvas)
+                // Keyboard pre-warmer lives in BuddyChatView — InicioView has no knowledge
+                // of the keyboard. See KeyboardPrewarmer in ContactarBuddyView.swift.
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationDestination(for: APIJourney.self) { journey in
+                    TripDetailGate(journey: journey, match: activeMatch, unreadCount: 0)
+                        .environmentObject(routeStore)
+                }
+                .navigationDestination(for: String.self) { route in
+                    stringDestination(route: route)
+                }
+                .task {
+                    guard !hasLoaded else { return }
+                    hasLoaded = true
+                    await loadData()
+                }
+                .onAppear {
+                    if hasLoaded {
+                        if skipNextRefresh { skipNextRefresh = false; return }
+                        Task { await refreshTripState() }
+                    }
+                }
+                .onChange(of: placeDeepLink.pending != nil) { _, hasPending in
+                    if hasPending, let journey = activeJourney ?? pendingJourney {
+                        navPath = NavigationPath()
+                        navPath.append(journey)
+                    }
+                }
+                .refreshable { await loadData() }
+                .onChange(of: navPath.count) { old, new in
+                    if new == 0 && old > 0 { Task { await loadData() } }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
+                    Task { await loadData() }
+                    showPublishSuccessToast = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .helpCompleted)) { _ in
+                    Task { await loadRecentHelp(force: true); await refreshTripState() }
+                }
+                .onChange(of: travelerMatchSignature) { _, _ in
+                    Task { await refreshTripState() }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { _ in
+                    skipNextRefresh = true
+                    activeJourney  = nil
+                    pendingJourney = nil
+                    navPath = NavigationPath()
+                    Task { await loadData() }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Image("BuddyLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 30)
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
+                    guard note.object as? Int == AppTab.inicio.rawValue else { return }
+                    if !navPath.isEmpty { navPath = NavigationPath() }
+                    withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("inicioTop", anchor: .top) }
+                    Task { await loadData() }
+                }
+        }
+    }
+
+    private var scrollBody: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: 0).id("inicioTop")
+
+                if let dest = locationPromptDestination {
+                    LocationPromptBanner(destination: dest) {
+                        requireIdentity {
+                            Task { await openHelp(forDestinationId: dest.id) }
+                        }
+                    }
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.top, Spacing.md)
+                }
+
+                Group {
+                    if isLoadingData {
+                        // Real components, statically redacted — not a hand-built fake
+                        // screen. (Tried .shimmer() on top of the white card surfaces —
+                        // its .plusLighter blend mode blew the whole thing out to solid
+                        // white. Static redacted reads clean, App Store-style, no risk.)
+                        // Same VStack shape as noTripComposer (the state this
+                        // almost always resolves to), so when data arrives there's no
+                        // layout jump: placeholder bars just turn into real text/icons
+                        // in place.
+                        VStack(alignment: .leading, spacing: Spacing.xs) {
+                            SkeletonBox(cornerRadius: 4).frame(width: 130, height: 14)
+                            CategoryPickerView(isSkeleton: true) { _, _ in }
+                                .padding(.horizontal, -Spacing.edge)
+                            RegisterCTACard(destinations: []) {}
+                                .redacted(reason: .placeholder)
+                                .disabled(true)
+                        }
+                        .skeletonPulse()
+                    } else if !liveJourneys.isEmpty {
+                        activeTripComposer
+                    } else {
+                        noTripComposer
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.md)
+
+                communitySection
+                    .padding(.top, Spacing.xl)
+            }
+            .padding(.bottom, 100)
+        }
+    }
+
+    @ViewBuilder private var noTripComposer: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            locationContext
+            CategoryPickerView(
+                buddyCount: homeBuddyCount,
+                destinationName: nearestDestination?.name ?? locationService.currentCity,
+                communityContext: homeCommunityContext,
+                pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0
+            ) { cat, desc in
+                requireIdentity {
+                    Task { await submitHelpFromHome(category: cat, description: desc) }
+                }
+            }
+            .padding(.horizontal, -Spacing.edge)
+            .opacity(isFindingBuddy ? 0.5 : 1)
+            .disabled(isFindingBuddy)
+
+            RegisterCTACard(destinations: destinations) {
+                requireIdentity { navPath.append("register") }
+            }
+        }
+    }
+
+    @ViewBuilder private func stringDestination(route: String) -> some View {
+        if route == "register" {
+            RegisterTripView { journey in
+                navPath = NavigationPath()
+                if homeHelpSeed != nil {
+                    confirmedHelpSeed = homeHelpSeed
+                    homeHelpSeed = nil
+                    activeJourney = journey
+                    lastContactSheetJourney = journey
+                    contactSheetJourney = journey
+                } else {
+                    NotificationCenter.default.post(
+                        name: .switchToTab,
+                        object: nil,
+                        userInfo: ["tab": AppTab.trips.rawValue]
+                    )
+                }
+            }
+        } else if route == "tripDetail", let journey = activeJourney {
+            TripDetailView(
+                route: routeStore.route,
+                match: activeMatch,
+                journey: journey,
+                unreadCount: pendingReply ? 1 : 0
+            )
+            .environmentObject(routeStore)
+        }
+    }
+
+    @ViewBuilder private var activeTripComposer: some View {
+        let activeDest = liveJourneys.first?.destination?.name ?? liveJourneys.first?.place?.name
+        let activeJrn  = liveJourneys.first
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            CategoryPickerView(
+                buddyCount: homeBuddyCount,
+                destinationName: activeDest,
+                onDestinationTap: {
+                    if let j = activeJrn { navPath.append(j) }
+                },
+                activeBuddyName: activeMatch.flatMap { m in
+                    ["accepted", "active", "pending"].contains(m.status)
+                        ? m.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
+                        : nil
+                },
+                activeBuddyAvatarUrl: activeMatch.flatMap { m in
+                    ["accepted", "active", "pending"].contains(m.status) ? m.buddy?.avatarUrl : nil
+                },
+                communityContext: homeCommunityContext
+            ) { cat, desc in
+                requireIdentity {
+                    Task { await submitHelpFromHome(category: cat, description: desc) }
+                }
+            }
+            .padding(.horizontal, -Spacing.edge)
+            .opacity(isFindingBuddy ? 0.5 : 1)
+            .disabled(isFindingBuddy)
+
+            RegisterCTACard(destinations: destinations) {
+                requireIdentity { navPath.append("register") }
+            }
+        }
+    }
+
+    private func refreshHomeCommunityContext() async {
+        // Si hay un trip activo, cargar el contexto de su destino o lugar
+        if let j = liveJourneys.first {
+            if let destId = j.destination?.id ?? j.destinationId,
+               let ctx = try? await APIClient.shared.fetchPlaceContext(id: destId, source: "destination") {
+                await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+            } else if let placeId = j.placeId,
+                      let ctx = try? await APIClient.shared.fetchPlaceContext(id: placeId, source: "place") {
+                await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+            } else {
+                await MainActor.run {
+                    homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
+                    homeBuddyCount = 0
+                }
+            }
+            return
+        }
+        // Sin trip activo — usar destino más cercano o GPS
+        if let dest = nearestDestination {
+            if let ctx = try? await APIClient.shared.fetchPlaceContext(id: dest.id, source: "destination") {
+                await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+            }
+        } else if locationService.userLocation != nil {
+            await MainActor.run {
+                homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
+                homeBuddyCount = 0
+            }
         }
     }
 
@@ -518,7 +688,10 @@ struct InicioView: View {
         var resolvedMatch: APIMatch? = nil
         if active != nil {
             let matches = (try? await APIClient.shared.fetchMatches()) ?? []
-            resolvedMatch = matches.first(where: { ["accepted", "active", "pending"].contains($0.status) })
+            let myId = Session.travelerId
+            resolvedMatch = matches.first(where: {
+                ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
+            })
         }
 
         await MainActor.run {
@@ -558,7 +731,8 @@ struct InicioView: View {
         if let active {
             let matches = try? await APIClient.shared.fetchMatches()
             let all = matches ?? []
-            let found = all.first(where: { ["accepted", "active", "pending"].contains($0.status) })
+            let myId2 = Session.travelerId
+            let found = all.first(where: { ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId2 })
             await MainActor.run {
                 activeJourney = active
                 activeMatch = found
@@ -621,7 +795,7 @@ struct InicioView: View {
             print("🏠 [loadData] sin sesión — solo contenido público")
             await MainActor.run { isLoadingData = false }
             await loadFeed()
-            await refreshHomeBuddyCount()
+            await refreshHomeCommunityContext()
             return
         }
         // ── Contenido PRIVADO: guest y verified cargan sus journeys ──
@@ -673,7 +847,14 @@ struct InicioView: View {
             if shouldFetchMatch {
                 let matches = try await APIClient.shared.fetchMatches()
                 print("🏠 [loadData] \(matches.count) match(es): \(matches.map { "\($0.status ?? "?")" })")
-                let found = matches.first(where: { ["accepted", "active", "pending"].contains($0.status) })
+                // Must filter by travelerId: user may simultaneously be a buddy for
+                // another traveler, and fetchMatches() returns matches in both roles.
+                // Without this guard, the buddy-role match can win the .first() and
+                // the home shows the user's own name in the "Hablar con tu buddy" card.
+                let myId = Session.travelerId
+                let found = matches.first(where: {
+                    ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
+                })
                 await MainActor.run { activeMatch = found }
                 await chatStore.load()
             }
@@ -698,7 +879,7 @@ struct InicioView: View {
         await loadFeed()
 
         // Buddies cerca para el composer de la Home (si no hay trip)
-        await refreshHomeBuddyCount()
+        await refreshHomeCommunityContext()
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
@@ -711,6 +892,16 @@ struct InicioView: View {
             do {
                 let page = try await APIClient.shared.fetchStories(
                     destinationId: myDestinationId, lat: feedLat, lng: feedLng, cursor: nil)
+                print("🗞️ [loadFeed] items=\(page.items.count)")
+                for (i, item) in page.items.enumerated() {
+                    let thumbs = item.pageThumbs ?? []
+                    let dest   = item.destination?.name ?? item.title ?? "nil"
+                    let author = item.users?.fullName ?? "nil"
+                    print("🗞️ [loadFeed] [\(i)] id=\(item.id.prefix(8)) dest=\(dest) author=\(author) thumbs=\(thumbs.count)")
+                    if thumbs.isEmpty {
+                        print("🗞️ [loadFeed] [\(i)] ⚠️ SIN THUMBS — mostrará fondo")
+                    }
+                }
                 publicJourneys = page.items
                 seenStoryIds = Set(page.items.map(\.id))
                 feedCursor = page.nextCursor
@@ -831,24 +1022,31 @@ struct InicioView: View {
     private var communitySection: some View {
         Group {
             if isLoadingFeed && publicJourneys.isEmpty {
-                // Skeleton de publicación: header + foto, mismo layout que la real
-                VStack(alignment: .leading, spacing: Spacing.md) {
+                // Skeleton de publicación: mismo layout, mismo orden (foto → footer) y
+                // mismo chrome (radio/sombra/padding) que PublishedTripCard real, para
+                // que al llegar el feed no haya salto — solo las barras se vuelven texto.
+                VStack(alignment: .leading, spacing: Spacing.lg) {
                     Text("HISTORIAS DE VIAJEROS")
                         .font(BT.eyebrow)
                         .tracking(1.5)
                         .foregroundStyle(Color.ink)
                         .padding(.horizontal, Spacing.edge)
                     VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: 10) {
-                            SkeletonBox(cornerRadius: 18).frame(width: 36, height: 36)
-                            SkeletonBox(cornerRadius: 6).frame(width: 140, height: 14)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
                         SkeletonBox(cornerRadius: 0).frame(height: 480)
+                        HStack(spacing: 8) {
+                            SkeletonBox(cornerRadius: 12).frame(width: 24, height: 24)
+                            SkeletonBox(cornerRadius: 4).frame(width: 100, height: 13)
+                            Spacer(minLength: 4)
+                            SkeletonBox(cornerRadius: 4).frame(width: 50, height: 12)
+                        }
+                        .padding(14)
                     }
+                    .background(Color.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
+                    .padding(.horizontal, Spacing.edge)
                 }
+                .skeletonPulse()
             } else if feedFailed {
                 // El feed falló tras reintentos — se dice y se ofrece reintentar
                 VStack(spacing: Spacing.sm) {
@@ -884,6 +1082,7 @@ struct InicioView: View {
                     // Scroll infinito: al acercarse al final, carga el siguiente lote.
                     ForEach(publicJourneys) { journey in
                         PublishedTripCard(journey: journey)
+                            .equatable()  // skip re-render if journey.id + flags unchanged
                             .onAppear {
                                 if journey.id == publicJourneys.suffix(4).first?.id {
                                     Task { await loadMoreFeed() }
@@ -931,10 +1130,11 @@ struct TripDetailGate: View {
     var unreadCount: Int = 0
     @EnvironmentObject var routeStore: RouteStore
     @State private var failed = false
+    @State private var loaded = false   // true solo cuando cargamos la ruta de ESTE journey
 
     var body: some View {
         Group {
-            if routeStore.isReady {
+            if loaded && routeStore.isReady {
                 TripDetailView(route: routeStore.route, match: match,
                                journey: journey, unreadCount: unreadCount)
                     .environmentObject(routeStore)
@@ -968,15 +1168,26 @@ struct TripDetailGate: View {
                     Color.canvas.ignoresSafeArea()
                     ProgressView().tint(Color.inkMuted)
                 }
-                .task { await loadRoute() }
             }
         }
+        .task { await loadRoute() }  // siempre ejecuta, independiente del caché
     }
 
     private func loadRoute() async {
+        // Siempre resetear isReady para que no se muestre el caché de otro destino
+        await MainActor.run { routeStore.isReady = false }
         let destId = journey.destination?.id ?? journey.destinationId
-        await routeStore.fetchDestinationFromAPI(id: destId)
-        if !routeStore.isReady { failed = true }
+        if let destId {
+            print("🗺️ [TripDetailGate] destination trip → fetchDestination destId=\(destId.prefix(8))")
+            await routeStore.fetchDestinationFromAPI(id: destId)
+        } else if let placeId = journey.placeId {
+            print("🗺️ [TripDetailGate] GPS trip → fetchPlaceRoute placeId=\(placeId.prefix(8))")
+            await routeStore.fetchPlaceRouteFromAPI(placeId: placeId)
+        } else {
+            print("⚠️ [TripDetailGate] sin destId ni placeId — fallback a primer destino")
+            await routeStore.fetchDestinationFromAPI(id: nil)
+        }
+        if routeStore.isReady { loaded = true } else { failed = true }
     }
 }
 
@@ -1060,22 +1271,21 @@ struct FindBuddyPrimaryCTA: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
             VStack(alignment: .leading, spacing: 6) {
-                // Contexto: ubicación detectada (si la hay) — sin pedir permiso.
-                if let city = destinationName {
-                    HStack(spacing: 4) {
-                        Image(systemName: "location.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text("ESTÁS EN \(city.uppercased())")
-                            .font(BT.eyebrow).tracking(1.5)
-                    }
-                    .foregroundStyle(Color.sand)
-                }
                 Text("¿Necesitas ayuda?")
                     .font(BT.title1)
                     .foregroundStyle(Color.ink)
-                Text("Un buddy local te ayuda en minutos.")
+                if let city = destinationName {
+                    (Text("Un buddy local te ayuda en minutos en ")
+                        .foregroundStyle(Color.inkMuted)
+                    + Text(city)
+                        .foregroundStyle(Color.brand)
+                        .fontWeight(.semibold))
                     .font(BT.callout)
-                    .foregroundStyle(Color.inkMuted)
+                } else {
+                    Text("Un buddy local te ayuda en minutos.")
+                        .font(BT.callout)
+                        .foregroundStyle(Color.inkMuted)
+                }
             }
 
             Button(action: { Haptic.medium(); onTap() }) {
@@ -1110,6 +1320,7 @@ struct HomeHelpItem: Identifiable {
     let id = UUID()
     let destinationId: String
     let seed: (category: String, description: String?)?
+    var journey: APIJourney? = nil
 }
 
 // Tarjeta SECUNDARIA: planear un viaje es opcional, no compite con pedir ayuda.
@@ -1211,9 +1422,14 @@ struct PublishedTripCard: View {
     @State private var showStory = false
     @State private var page = 0
 
-    private var destName: String { journey.destination?.name ?? journey.title ?? "Trip" }
+    private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
     private var authorName: String { (journey.users?.fullName ?? "Buddy").capitalized }
-    private var thumbs: [String] { (journey.pageThumbs ?? []).filter { !$0.isEmpty } }
+    private var thumbs: [String] {
+        let raw = journey.pageThumbs ?? []
+        let filtered = raw.filter { !$0.isEmpty }
+        print("🖼️ [StoryCard] id=\(journey.id.prefix(8)) pageThumbs.raw=\(raw.count) filtered=\(filtered.count) urls=\(filtered)")
+        return filtered
+    }
     private var durationLine: String? {
         guard let d = journey.durationDays else { return nil }
         return "en \(d) \(d == 1 ? "día" : "días")"
@@ -1247,9 +1463,29 @@ struct PublishedTripCard: View {
             .aspectRatio(1 / memoirRatio, contentMode: .fit)
             .overlay {
                 GeometryReader { geo in
-                    ZStack(alignment: .bottom) {
+                    ZStack {
                         carouselMedia(width: geo.size.width, height: geo.size.height)
-                        if thumbs.count > 1 { pageIndicator }
+                        VStack(spacing: 0) {
+                            // Scrim: garantiza legibilidad en fotos claras
+                            LinearGradient(
+                                colors: [.black.opacity(0.38), .clear],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                            .frame(height: 64)
+                            Spacer()
+                        }
+                        VStack(spacing: 0) {
+                            HStack {
+                                Text(destName)
+                                    .font(BT.footnoteBold)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 12)
+                                Spacer()
+                            }
+                            Spacer()
+                            if thumbs.count > 1 { pageIndicator }
+                        }
                     }
                     // Pin ZStack to the resolved frame so it cannot report a larger
                     // layout size back up the tree (guards against any future child
@@ -1264,6 +1500,7 @@ struct PublishedTripCard: View {
 
     @ViewBuilder
     private func carouselMedia(width w: CGFloat, height h: CGFloat) -> some View {
+        let _ = print("🎠 [carouselMedia] id=\(journey.id.prefix(8)) thumbs=\(thumbs.count) coverUrl=\(journey.destination?.coverUrl ?? "nil")")
         if thumbs.isEmpty {
             // No memoir pages: show destination cover with scaledToFill.
             CachedImage(urlString: journey.destination?.coverUrl) { img in
@@ -1345,6 +1582,18 @@ struct PublishedTripCard: View {
     }
 }
 
+// Equatable conformance for .equatable() — journey feed items are immutable snapshots;
+// same journey.id + same display flags → skip body re-evaluation when parent re-renders
+// (e.g. on every ChatStore.load() / refreshTripState cycle).
+extension PublishedTripCard: Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.journey.id == rhs.journey.id &&
+        lhs.featured == rhs.featured &&
+        lhs.matchesMyDestination == rhs.matchesMyDestination &&
+        lhs.nearby == rhs.nearby
+    }
+}
+
 // MARK: – STORY VIEWER (pantalla completa de las páginas del trip)
 
 struct StoryViewerSheet: View {
@@ -1353,7 +1602,7 @@ struct StoryViewerSheet: View {
     @State private var thumbs: [String] = []
     @State private var current = 0
 
-    private var destName: String { journey.destination?.name ?? journey.title ?? "Trip" }
+    private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
 
     var body: some View {
         ZStack(alignment: .top) {
