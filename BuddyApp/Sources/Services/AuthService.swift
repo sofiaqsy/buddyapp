@@ -233,29 +233,21 @@ final class AuthService {
 
     // MARK: – Social Sign In
 
-    /// Punto de entrada único para cualquier proveedor social.
-    /// Retorna `true` si el perfil ya está completo (saltar pantalla de nombre).
-    @discardableResult
-    func signIn(with provider: IdentityProvider) async throws -> Bool {
+    /// Obtiene la credencial del proveedor y la envía al backend.
+    /// Devuelve AuthResult — la decisión de navegación es del coordinador, no aquí.
+    func signIn(with provider: IdentityProvider) async throws -> AuthResult {
         let credential = try await provider.signIn()
         return try await _postToBackend(credential)
     }
 
-    private func _postToBackend(_ credential: IdentityCredential) async throws -> Bool {
-        let endpoint: String
-        var payload: [String: Any]
-
-        switch credential.provider {
-        case .apple:
-            endpoint = "apple"
-            payload  = ["identity_token": credential.identityToken]
-        case .google:
-            endpoint = "google"
-            payload  = ["id_token": credential.identityToken]
-        }
+    private func _postToBackend(_ credential: IdentityCredential) async throws -> AuthResult {
+        var payload: [String: Any] = [
+            "provider":       credential.provider.rawValue,
+            "identity_token": credential.identityToken,
+        ]
         if let name = credential.fullName { payload["full_name"] = name }
 
-        let url = URL(string: "\(coreURL)/\(endpoint)")!
+        let url = URL(string: "\(coreURL)/social")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -265,23 +257,24 @@ final class AuthService {
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, response) = try await URLSession.shared.data(for: req)
-        let status  = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
-        print("[\(endpoint)] → \(status): \(bodyStr)")
+        let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let bodyStr    = String(data: data, encoding: .utf8) ?? "empty"
+        print("[social/\(credential.provider.rawValue)] → \(httpStatus): \(bodyStr)")
 
-        guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
+        guard (200...299).contains(httpStatus) else { throw AuthError.sendFailed(bodyStr) }
 
-        var hasProfile = false
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            hasProfile = json["has_profile"] as? Bool ?? false
-            if hasProfile { UserDefaults.standard.set(true, forKey: "buddy.onboardingDone") }
-            if let tid  = json["traveler_id"]    as? String,
-               let ttok = json["traveler_token"] as? String {
-                let tstatus = json["traveler_status"] as? String ?? "verified"
-                TravelerService.shared.hydrate(travelerId: tid, token: ttok, status: tstatus)
-            }
+        guard let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tid    = json["traveler_id"]    as? String,
+              let ttok   = json["traveler_token"] as? String,
+              let rawSt  = json["status"]         as? String else {
+            throw AuthError.sendFailed("Respuesta inesperada del servidor")
         }
-        return hasProfile
+
+        return AuthResult(
+            travelerId:    tid,
+            travelerToken: ttok,
+            status:        AuthStatus(rawValue: rawSt) ?? .unknown
+        )
     }
 
     // MARK: – Complete profile para usuarios de Apple/Google (sin sesión Supabase)

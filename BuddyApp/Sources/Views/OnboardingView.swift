@@ -233,16 +233,19 @@ struct WelcomeStep: View {
         socialError   = nil
         Task {
             do {
-                let hasProfile = try await AuthService.shared.signIn(with: provider)
+                let result      = try await AuthService.shared.signIn(with: provider)
+                let destination = AuthCoordinator.shared.handle(result)
                 await MainActor.run {
                     socialLoading = false
-                    if hasProfile { onSocialComplete?() } else { onSocialNeedsName?() }
+                    switch destination {
+                    case .home:                  onSocialComplete?()
+                    case .needsProfileCompletion: onSocialNeedsName?()
+                    }
                 }
             } catch {
                 await MainActor.run {
                     socialLoading = false
                     let nsErr = error as NSError
-                    // Cancelación silenciosa — no mostrar error
                     let cancelCodes = [ASAuthorizationError.canceled.rawValue, 1]
                     if !cancelCodes.contains(nsErr.code) {
                         socialError = "No se pudo iniciar sesión."

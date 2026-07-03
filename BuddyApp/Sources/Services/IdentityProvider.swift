@@ -6,7 +6,7 @@ import UIKit
 // MARK: – Credencial unificada que producen todos los proveedores
 
 struct IdentityCredential {
-    enum Provider { case apple, google }
+    enum Provider: String { case apple, google }
     let provider:      Provider
     let identityToken: String          // JWT firmado por Apple / Google
     let email:         String?
