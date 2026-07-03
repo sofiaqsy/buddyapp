@@ -7,11 +7,13 @@ import UIKit
 
 struct InicioView: View {
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var locationService: LocationService
     @State private var navPath = NavigationPath()
     @State private var showPendingContactSheet  = false
     @State private var isFindingBuddy           = false   // creando/reusando trip en background
+    @State private var isActivatingNextTrip     = false   // evita doble-tap en "Activar" siguiente viaje
     @State private var homeBuddyCount           = 0
     @State private var homeCommunityContext: APIPlaceContext? = nil
     @State private var homeHelpSeed: (category: String, description: String?)? = nil  // categoría elegida en Home
@@ -22,6 +24,8 @@ struct InicioView: View {
     @State private var homeHelpSheet: HomeHelpItem? = nil
     /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
     @State private var locationPromptDestination: APIDestination? = nil
+    /// Ciudad GPS para el banner cuando no hay destino curado cerca (flujo pioneer).
+    @State private var locationPromptCity: String? = nil
     @State private var destinations: [APIDestination] = []
     @State private var pendingJourney: APIJourney? = nil
     @State private var activeJourney: APIJourney? = nil
@@ -31,7 +35,9 @@ struct InicioView: View {
     @State private var pioneerConfirmation: String? = nil   // banner tras auto-crear request en lugar sin buddies
     @State private var showPublishSuccessToast = false
     @State private var isLoadingData = true
+    @State private var loadDataFailed = false
     @State private var loadDataTask: Task<Void, Never>? = nil
+    @State private var refreshStateTask: Task<Void, Never>? = nil
     @State private var publicJourneys: [APIJourney] = []
     @State private var feedCursor: String? = nil
     @State private var feedHasMore = true
@@ -51,6 +57,7 @@ struct InicioView: View {
     @ObservedObject private var chatStore = ChatStore.shared
     @ObservedObject private var placeDeepLink = PlaceDeepLink.shared
     @EnvironmentObject private var authState: AuthState
+    @EnvironmentObject private var router: AppRouter
     /// IdentitySheet para el flujo de registro progresivo
     @State private var showIdentitySheet = false
     /// Acción pendiente que se ejecuta después de que el usuario se autentique
@@ -112,7 +119,8 @@ struct InicioView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Radius.md))
                 .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
                 .padding(.horizontal, Spacing.edge)
-                .padding(.bottom, 100)
+                .padding(.bottom, Spacing.md)
+                .safeAreaPadding(.bottom)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
@@ -121,7 +129,7 @@ struct InicioView: View {
                 }
             }
         }
-        .toast(isPresented: $showPublishSuccessToast, message: "¡Historia publicada! 🎉")
+        .toast(isPresented: $showPublishSuccessToast, message: "¡Historia publicada!")
         .onReceive(NotificationCenter.default.publisher(for: .journeyActivated)) { _ in
             navPath = NavigationPath()
             pendingNavToDetail = true
@@ -130,8 +138,7 @@ struct InicioView: View {
         .onChange(of: routeStore.isReady) { _, ready in
             guard ready, pendingNavToDetail, activeJourney != nil else { return }
             pendingNavToDetail = false
-            NotificationCenter.default.post(name: .switchToTab, object: nil,
-                                            userInfo: ["tab": AppTab.inicio.rawValue])
+            router.switchTo(.inicio)
             navPath.append("tripDetail")
         }
         .sheet(item: $contactSheetJourney, onDismiss: {
@@ -208,7 +215,7 @@ struct InicioView: View {
             // Si el usuario cerró sin autenticarse, descarta la acción pendiente
             if !authState.isLoggedIn { pendingIdentityAction = nil }
         }) {
-            IdentitySheet(contextMessage: "Para pedir ayuda a un buddy necesitamos saber quién eres.") {
+            IdentitySheet(purpose: .buddy) {
                 // Autenticado: ejecutar la acción que estaba esperando
                 pendingIdentityAction?()
                 pendingIdentityAction = nil
@@ -233,17 +240,65 @@ struct InicioView: View {
     /// Mantiene el banner actualizado con el destino detectado por GPS.
     /// Se muestra si el lugar detectado NO está entre tus trips vivos (active o
     /// planning) — así sugiere pedir ayuda donde estás aunque tu trip sea otro.
+    /// Banner "Parece que estás en X": aparece cuando el usuario tiene trips vivos
+    /// pero su ubicación FÍSICA actual no corresponde a ninguno de ellos.
+    /// El cálculo de "¿estoy en el destino?" lo hace el backend (PostGIS).
+    /// Cliente solo: consulta is_point_in_destination(lat, lng, destId) RPC.
     private func evaluateLocationPrompt() {
-        let near = nearestDestination
-        let liveDestIds = Set(liveJourneys.compactMap { $0.destination?.id ?? $0.destinationId })
-        print("📍 [LocationPrompt] userLoc=\(locationService.userLocation != nil) dests=\(destinations.count) nearest=\(near?.name ?? "nil") liveTrips=\(liveJourneys.map { ($0.destination?.name ?? $0.place?.name ?? "·") }) liveDestIds=\(liveDestIds.count)")
-        guard let near, !liveJourneys.isEmpty else {
-            print("📍 [LocationPrompt] → oculto (sin GPS-dest o sin trips vivos)")
-            locationPromptDestination = nil
+        locationPromptDestination = nil
+        locationPromptCity = nil
+        guard let loc = locationService.userLocation, !liveJourneys.isEmpty else {
+            print("📍 [LocationPrompt] → oculto — userLoc=\(locationService.userLocation != nil) liveJourneys=\(liveJourneys.count)")
             return
         }
-        locationPromptDestination = liveDestIds.contains(near.id) ? nil : near
-        print("📍 [LocationPrompt] → \(locationPromptDestination?.name ?? "oculto") (near=\(near.id.prefix(6)) yaEnTrips=\(liveDestIds.contains(near.id)))")
+
+        let lat = loc.coordinate.latitude
+        let lng = loc.coordinate.longitude
+
+        // Consultar backend: ¿estoy en alguno de mis trips?
+        // El backend responde true/false usando PostGIS (ST_Contains para polygons,
+        // ST_DWithin para radius). Cada destino define su escala, no el cliente.
+        Task {
+            var nearSomeTrip = false
+            for journey in liveJourneys {
+                guard let destId = journey.destination?.id ?? journey.destinationId else { continue }
+                do {
+                    let result = try await APIClient.shared.callRPC(
+                        "is_point_in_destination",
+                        params: [
+                            "p_lat": lat,
+                            "p_lng": lng,
+                            "p_destination_id": destId
+                        ]
+                    )
+                    if let isInside = result as? Bool, isInside {
+                        print("📍 [LocationPrompt] trip=\(journey.destination?.name ?? "·") → ✅ aquí (backend)")
+                        nearSomeTrip = true
+                        break
+                    }
+                } catch {
+                    print("📍 [LocationPrompt] RPC error para \(journey.destination?.name ?? "·"): \(error)")
+                }
+            }
+
+            await MainActor.run {
+                if nearSomeTrip {
+                    print("📍 [LocationPrompt] → oculto — ya estás en tu trip")
+                    return
+                }
+
+                // Estoy en otro lugar: sugerir ayuda AQUÍ
+                if let near = nearestDestination {
+                    locationPromptDestination = near
+                    print("📍 [LocationPrompt] → mostrar destino curado \(near.name)")
+                } else if let place = locationService.currentDistrict ?? locationService.currentCity {
+                    locationPromptCity = place
+                    print("📍 [LocationPrompt] → mostrar lugar GPS \(place)")
+                } else {
+                    print("📍 [LocationPrompt] → oculto — sin destino curado ni ciudad GPS")
+                }
+            }
+        }
     }
 
     // MARK: – Contexto de ubicación
@@ -319,14 +374,16 @@ struct InicioView: View {
     /// Crea el Journey (GPS → place) y la Request en silencio, luego muestra
     /// un banner de confirmación. El usuario aprende un único botón.
     private func pioneerHelpFlow(category: String, description: String?, loc: CLLocation) async {
-        await MainActor.run { isFindingBuddy = true }
-        defer { Task { await MainActor.run { isFindingBuddy = false } } }
         do {
             let journey  = try await APIClient.shared.ensureActiveTripForGPS(lat: loc.coordinate.latitude, lng: loc.coordinate.longitude)
             let _        = try await APIClient.shared.createHelpRequestForJourney(journeyId: journey.id, category: category, description: description)
             let city     = locationService.currentCity ?? "tu zona"
             await MainActor.run {
                 withAnimation { pioneerConfirmation = "Registramos tu solicitud en \(city). Te avisaremos cuando haya un buddy disponible." }
+                // Navigate to Tu trip tab after creating request
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    router.switchTo(.trips)
+                }
             }
         } catch {
             print("❌ [pioneerHelpFlow] error: \(error)")
@@ -352,13 +409,7 @@ struct InicioView: View {
             // Pioneer: no hay buddies en este lugar → redirigir al tab Tu trip
             if homeCommunityContext?.totalBuddies == 0 {
                 print("📍 [submitHelpFromHome] pioneer con trip activo → Tu trip tab")
-                await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .switchToTab,
-                        object: nil,
-                        userInfo: ["tab": AppTab.trips.rawValue]
-                    )
-                }
+                await MainActor.run { router.switchTo(.trips) }
                 return
             }
             let destIdOpt = activeJourney.destination?.id ?? activeJourney.destinationId
@@ -378,13 +429,7 @@ struct InicioView: View {
                 // Pioneer sin trip: crear el trip + request, luego ir a Tu trip
                 print("📍 [submitHelpFromHome] pioneer sin trip + cat=\(category) → crear trip + Tu trip tab")
                 await pioneerHelpFlow(category: category, description: description, loc: loc)
-                await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .switchToTab,
-                        object: nil,
-                        userInfo: ["tab": AppTab.trips.rawValue]
-                    )
-                }
+                await MainActor.run { router.switchTo(.trips) }
             } else if let loc = locationService.userLocation, homeCommunityContext != nil {
                 await pioneerHelpFlow(category: category, description: description, loc: loc)
             } else {
@@ -435,16 +480,24 @@ struct InicioView: View {
                 }
                 .refreshable { await loadData() }
                 .onChange(of: navPath.count) { old, new in
-                    if new == 0 && old > 0 { Task { await loadData() } }
+                    // Al volver de navegación interna solo refrescamos estado del trip
+                    // (journeys + match) — loadData completo no es necesario y causa
+                    // que el scroll vuelva al top al reasignar publicJourneys.
+                    if new == 0 && old > 0 { Task { await refreshTripState() } }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
                     Task { await loadData() }
                     showPublishSuccessToast = true
+                    UIAccessibility.post(notification: .announcement, argument: "Historia publicada")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .helpCompleted)) { _ in
                     Task { await loadRecentHelp(force: true); await refreshTripState() }
                 }
                 .onChange(of: travelerMatchSignature) { _, _ in
+                    Task { await refreshTripState() }
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    guard phase == .active, hasLoaded else { return }
                     Task { await refreshTripState() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { _ in
@@ -477,13 +530,36 @@ struct InicioView: View {
                 Color.clear.frame(height: 0).id("inicioTop")
 
                 if let dest = locationPromptDestination {
-                    LocationPromptBanner(destination: dest) {
+                    LocationPromptBanner(city: dest.city) {
                         requireIdentity {
                             Task { await openHelp(forDestinationId: dest.id) }
                         }
                     }
                     .padding(.horizontal, Spacing.edge)
                     .padding(.top, Spacing.md)
+                } else if let city = locationPromptCity {
+                    // Sin destino curado: flujo pioneer con la ubicación GPS actual
+                    LocationPromptBanner(city: city) {
+                        requireIdentity {
+                            guard let loc = locationService.userLocation else { return }
+                            Task { await pioneerHelpFlow(category: "general", description: nil, loc: loc) }
+                        }
+                    }
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.top, Spacing.md)
+                }
+
+                if loadDataFailed && !isLoadingData {
+                    Button {
+                        Task { await loadData() }
+                    } label: {
+                        Label("No pudimos cargar. Reintentar", systemImage: "arrow.clockwise")
+                            .font(BT.footnote)
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.top, Spacing.sm)
                 }
 
                 Group {
@@ -528,10 +604,16 @@ struct InicioView: View {
                 buddyCount: homeBuddyCount,
                 destinationName: nearestDestination?.name ?? locationService.currentCity,
                 communityContext: homeCommunityContext,
-                pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0
+                pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
+                isLoading: isFindingBuddy
             ) { cat, desc in
                 requireIdentity {
-                    Task { await submitHelpFromHome(category: cat, description: desc) }
+                    guard !isFindingBuddy else { return }
+                    isFindingBuddy = true
+                    Task {
+                        defer { isFindingBuddy = false }
+                        await submitHelpFromHome(category: cat, description: desc)
+                    }
                 }
             }
             .padding(.horizontal, -Spacing.edge)
@@ -547,19 +629,18 @@ struct InicioView: View {
     @ViewBuilder private func stringDestination(route: String) -> some View {
         if route == "register" {
             RegisterTripView { journey in
+                print("🧳 [onJourneyCreated] id=\(journey.id.prefix(8)) dest=\(journey.destination?.name ?? journey.destinationId ?? "?") liveJourneys.before=\(liveJourneys.count)")
                 navPath = NavigationPath()
                 if homeHelpSeed != nil {
+                    print("🧳 [onJourneyCreated] path=contactSheet — seteando activeJourney directo")
                     confirmedHelpSeed = homeHelpSeed
                     homeHelpSeed = nil
                     activeJourney = journey
                     lastContactSheetJourney = journey
                     contactSheetJourney = journey
                 } else {
-                    NotificationCenter.default.post(
-                        name: .switchToTab,
-                        object: nil,
-                        userInfo: ["tab": AppTab.trips.rawValue]
-                    )
+                    print("🧳 [onJourneyCreated] path=switchToTrips — liveJourneys sigue en \(liveJourneys.count)")
+                    router.switchTo(.trips)
                 }
             }
         } else if route == "tripDetail", let journey = activeJourney {
@@ -591,10 +672,16 @@ struct InicioView: View {
                 activeBuddyAvatarUrl: activeMatch.flatMap { m in
                     ["accepted", "active", "pending"].contains(m.status) ? m.buddy?.avatarUrl : nil
                 },
-                communityContext: homeCommunityContext
+                communityContext: homeCommunityContext,
+                isLoading: isFindingBuddy
             ) { cat, desc in
                 requireIdentity {
-                    Task { await submitHelpFromHome(category: cat, description: desc) }
+                    guard !isFindingBuddy else { return }
+                    isFindingBuddy = true
+                    Task {
+                        defer { isFindingBuddy = false }
+                        await submitHelpFromHome(category: cat, description: desc)
+                    }
                 }
             }
             .padding(.horizontal, -Spacing.edge)
@@ -672,9 +759,19 @@ struct InicioView: View {
         )
     }
 
-    /// Revalida solo el estado del trip (activo/pendiente) — barato y frecuente
+    /// Revalida solo el estado del trip (activo/pendiente) — barato y frecuente.
+    /// Cancela la llamada anterior si llegan múltiples disparos en ráfaga (post-creación de trip).
     private func refreshTripState() async {
+        refreshStateTask?.cancel()
+        let t = Task<Void, Never> { await _refreshTripStateBody() }
+        refreshStateTask = t
+        await t.value
+    }
+
+    private func _refreshTripStateBody() async {
+        guard !isLoadingData else { print("🔄 [refreshTripState] loadData en vuelo — skip"); return }
         guard Session.hasSession else { print("🔄 [refreshTripState] sin sesión — skip"); return }
+        guard !Task.isCancelled else { return }
         guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else {
             print("❌ [refreshTripState] fetchTravelerJourneys falló")
             return
@@ -702,9 +799,11 @@ struct InicioView: View {
                 .filter { ["active", "planning"].contains($0.status) }
                 .sorted { ($0.status == "active" ? 0 : 1) < ($1.status == "active" ? 0 : 1) }
             evaluateLocationPrompt()
+            print("🔄 [refreshTripState] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(liveJourneys.count)")
         }
         await loadRecentHelp()
         await loadRecentHelpPerTrip()
+        await refreshHomeCommunityContext()
         // Ruta en background — activos y planning la necesitan para el mapa
         if let active, !routeStore.isReady {
             let destId = active.destination?.id ?? active.destinationId
@@ -744,15 +843,17 @@ struct InicioView: View {
             await MainActor.run {
                 guard pendingNavToDetail else { return }
                 pendingNavToDetail = false
-                NotificationCenter.default.post(name: .switchToTab, object: nil,
-                                                userInfo: ["tab": AppTab.inicio.rawValue])
+                router.switchTo(.inicio)
                 navPath.append("tripDetail")
             }
         }
     }
 
     private func activateNextTrip() async {
+        guard !isActivatingNextTrip else { return }
         guard let current = activeJourney, let next = pendingJourney else { return }
+        isActivatingNextTrip = true
+        defer { isActivatingNextTrip = false }
         do {
             // 1. Cancel active buddy match
             if let match = activeMatch {
@@ -779,6 +880,7 @@ struct InicioView: View {
 
     private func _loadDataBody() async {
         guard !Task.isCancelled else { return }
+        await MainActor.run { loadDataFailed = false }
         // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
         async let dests = APIClient.shared.fetchDestinations()
         let fetchedDests = (try? await dests) ?? []
@@ -805,6 +907,7 @@ struct InicioView: View {
             let snapshotId = Session.travelerId   // capturar ANTES del await
             print("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
             let journeys = try await APIClient.shared.fetchTravelerJourneys()
+            guard !Task.isCancelled else { return }
             print("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
             // Anti cross-account guard: if identity was hydrated mid-flight (cold launch
             // where validate() forces a refresh after loadData already started with nil),
@@ -841,11 +944,13 @@ struct InicioView: View {
                 pendingJourney = planning
                 liveJourneys   = newLive
                 evaluateLocationPrompt()
+                print("🏠 [loadData] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(newLive.count)")
             }
 
             let shouldFetchMatch = await MainActor.run { activeJourney != nil }
             if shouldFetchMatch {
                 let matches = try await APIClient.shared.fetchMatches()
+                guard !Task.isCancelled else { return }
                 print("🏠 [loadData] \(matches.count) match(es): \(matches.map { "\($0.status ?? "?")" })")
                 // Must filter by travelerId: user may simultaneously be a buddy for
                 // another traveler, and fetchMatches() returns matches in both roles.
@@ -862,6 +967,7 @@ struct InicioView: View {
             await loadRecentHelpPerTrip()
         } catch {
             print("❌ [loadData] ERROR: \(error)")
+            await MainActor.run { loadDataFailed = true }
         }
         await MainActor.run { isLoadingData = false }
         print("🏠 [loadData] done — activeJourney=\(await MainActor.run { activeJourney?.id.prefix(8) ?? "nil" }) liveJourneys=\(await MainActor.run { liveJourneys.count })")
@@ -887,7 +993,9 @@ struct InicioView: View {
 
     // Primera página del feed (cursor pagination + ranking servidor)
     private func loadFeed() async {
-        feedFailed = false
+        // Solo activar skeleton si no hay datos previos — evita parpadeo en refresh.
+        // feedFailed se resetea solo si el request tiene éxito.
+        if publicJourneys.isEmpty { isLoadingFeed = true }
         for attempt in 0..<2 {
             do {
                 let page = try await APIClient.shared.fetchStories(
@@ -906,6 +1014,7 @@ struct InicioView: View {
                 seenStoryIds = Set(page.items.map(\.id))
                 feedCursor = page.nextCursor
                 feedHasMore = page.hasMore
+                feedFailed = false
                 isLoadingFeed = false
                 return
             } catch {
@@ -1129,16 +1238,45 @@ struct TripDetailGate: View {
     var match: APIMatch? = nil
     var unreadCount: Int = 0
     @EnvironmentObject var routeStore: RouteStore
-    @State private var failed = false
-    @State private var loaded = false   // true solo cuando cargamos la ruta de ESTE journey
+    @State private var mapState: MapLoadState = .loading
 
     var body: some View {
         Group {
-            if loaded && routeStore.isReady {
+            switch mapState {
+            case .loading:
+                ZStack {
+                    Color.canvas.ignoresSafeArea()
+                    ProgressView().tint(Color.inkMuted)
+                }
+
+            case .guideAvailable:
                 TripDetailView(route: routeStore.route, match: match,
                                journey: journey, unreadCount: unreadCount)
                     .environmentObject(routeStore)
-            } else if failed {
+
+            case .noGuide(let lat, let lng):
+                // Sin guía curada pero tenemos coords: usar TripDetailView con places:[]
+                // para mostrar el mapa centrado + el estado "Sin explorar aún" del sheet.
+                let emptyRoute = Route(
+                    id: UUID(),
+                    title: journey.destination?.name ?? journey.place?.name ?? "Tu destino",
+                    subtitle: journey.destination?.city ?? "",
+                    city: journey.destination?.city ?? "",
+                    places: [],
+                    centerLat: lat,
+                    centerLng: lng
+                )
+                TripDetailView(route: emptyRoute, match: match,
+                               journey: journey, unreadCount: unreadCount)
+                    .environmentObject(routeStore)
+
+            case .noData:
+                NoGuideMapView(
+                    name: journey.destination?.name ?? journey.place?.name ?? "Tu destino",
+                    lat: nil, lng: nil
+                )
+
+            case .error:
                 VStack(spacing: Spacing.md) {
                     Image(systemName: "map")
                         .font(.system(size: 40, weight: .light))
@@ -1147,8 +1285,8 @@ struct TripDetailGate: View {
                         .font(BT.callout)
                         .foregroundStyle(Color.inkMuted)
                     Button {
-                        failed = false
-                        Task { await loadRoute() }
+                        mapState = .loading
+                        Task { mapState = await routeStore.ensureLoaded(for: journey) }
                     } label: {
                         Text("Reintentar")
                             .font(BT.footnoteBold)
@@ -1163,32 +1301,94 @@ struct TripDetailGate: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.canvas)
-            } else {
-                ZStack {
-                    Color.canvas.ignoresSafeArea()
-                    ProgressView().tint(Color.inkMuted)
-                }
             }
         }
-        .task { await loadRoute() }  // siempre ejecuta, independiente del caché
+        .task {
+            let state = await routeStore.ensureLoaded(for: journey)
+            print("🗺️ [TripDetailGate] journey=\(journey.id.prefix(8)) dest=\(journey.destination?.name ?? "nil") placeId=\(journey.placeId ?? "nil") → mapState=\(state)")
+            mapState = state
+        }
+    }
+}
+
+// Vista para viajes GPS sin guía curada: mapa centrado o mensaje informativo.
+// Vista para viajes GPS sin guía curada: mapa real con pin, o mensaje si no hay coords.
+private struct NoGuideMapView: View {
+    let name: String
+    let lat: Double?
+    let lng: Double?
+
+    var body: some View {
+        if let lat, let lng {
+            MapPinView(name: name, lat: lat, lng: lng)
+        } else {
+            VStack(spacing: Spacing.md) {
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(Color.brand)
+                Text(name)
+                    .font(BT.title3)
+                    .foregroundStyle(Color.ink)
+                Text("Aún no tenemos una guía para este destino.")
+                    .font(BT.callout)
+                    .foregroundStyle(Color.inkMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, Spacing.lg)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.canvas)
+        }
+    }
+}
+
+import MapKit
+
+private struct MapPinView: View {
+    let name: String
+    let lat: Double
+    let lng: Double
+
+    @State private var region: MKCoordinateRegion
+
+    init(name: String, lat: Double, lng: Double) {
+        self.name = name
+        self.lat  = lat
+        self.lng  = lng
+        _region = State(initialValue: MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: lat, longitude: lng),
+            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+        ))
     }
 
-    private func loadRoute() async {
-        // Siempre resetear isReady para que no se muestre el caché de otro destino
-        await MainActor.run { routeStore.isReady = false }
-        let destId = journey.destination?.id ?? journey.destinationId
-        if let destId {
-            print("🗺️ [TripDetailGate] destination trip → fetchDestination destId=\(destId.prefix(8))")
-            await routeStore.fetchDestinationFromAPI(id: destId)
-        } else if let placeId = journey.placeId {
-            print("🗺️ [TripDetailGate] GPS trip → fetchPlaceRoute placeId=\(placeId.prefix(8))")
-            await routeStore.fetchPlaceRouteFromAPI(placeId: placeId)
-        } else {
-            print("⚠️ [TripDetailGate] sin destId ni placeId — fallback a primer destino")
-            await routeStore.fetchDestinationFromAPI(id: nil)
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Map(coordinateRegion: $region, annotationItems: [MapPin(lat: lat, lng: lng, name: name)]) { pin in
+                MapMarker(coordinate: pin.coordinate, tint: Color.brand)
+            }
+            .ignoresSafeArea(edges: .top)
+
+            // Chip con el nombre del destino sobre el mapa
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "mappin.circle.fill")
+                    .foregroundStyle(Color.brand)
+                Text(name)
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.ink)
+            }
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, 10)
+            .background(.thinMaterial, in: Capsule())
+            .padding(.bottom, Spacing.xl)
         }
-        if routeStore.isReady { loaded = true } else { failed = true }
     }
+}
+
+private struct MapPin: Identifiable {
+    let id = UUID()
+    let lat: Double
+    let lng: Double
+    let name: String
+    var coordinate: CLLocationCoordinate2D { .init(latitude: lat, longitude: lng) }
 }
 
 // MARK: – ACTIVE VISIT CARD
@@ -1752,7 +1952,7 @@ struct CommunityPostCard: View {
 // Inline card shown above the trip card when GPS detects a different destination
 
 struct LocationPromptBanner: View {
-    let destination: APIDestination
+    let city: String
     var onConfirm: () -> Void
 
     var body: some View {
@@ -1766,7 +1966,7 @@ struct LocationPromptBanner: View {
                     .foregroundStyle(Color.teal)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Parece que estás en \(destination.city)")
+                    Text("Parece que estás en \(city)")
                         .font(BT.footnote)
                         .foregroundStyle(Color.primary)
                     Text("Buscar un buddy aquí")
@@ -1970,10 +2170,11 @@ struct ActiveTripCard: View {
                                         .fill(Color.sandLight)
                                         .frame(width: 48, height: 48)
                                         .overlay {
-                                            if let url = buddyAvatarURL {
-                                                AsyncImage(url: url) { img in
+                                            if buddyAvatarURL != nil {
+                                                CachedImage(url: buddyAvatarURL) { img in
                                                     img.resizable().scaledToFill()
                                                 } placeholder: { Color.sandLight }
+                                                .frame(width: 48, height: 48)
                                                 .clipShape(Circle())
                                             } else {
                                                 Image(systemName: "person.fill")
@@ -2011,7 +2212,7 @@ struct ActiveTripCard: View {
                 )
             }
         }
-        .frame(height: min(360, UIScreen.main.bounds.height * 0.44))
+        .frame(maxHeight: 340)
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
     }
@@ -2022,10 +2223,11 @@ struct ActiveTripCard: View {
             .fill(Color.sandLight)
             .frame(width: 26, height: 26)
             .overlay {
-                if let s = urlString, let url = URL(string: s) {
-                    AsyncImage(url: url) { img in
+                if let s = urlString {
+                    CachedImage(urlString: s) { img in
                         img.resizable().scaledToFill()
                     } placeholder: { Color.sandLight }
+                    .frame(width: 26, height: 26)
                     .clipShape(Circle())
                 } else {
                     Image(systemName: "person.fill")
@@ -2230,7 +2432,6 @@ struct PendingTripCard: View {
     }
 
     private func loadBuddyCount() async {
-        guard buddyCount == nil else { return }
         let destId = journey.destination?.id ?? journey.destinationId
         guard let destId else { return }
         if let c = try? await APIClient.shared.fetchBuddyCount(destinationId: destId) {
@@ -2431,7 +2632,7 @@ struct RegisterTripSheet: View {
             .navigationTitle("Nuevo destino")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancelar") { dismiss() }
                 }
             }
