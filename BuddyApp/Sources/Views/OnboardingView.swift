@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 
 // MARK: – ONBOARDING FLOW
 // 01 Bienvenida → 02 Teléfono → 03 Código → 04 Identidad → 05 Conducta
@@ -16,14 +17,18 @@ struct OnboardingView: View {
     @State private var nationality = "Perú"
 
     enum OnboardingStep {
-        case welcome, phone, code, identity, conduct
+        case welcome, phone, code, identity, conduct, appleNeedsName
     }
 
     var body: some View {
         ZStack {
             switch step {
             case .welcome:
-                WelcomeStep { advance(to: .phone) }
+                WelcomeStep(
+                    onContinue: { advance(to: .phone) },
+                    onAppleComplete: { onComplete(); dismiss() },
+                    onAppleNeedsName: { advance(to: .appleNeedsName) }
+                )
             case .phone:
                 PhoneStep(phone: $phone, onBack: { advance(to: .welcome) }) {
                     advance(to: .code)
@@ -61,6 +66,14 @@ struct OnboardingView: View {
                         }
                     }
                 }
+
+            case .appleNeedsName:
+                AppleNameStep(onBack: { advance(to: .welcome) }) { name in
+                    Task {
+                        try? await AuthService.shared.completeProfileForSocialLogin(fullName: name)
+                        await MainActor.run { onComplete(); dismiss() }
+                    }
+                }
             }
         }
         .animation(.easeInOut(duration: 0.25), value: step)
@@ -74,8 +87,13 @@ struct OnboardingView: View {
 // MARK: – 01 BIENVENIDA
 
 struct WelcomeStep: View {
-    var onContinue: () -> Void
-    @State private var loading = false
+    var onContinue:      () -> Void
+    var onAppleComplete:  (() -> Void)? = nil   // Apple → perfil completo
+    var onAppleNeedsName: (() -> Void)? = nil   // Apple → necesita nombre
+
+    @State private var loading      = false
+    @State private var appleLoading = false
+    @State private var appleError:  String?
 
     var body: some View {
         ZStack {
@@ -110,6 +128,39 @@ struct WelcomeStep: View {
                 Spacer()
 
                 VStack(spacing: Spacing.sm) {
+                    // ── Sign in with Apple ───────────────────────────────
+                    SignInWithAppleButton(.signIn, onRequest: { request in
+                        request.requestedScopes = [.fullName, .email]
+                    }, onCompletion: { result in
+                        handleAppleResult(result)
+                    })
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 50)
+                    .clipShape(Capsule())
+                    .padding(.horizontal, Spacing.edge)
+                    .opacity(appleLoading ? 0.5 : 1)
+                    .disabled(appleLoading || loading)
+
+                    if let err = appleError {
+                        Text(err)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, Spacing.edge)
+                    }
+
+                    // ── Separador ────────────────────────────────────────
+                    HStack {
+                        Rectangle().fill(Color.inkMuted.opacity(0.2)).frame(height: 1)
+                        Text("o continúa con teléfono")
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .fixedSize()
+                        Rectangle().fill(Color.inkMuted.opacity(0.2)).frame(height: 1)
+                    }
+                    .padding(.horizontal, Spacing.edge)
+
+                    // ── Botón teléfono ────────────────────────────────────
                     Button(action: {
                         guard !loading else { return }
                         Haptic.medium()
@@ -122,7 +173,7 @@ struct WelcomeStep: View {
                                     .progressViewStyle(.circular)
                                     .tint(Color.inkInverse)
                             } else {
-                                Text("Vamos")
+                                Text("Continuar con teléfono")
                                     .font(BT.footnoteBold)
                             }
                         }
@@ -143,6 +194,113 @@ struct WelcomeStep: View {
                         .padding(.bottom, Spacing.lg)
                 }
             }
+        }
+    }
+
+    private func handleAppleResult(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let err):
+            let nsErr = err as NSError
+            if nsErr.code == ASAuthorizationError.canceled.rawValue { return }
+            appleError = "Error con Apple: \(err.localizedDescription)"
+        case .success(let auth):
+            guard let cred = auth.credential as? ASAuthorizationAppleIDCredential else { return }
+            appleLoading = true
+            appleError   = nil
+            Task {
+                do {
+                    let needsName = try await AuthService.shared.signInWithApple(credential: cred)
+                    await MainActor.run {
+                        appleLoading = false
+                        if needsName { onAppleNeedsName?() } else { onAppleComplete?() }
+                    }
+                } catch {
+                    await MainActor.run {
+                        appleLoading = false
+                        appleError   = "No se pudo iniciar sesión con Apple."
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: – 01b NOMBRE (Apple Sign In sin nombre)
+
+struct AppleNameStep: View {
+    var onBack:     () -> Void
+    var onComplete: (String) -> Void
+
+    @State private var name    = ""
+    @State private var loading = false
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.canvas.ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 0) {
+                // Back button
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .background(Color.surface)
+                        .clipShape(Circle())
+                        .overlay(Circle().strokeBorder(Color.border, lineWidth: 1))
+                        .foregroundStyle(Color.ink)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.md)
+
+                VStack(alignment: .leading, spacing: Spacing.md) {
+                    Text("¿Cómo te llamamos?")
+                        .font(BT.title2)
+                        .foregroundStyle(Color.ink)
+
+                    Text("Apple no compartió tu nombre. Dinos cómo quieres que te llamen los buddies.")
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.inkMuted)
+
+                    TextField("Tu nombre", text: $name)
+                        .font(BT.body)
+                        .padding(Spacing.sm + 2)
+                        .background(Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.words)
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.xl)
+
+                Spacer()
+            }
+
+            // CTA fixed at bottom
+            Button(action: {
+                let trimmed = name.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty, !loading else { return }
+                Haptic.medium()
+                loading = true
+                onComplete(trimmed)
+            }) {
+                ZStack {
+                    if loading {
+                        ProgressView().progressViewStyle(.circular).tint(Color.inkInverse)
+                    } else {
+                        Text("Continuar").font(BT.footnoteBold)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 17)
+                .background(name.trimmingCharacters(in: .whitespaces).isEmpty ? Color.ink.opacity(0.3) : Color.ink)
+                .foregroundStyle(Color.inkInverse)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.pressable)
+            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || loading)
+            .padding(.horizontal, Spacing.edge)
+            .padding(.bottom, Spacing.lg)
         }
     }
 }

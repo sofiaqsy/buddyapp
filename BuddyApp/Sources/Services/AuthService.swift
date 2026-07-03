@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticationServices
 
 // MARK: – AUTH SERVICE
 // All auth calls go through buddy-core.
@@ -38,7 +39,12 @@ final class AuthService {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["phone": phone, "token": code])
+        var payload: [String: Any] = ["phone": phone, "token": code]
+        if let currentId = TravelerService.shared.travelerId {
+            payload["guest_traveler_id"] = currentId
+            print("🔐 verifyOTP → incluyendo guest_traveler_id=\(currentId.prefix(8)) (status=\(TravelerService.shared.status ?? "nil"))")
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, response) = try await URLSession.shared.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -127,16 +133,20 @@ final class AuthService {
     /// 2. If expired (401), tries to refresh silently with the refresh token.
     /// 3. Only returns false (→ login screen) if both fail.
     func validateSession() async -> Bool {
-        guard let token = accessToken else { return false }
-
-        do {
-            let status = try await pingMe(token: token)
-            if status == 200 { return true }
-            if status == 401 { return await tryRefresh() }
-            return true // other errors → assume online later
-        } catch {
-            return true // network offline → keep session
+        // OTP / Supabase path
+        if let token = accessToken {
+            do {
+                let status = try await pingMe(token: token)
+                if status == 200 { return true }
+                if status == 401 { return await tryRefresh() }
+                return true
+            } catch {
+                return true // red offline → mantener sesión
+            }
         }
+
+        // Apple / Google path: valida el traveler JWT localmente (sin llamada de red)
+        return socialSessionValid()
     }
 
     private func pingMe(token: String) async throws -> Int {
@@ -222,6 +232,77 @@ final class AuthService {
         }
     }
 
+    // MARK: – Sign in with Apple
+
+    /// Verifica la credencial de Apple con buddy-core y establece la sesión.
+    /// Retorna `true` si el perfil ya está completo (saltar onboarding de nombre).
+    @discardableResult
+    func signInWithApple(credential: ASAuthorizationAppleIDCredential) async throws -> Bool {
+        guard let tokenData = credential.identityToken,
+              let identityToken = String(data: tokenData, encoding: .utf8) else {
+            throw AuthError.sendFailed("No se pudo obtener el identity token de Apple")
+        }
+
+        var payload: [String: Any] = ["identity_token": identityToken]
+
+        // Apple solo envía el nombre la primera vez — capturarlo aquí
+        if let fn = credential.fullName {
+            let name = [fn.givenName, fn.familyName]
+                .compactMap { $0 }.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { payload["full_name"] = name }
+        }
+
+        let url = URL(string: "\(coreURL)/apple")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Enviar el traveler JWT actual para que el backend fusione el guest si aplica
+        if let travelerToken = TravelerService.shared.token {
+            req.setValue("Bearer \(travelerToken)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let status  = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
+        print("🍎 signInWithApple → status: \(status), body: \(bodyStr)")
+
+        guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
+
+        var hasProfile = false
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            hasProfile = json["has_profile"] as? Bool ?? false
+            if hasProfile { UserDefaults.standard.set(true, forKey: "buddy.onboardingDone") }
+            if let tid  = json["traveler_id"]    as? String,
+               let ttok = json["traveler_token"] as? String {
+                let tstatus = json["traveler_status"] as? String ?? "verified"
+                TravelerService.shared.hydrate(travelerId: tid, token: ttok, status: tstatus)
+            }
+        }
+        return hasProfile
+    }
+
+    // MARK: – Complete profile para usuarios de Apple/Google (sin sesión Supabase)
+    /// Usa el traveler JWT directamente — no requiere access_token de Supabase.
+    func completeProfileForSocialLogin(fullName: String) async throws {
+        guard let token = TravelerService.shared.token else { throw AuthError.noSession }
+
+        let url = URL(string: "\(coreURL)/profile")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)",  forHTTPHeaderField: "Authorization")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["full_name": fullName])
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let status  = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
+        print("👤 completeProfileSocial → status: \(status), body: \(bodyStr)")
+
+        guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
+        UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
+    }
+
     // MARK: – Session helpers
 
     var accessToken: String? {
@@ -232,8 +313,31 @@ final class AuthService {
         UserDefaults.standard.string(forKey: "buddy.userId")
     }
 
+    /// True si hay sesión Supabase activa (OTP) O traveler JWT verificado y no expirado (Apple/Google).
     var isLoggedIn: Bool {
-        accessToken != nil
+        if accessToken != nil { return true }
+        return socialSessionValid()
+    }
+
+    // Decodifica el traveler JWT localmente y verifica que no haya expirado.
+    // Para usuarios Apple/Google que no tienen access_token de Supabase.
+    private func socialSessionValid() -> Bool {
+        guard let token = TravelerService.shared.token,
+              TravelerService.shared.status == "verified" else { return false }
+        return !jwtExpired(token)
+    }
+
+    private func jwtExpired(_ token: String) -> Bool {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return true }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let data    = Data(base64Encoded: b64),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp     = payload["exp"] as? TimeInterval else { return true }
+        return Date().timeIntervalSince1970 >= exp
     }
 
     var hasCompletedOnboarding: Bool {
