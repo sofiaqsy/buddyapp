@@ -9,15 +9,15 @@ struct OnboardingView: View {
     var onComplete: () -> Void = {}
 
     @State private var step: OnboardingStep = .welcome
-    @State private var phone      = ""
-    @State private var fullName   = ""
-    @State private var docType    = "dni"
-    @State private var docNumber  = ""
-    @State private var birthDate  = ""
+    @State private var phone       = ""
+    @State private var fullName    = ""
+    @State private var docType     = "dni"
+    @State private var docNumber   = ""
+    @State private var birthDate   = ""
     @State private var nationality = "Perú"
 
     enum OnboardingStep {
-        case welcome, phone, code, identity, conduct, appleNeedsName
+        case welcome, phone, code, identity, conduct, needsProfileCompletion
     }
 
     var body: some View {
@@ -25,9 +25,9 @@ struct OnboardingView: View {
             switch step {
             case .welcome:
                 WelcomeStep(
-                    onContinue: { advance(to: .phone) },
-                    onAppleComplete: { onComplete(); dismiss() },
-                    onAppleNeedsName: { advance(to: .appleNeedsName) }
+                    onContinue:        { advance(to: .phone) },
+                    onSocialComplete:  { onComplete(); dismiss() },
+                    onSocialNeedsName: { advance(to: .needsProfileCompletion) }
                 )
             case .phone:
                 PhoneStep(phone: $phone, onBack: { advance(to: .welcome) }) {
@@ -35,7 +35,6 @@ struct OnboardingView: View {
                 }
             case .code:
                 CodeStep(phone: phone, onBack: { advance(to: .phone) }, onProfileExists: {
-                    // Profile already complete (registered via Flutter or another device)
                     onComplete()
                     dismiss()
                 }) {
@@ -60,15 +59,11 @@ struct OnboardingView: View {
                             birthDate:   birthDate,
                             nationality: nationality
                         )
-                        await MainActor.run {
-                            onComplete()
-                            dismiss()
-                        }
+                        await MainActor.run { onComplete(); dismiss() }
                     }
                 }
-
-            case .appleNeedsName:
-                AppleNameStep(onBack: { advance(to: .welcome) }) { name in
+            case .needsProfileCompletion:
+                SocialNameStep(onBack: { advance(to: .welcome) }) { name in
                     Task {
                         try? await AuthService.shared.completeProfileForSocialLogin(fullName: name)
                         await MainActor.run { onComplete(); dismiss() }
@@ -87,13 +82,13 @@ struct OnboardingView: View {
 // MARK: – 01 BIENVENIDA
 
 struct WelcomeStep: View {
-    var onContinue:      () -> Void
-    var onAppleComplete:  (() -> Void)? = nil   // Apple → perfil completo
-    var onAppleNeedsName: (() -> Void)? = nil   // Apple → necesita nombre
+    var onContinue:        () -> Void
+    var onSocialComplete:  (() -> Void)? = nil
+    var onSocialNeedsName: (() -> Void)? = nil
 
-    @State private var loading      = false
-    @State private var appleLoading = false
-    @State private var appleError:  String?
+    @State private var loading:      Bool   = false
+    @State private var socialLoading: Bool  = false
+    @State private var socialError:  String?
 
     var body: some View {
         ZStack {
@@ -132,16 +127,52 @@ struct WelcomeStep: View {
                     SignInWithAppleButton(.signIn, onRequest: { request in
                         request.requestedScopes = [.fullName, .email]
                     }, onCompletion: { result in
-                        handleAppleResult(result)
+                        switch result {
+                        case .failure(let err):
+                            let nsErr = err as NSError
+                            if nsErr.code != ASAuthorizationError.canceled.rawValue {
+                                socialError = "Error con Apple: \(err.localizedDescription)"
+                            }
+                        case .success:
+                            handleSocialSignIn(provider: AppleProvider())
+                        }
                     })
                     .signInWithAppleButtonStyle(.black)
                     .frame(height: 50)
                     .clipShape(Capsule())
                     .padding(.horizontal, Spacing.edge)
-                    .opacity(appleLoading ? 0.5 : 1)
-                    .disabled(appleLoading || loading)
+                    .opacity(socialLoading ? 0.5 : 1)
+                    .disabled(socialLoading || loading)
 
-                    if let err = appleError {
+                    // ── Sign in with Google ───────────────────────────────
+                    Button(action: { handleSocialSignIn(provider: GoogleProvider()) }) {
+                        ZStack {
+                            if socialLoading {
+                                ProgressView().progressViewStyle(.circular).tint(Color.ink)
+                            } else {
+                                HStack(spacing: 10) {
+                                    Image("google_logo")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 20, height: 20)
+                                    Text("Continuar con Google")
+                                        .font(BT.footnoteBold)
+                                        .foregroundStyle(Color.ink)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Color.surface)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                    }
+                    .buttonStyle(.pressable)
+                    .padding(.horizontal, Spacing.edge)
+                    .opacity(socialLoading ? 0.7 : 1)
+                    .disabled(socialLoading || loading)
+
+                    if let err = socialError {
                         Text(err)
                             .font(BT.caption1)
                             .foregroundStyle(Color.red)
@@ -197,27 +228,24 @@ struct WelcomeStep: View {
         }
     }
 
-    private func handleAppleResult(_ result: Result<ASAuthorization, Error>) {
-        switch result {
-        case .failure(let err):
-            let nsErr = err as NSError
-            if nsErr.code == ASAuthorizationError.canceled.rawValue { return }
-            appleError = "Error con Apple: \(err.localizedDescription)"
-        case .success(let auth):
-            guard let cred = auth.credential as? ASAuthorizationAppleIDCredential else { return }
-            appleLoading = true
-            appleError   = nil
-            Task {
-                do {
-                    let needsName = try await AuthService.shared.signInWithApple(credential: cred)
-                    await MainActor.run {
-                        appleLoading = false
-                        if needsName { onAppleNeedsName?() } else { onAppleComplete?() }
-                    }
-                } catch {
-                    await MainActor.run {
-                        appleLoading = false
-                        appleError   = "No se pudo iniciar sesión con Apple."
+    private func handleSocialSignIn(provider: IdentityProvider) {
+        socialLoading = true
+        socialError   = nil
+        Task {
+            do {
+                let hasProfile = try await AuthService.shared.signIn(with: provider)
+                await MainActor.run {
+                    socialLoading = false
+                    if hasProfile { onSocialComplete?() } else { onSocialNeedsName?() }
+                }
+            } catch {
+                await MainActor.run {
+                    socialLoading = false
+                    let nsErr = error as NSError
+                    // Cancelación silenciosa — no mostrar error
+                    let cancelCodes = [ASAuthorizationError.canceled.rawValue, 1]
+                    if !cancelCodes.contains(nsErr.code) {
+                        socialError = "No se pudo iniciar sesión."
                     }
                 }
             }
@@ -225,9 +253,9 @@ struct WelcomeStep: View {
     }
 }
 
-// MARK: – 01b NOMBRE (Apple Sign In sin nombre)
+// MARK: – 01b NOMBRE (social login sin nombre)
 
-struct AppleNameStep: View {
+struct SocialNameStep: View {
     var onBack:     () -> Void
     var onComplete: (String) -> Void
 

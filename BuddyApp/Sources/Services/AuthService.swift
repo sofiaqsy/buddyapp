@@ -1,5 +1,4 @@
 import Foundation
-import AuthenticationServices
 
 // MARK: – AUTH SERVICE
 // All auth calls go through buddy-core.
@@ -232,40 +231,43 @@ final class AuthService {
         }
     }
 
-    // MARK: – Sign in with Apple
+    // MARK: – Social Sign In
 
-    /// Verifica la credencial de Apple con buddy-core y establece la sesión.
-    /// Retorna `true` si el perfil ya está completo (saltar onboarding de nombre).
+    /// Punto de entrada único para cualquier proveedor social.
+    /// Retorna `true` si el perfil ya está completo (saltar pantalla de nombre).
     @discardableResult
-    func signInWithApple(credential: ASAuthorizationAppleIDCredential) async throws -> Bool {
-        guard let tokenData = credential.identityToken,
-              let identityToken = String(data: tokenData, encoding: .utf8) else {
-            throw AuthError.sendFailed("No se pudo obtener el identity token de Apple")
+    func signIn(with provider: IdentityProvider) async throws -> Bool {
+        let credential = try await provider.signIn()
+        return try await _postToBackend(credential)
+    }
+
+    private func _postToBackend(_ credential: IdentityCredential) async throws -> Bool {
+        let endpoint: String
+        var payload: [String: Any]
+
+        switch credential.provider {
+        case .apple:
+            endpoint = "apple"
+            payload  = ["identity_token": credential.identityToken]
+        case .google:
+            endpoint = "google"
+            payload  = ["id_token": credential.identityToken]
         }
+        if let name = credential.fullName { payload["full_name"] = name }
 
-        var payload: [String: Any] = ["identity_token": identityToken]
-
-        // Apple solo envía el nombre la primera vez — capturarlo aquí
-        if let fn = credential.fullName {
-            let name = [fn.givenName, fn.familyName]
-                .compactMap { $0 }.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-            if !name.isEmpty { payload["full_name"] = name }
-        }
-
-        let url = URL(string: "\(coreURL)/apple")!
+        let url = URL(string: "\(coreURL)/\(endpoint)")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Enviar el traveler JWT actual para que el backend fusione el guest si aplica
-        if let travelerToken = TravelerService.shared.token {
-            req.setValue("Bearer \(travelerToken)", forHTTPHeaderField: "Authorization")
+        if let token = TravelerService.shared.token {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, response) = try await URLSession.shared.data(for: req)
         let status  = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
-        print("🍎 signInWithApple → status: \(status), body: \(bodyStr)")
+        print("[\(endpoint)] → \(status): \(bodyStr)")
 
         guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
 

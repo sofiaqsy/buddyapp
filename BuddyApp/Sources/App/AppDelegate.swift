@@ -1,5 +1,6 @@
 import UIKit
 import UserNotifications
+import GoogleSignIn
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
 
@@ -23,6 +24,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     // Tocar fuera de un campo de texto cierra el teclado en cualquier pantalla.
+    // Google Sign In: manejar el URL de callback OAuth
+    func application(_ app: UIApplication, open url: URL,
+                     options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        GIDSignIn.sharedInstance.handle(url)
+    }
+
     func applicationDidBecomeActive(_ application: UIApplication) {
         let window = application.connectedScenes
             .compactMap { $0 as? UIWindowScene }
