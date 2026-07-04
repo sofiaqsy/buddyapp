@@ -254,14 +254,22 @@ struct InicioView: View {
 
         let lat = loc.coordinate.latitude
         let lng = loc.coordinate.longitude
+        let currentPlace = locationService.currentDistrict ?? locationService.currentCity ?? "desconocido"
+
+        print("📍 [LocationPrompt] pos=(\(String(format: "%.4f", lat)), \(String(format: "%.4f", lng))) — lugar=\(currentPlace)")
 
         // Consultar backend: ¿estoy en alguno de mis trips?
         // El backend responde true/false usando PostGIS (ST_Contains para polygons,
         // ST_DWithin para radius). Cada destino define su escala, no el cliente.
         Task {
             var nearSomeTrip = false
+            var checkedTrips: [String] = []
+
             for journey in liveJourneys {
                 guard let destId = journey.destination?.id ?? journey.destinationId else { continue }
+                let destName = journey.destination?.name ?? "·"
+                checkedTrips.append(destName)
+
                 do {
                     let result = try await APIClient.shared.callRPC(
                         "is_point_in_destination",
@@ -272,28 +280,29 @@ struct InicioView: View {
                         ]
                     )
                     if let isInside = result as? Bool, isInside {
-                        print("📍 [LocationPrompt] trip=\(journey.destination?.name ?? "·") → ✅ aquí (backend)")
+                        print("📍 [LocationPrompt] trip=\(destName) → ✅ aquí (backend)")
                         nearSomeTrip = true
                         break
                     }
                 } catch {
-                    print("📍 [LocationPrompt] RPC error para \(journey.destination?.name ?? "·"): \(error)")
+                    print("📍 [LocationPrompt] RPC error para \(destName): \(error)")
                 }
             }
 
             await MainActor.run {
                 if nearSomeTrip {
-                    print("📍 [LocationPrompt] → oculto — ya estás en tu trip")
+                    print("📍 [LocationPrompt] → oculto — ya estás en tu trip (checked: \(checkedTrips.joined(separator: ", ")))")
                     return
                 }
 
-                // Estoy en otro lugar: sugerir ayuda AQUÍ
+                // Estoy fuera de todos mis trips: sugerir ayuda AQUÍ
+                print("📍 [LocationPrompt] fuera de todos los trips (checked: \(checkedTrips.joined(separator: ", ")))")
                 if let near = nearestDestination {
                     locationPromptDestination = near
-                    print("📍 [LocationPrompt] → mostrar destino curado \(near.name)")
+                    print("📍 [LocationPrompt] → mostrar destino curado: \(near.name)")
                 } else if let place = locationService.currentDistrict ?? locationService.currentCity {
                     locationPromptCity = place
-                    print("📍 [LocationPrompt] → mostrar lugar GPS \(place)")
+                    print("📍 [LocationPrompt] → mostrar lugar GPS: \(place)")
                 } else {
                     print("📍 [LocationPrompt] → oculto — sin destino curado ni ciudad GPS")
                 }
@@ -697,30 +706,58 @@ struct InicioView: View {
     private func refreshHomeCommunityContext() async {
         // Si hay un trip activo, cargar el contexto de su destino o lugar
         if let j = liveJourneys.first {
+            print("🏠 [refreshHomeCommunityContext] active trip — loading context")
             if let destId = j.destination?.id ?? j.destinationId,
                let ctx = try? await APIClient.shared.fetchPlaceContext(id: destId, source: "destination") {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+                print("🏠 [refreshHomeCommunityContext] ✅ loaded from destination: buddies=\(ctx.buddies)")
             } else if let placeId = j.placeId,
                       let ctx = try? await APIClient.shared.fetchPlaceContext(id: placeId, source: "place") {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+                print("🏠 [refreshHomeCommunityContext] ✅ loaded from place: buddies=\(ctx.buddies)")
             } else {
                 await MainActor.run {
                     homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
                     homeBuddyCount = 0
                 }
+                print("🏠 [refreshHomeCommunityContext] ❌ no context found — pioneer mode")
             }
             return
         }
-        // Sin trip activo — usar destino más cercano o GPS
+        // Sin trip activo — usar destino más cercano o la ciudad actual
         if let dest = nearestDestination {
+            print("🏠 [refreshHomeCommunityContext] no trip — loading nearestDestination: \(dest.name)")
             if let ctx = try? await APIClient.shared.fetchPlaceContext(id: dest.id, source: "destination") {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+                print("🏠 [refreshHomeCommunityContext] ✅ loaded nearest: buddies=\(ctx.buddies)")
             }
-        } else if locationService.userLocation != nil {
+        } else if let loc = locationService.userLocation {
+            let lat = loc.coordinate.latitude
+            let lng = loc.coordinate.longitude
+            print("🏠 [refreshHomeCommunityContext] no trip — resolving location: lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng))")
+
+            // LocationResolverService en backend: polígonos → radio → nil
+            if let resolution = try? await APIClient.shared.resolveLocation(lat: lat, lng: lng) {
+                print("🏠 [refreshHomeCommunityContext] ✅ resolved: \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
+
+                // Cargar contexto de la comunidad de este destino
+                if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
+                    await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+                    print("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
+                    return
+                }
+            } else {
+                print("🏠 [refreshHomeCommunityContext] ⚠️  no location match")
+            }
+
+            // Sin match: pioneer mode
             await MainActor.run {
                 homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
                 homeBuddyCount = 0
             }
+            print("🏠 [refreshHomeCommunityContext] → pioneer mode (0 buddies)")
+        } else {
+            print("🏠 [refreshHomeCommunityContext] no location — skipping")
         }
     }
 

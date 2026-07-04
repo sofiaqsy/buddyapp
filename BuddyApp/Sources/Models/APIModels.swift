@@ -3,6 +3,45 @@ import Foundation
 // MARK: – API Response Models
 // These map 1:1 to buddy-core JSON responses (snake_case → camelCase via decoder)
 
+// MARK: Location Resolution — POST /location/resolve
+struct APILocationResolution: Decodable {
+    let destinationId: String
+    let destinationName: String
+    let distanceMeters: Int
+    let matchedBy: String  // "polygon" | "radius"
+    let confidence: Double
+}
+
+// MARK: Buddy Coverage — sent to PATCH /buddy/me to declare where the buddy can help.
+// The backend (DestinationService) is responsible for resolving coordinates and
+// creating the destination if it doesn't exist yet. The client never manages
+// destination_ids or active_zone_ids directly.
+
+struct BuddyCoverageInput: Codable {
+    let destinationId: String?   // non-nil when user picked an existing catalog destination
+    let city: String
+    let countryCode: String
+    let latitude: Double?        // provided for new cities not yet in the catalog
+    let longitude: Double?
+
+    init(destinationId: String? = nil, city: String, countryCode: String,
+         latitude: Double? = nil, longitude: Double? = nil) {
+        self.destinationId = destinationId
+        self.city          = city
+        self.countryCode   = countryCode
+        self.latitude      = latitude
+        self.longitude     = longitude
+    }
+
+    init(from destination: APIDestination) {
+        self.init(destinationId: destination.id,
+                  city: destination.city,
+                  countryCode: destination.country,
+                  latitude: destination.lat,
+                  longitude: destination.lng)
+    }
+}
+
 // MARK: Place Search — resultado unificado de GET /search/places
 // El cliente solo conoce "lugares". Un lugar puede tener más o menos capacidades.
 
@@ -26,10 +65,44 @@ struct APIResolvedPlace: Decodable {
 
 // MARK: Place Context — GET /places/:id/context
 
+struct APIPlaceGuideSpot: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let lat: Double
+    let lng: Double
+    let coverUrl: String?
+
+    var asPlace: Place {
+        Place(
+            id: UUID(uuidString: id) ?? UUID(),
+            name: name,
+            description: "",
+            stickerSymbol: "mappin.circle.fill",
+            stickerEmoji: "📍",
+            category: .culture,
+            latitude: lat,
+            longitude: lng,
+            radiusMeters: 50,
+            coverUrl: coverUrl
+        )
+    }
+}
+
 struct APIPlaceGuide: Decodable {
     let spotCount: Int
     let visitCount: Int
     let stickerCount: Int
+    let lat: Double?
+    let lng: Double?
+    let spots: [APIPlaceGuideSpot]?     // preview: hasta 50 spots para el mapa
+    let hasMoreSpots: Bool?             // true si hay más de 50 spots en la guía
+    let destId: String?                 // UUID del destination vinculado (para crear nuevos spots)
+}
+
+struct APIPlaceGuideSpotsPage: Decodable {
+    let spots: [APIPlaceGuideSpot]
+    let nextCursor: String?
+    let hasMore: Bool
 }
 
 struct APIPlaceContext: Decodable {

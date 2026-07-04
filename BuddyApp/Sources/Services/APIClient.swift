@@ -786,6 +786,25 @@ final class APIClient {
         return resp.count
     }
 
+    func resolveLocation(lat: Double, lng: Double) async throws -> APILocationResolution? {
+        do {
+            let result: APILocationResolution = try await request(
+                path: "/location/resolve",
+                method: "POST",
+                body: ["lat": lat, "lng": lng]
+            )
+            print("🌍 [resolveLocation] lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng)) → \(result.destinationName) (\(result.matchedBy))")
+            return result
+        } catch {
+            // 204 No Content = no match found
+            if let urlError = error as? URLError, urlError.code == .unknown {
+                print("🌍 [resolveLocation] No location match found")
+                return nil
+            }
+            throw error
+        }
+    }
+
     // buddy_id is derived from the Traveler JWT by the backend — not accepted from the body.
     func acceptRequest(requestId: String) async throws -> APIMatch {
         try await request(
