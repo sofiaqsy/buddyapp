@@ -24,6 +24,11 @@ struct InicioView: View {
     @State private var homeHelpSheet: HomeHelpItem? = nil
     /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
     @State private var locationPromptDestination: APIDestination? = nil
+    /// Resolución de ubicación del backend (LocationResolver: polígono → radio).
+    /// Única fuente de verdad para "Estás en X" y el destino del CTA del Home.
+    /// Reemplaza al viejo nearestDestination (5 destacados + radio 50 km), que
+    /// podía elegir un destino vecino equivocado (ej: La Merced estando en Villa Rica).
+    @State private var resolvedLocation: APILocationResolution? = nil
     /// Ciudad GPS para el banner cuando no hay destino curado cerca (flujo pioneer).
     @State private var locationPromptCity: String? = nil
     @State private var destinations: [APIDestination] = []
@@ -176,7 +181,7 @@ struct InicioView: View {
             homeHelpSeed = nil
             Task { await refreshTripState() }
         }) { item in
-            let destName = item.journey?.destination?.name ?? nearestDestination?.name
+            let destName = item.journey?.destination?.name ?? resolvedLocation?.destinationName
             ContactarBuddyView(
                 journey: item.journey,
                 destinationId: item.destinationId,
@@ -297,9 +302,15 @@ struct InicioView: View {
 
                 // Estoy fuera de todos mis trips: sugerir ayuda AQUÍ
                 print("📍 [LocationPrompt] fuera de todos los trips (checked: \(checkedTrips.joined(separator: ", ")))")
-                if let near = nearestDestination {
+                if let resolved = resolvedLocation,
+                   let near = destinations.first(where: { $0.id == resolved.destinationId }) {
+                    // Solo si el destino resuelto por el backend está en catálogo local;
+                    // si no, el banner usa el nombre resuelto como ciudad GPS.
                     locationPromptDestination = near
                     print("📍 [LocationPrompt] → mostrar destino curado: \(near.name)")
+                } else if let resolvedName = resolvedLocation?.destinationName {
+                    locationPromptCity = resolvedName
+                    print("📍 [LocationPrompt] → mostrar destino resuelto: \(resolvedName)")
                 } else if let place = locationService.currentDistrict ?? locationService.currentCity {
                     locationPromptCity = place
                     print("📍 [LocationPrompt] → mostrar lugar GPS: \(place)")
@@ -319,7 +330,7 @@ struct InicioView: View {
     private var locationContext: some View {
         let authorized = locationService.authorizationStatus == .authorizedWhenInUse ||
                          locationService.authorizationStatus == .authorizedAlways
-        let displayCity = nearestDestination?.city ?? locationService.currentCity
+        let displayCity = resolvedLocation?.destinationName ?? locationService.currentCity
         if let city = displayCity {
             HStack(spacing: 5) {
                 Image(systemName: "location.fill")
@@ -357,21 +368,12 @@ struct InicioView: View {
 
     /// Destino conocido más cercano a la ubicación actual, dentro de su radio.
     /// nil si no hay GPS o estás fuera de cobertura de cualquier destino.
-    private var nearestDestination: APIDestination? {
-        guard let loc = locationService.userLocation else { return nil }
-        return destinations
-            .map { ($0, loc.distance(from: CLLocation(latitude: $0.lat, longitude: $0.lng))) }
-            .filter { $0.1 <= Double($0.0.radiusMeters ?? 50_000) }
-            .min(by: { $0.1 < $1.1 })?
-            .0
-    }
-
     /// CTA principal: el usuario toca "Buscar un buddy" sin crear un trip a mano.
-    /// Resuelve el destino por GPS, asegura el Trip (reusa o crea) y abre el flujo
-    /// de ayuda. Si no hay destino detectable, cae al registro manual existente.
+    /// El destino viene del LocationResolver del backend (resolvedLocation) —
+    /// nunca de la lista de destacados. Si no hay resolución, flujo pioneer.
     private func findABuddy() async {
-        if let dest = nearestDestination {
-            await openHelp(forDestinationId: dest.id)
+        if let resolved = resolvedLocation {
+            await openHelp(forDestinationId: resolved.destinationId)
         } else if let loc = locationService.userLocation {
             await pioneerHelpFlow(category: "general", description: nil, loc: loc)
         } else {
@@ -433,7 +435,9 @@ struct InicioView: View {
                 return
             }
         }
-        guard let dest = nearestDestination else {
+        // El destino del CTA es el resuelto por el backend — mismo lugar que el
+        // usuario ve en "Estás en X" y en el contador de buddies.
+        guard let dest = resolvedLocation else {
             if let loc = locationService.userLocation, homeCommunityContext?.totalBuddies == 0 {
                 // Pioneer sin trip: crear el trip + request, luego ir a Tu trip
                 print("📍 [submitHelpFromHome] pioneer sin trip + cat=\(category) → crear trip + Tu trip tab")
@@ -451,7 +455,7 @@ struct InicioView: View {
         }
         await MainActor.run {
             homeHelpSeed  = (category, description)
-            homeHelpSheet = HomeHelpItem(destinationId: dest.id, seed: (category, description))
+            homeHelpSheet = HomeHelpItem(destinationId: dest.destinationId, seed: (category, description))
         }
     }
 
@@ -611,7 +615,7 @@ struct InicioView: View {
             locationContext
             CategoryPickerView(
                 buddyCount: homeBuddyCount,
-                destinationName: nearestDestination?.name ?? locationService.currentCity,
+                destinationName: resolvedLocation?.destinationName ?? locationService.currentCity,
                 communityContext: homeCommunityContext,
                 pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
                 isLoading: isFindingBuddy
@@ -724,14 +728,10 @@ struct InicioView: View {
             }
             return
         }
-        // Sin trip activo — usar destino más cercano o la ciudad actual
-        if let dest = nearestDestination {
-            print("🏠 [refreshHomeCommunityContext] no trip — loading nearestDestination: \(dest.name)")
-            if let ctx = try? await APIClient.shared.fetchPlaceContext(id: dest.id, source: "destination") {
-                await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
-                print("🏠 [refreshHomeCommunityContext] ✅ loaded nearest: buddies=\(ctx.buddies)")
-            }
-        } else if let loc = locationService.userLocation {
+        // Sin trip activo — el backend resuelve el destino real (polígono → radio).
+        // Nunca la lista de 5 destacados: elegía el vecino equivocado
+        // (ej: "Estás en La Merced" estando en Villa Rica).
+        if let loc = locationService.userLocation {
             let lat = loc.coordinate.latitude
             let lng = loc.coordinate.longitude
             print("🏠 [refreshHomeCommunityContext] no trip — resolving location: lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng))")
@@ -739,6 +739,7 @@ struct InicioView: View {
             // LocationResolverService en backend: polígonos → radio → nil
             if let resolution = try? await APIClient.shared.resolveLocation(lat: lat, lng: lng) {
                 print("🏠 [refreshHomeCommunityContext] ✅ resolved: \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
+                await MainActor.run { resolvedLocation = resolution }
 
                 // Cargar contexto de la comunidad de este destino
                 if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
@@ -748,6 +749,7 @@ struct InicioView: View {
                 }
             } else {
                 print("🏠 [refreshHomeCommunityContext] ⚠️  no location match")
+                await MainActor.run { resolvedLocation = nil }
             }
 
             // Sin match: pioneer mode
