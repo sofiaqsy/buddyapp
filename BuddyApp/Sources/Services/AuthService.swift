@@ -240,12 +240,14 @@ final class AuthService {
         return try await _postToBackend(credential)
     }
 
-    private func _postToBackend(_ credential: IdentityCredential) async throws -> AuthResult {
+    func _postToBackend(_ credential: IdentityCredential) async throws -> AuthResult {
         var payload: [String: Any] = [
             "provider":       credential.provider.rawValue,
             "identity_token": credential.identityToken,
         ]
         if let name = credential.fullName { payload["full_name"] = name }
+        // device_id permite al backend crear la sesión de refresh device-bound
+        payload["device_id"] = TravelerService.shared.currentDeviceId
 
         let url = URL(string: "\(coreURL)/social")!
         var req = URLRequest(url: url)
@@ -273,7 +275,9 @@ final class AuthService {
         return AuthResult(
             travelerId:    tid,
             travelerToken: ttok,
-            status:        AuthStatus(rawValue: rawSt) ?? .unknown
+            status:        AuthStatus(rawValue: rawSt) ?? .unknown,
+            suggestedName: credential.fullName,
+            refreshSecret: json["secret"] as? String
         )
     }
 
@@ -343,10 +347,16 @@ final class AuthService {
     /// Cierra la sesión intencionalmente: elimina tokens y notifica a la app.
     /// Distinto de `.sessionExpired` (que es un error de token, no una acción del usuario).
     func signOut() {
+        print("🚪 [AuthService.signOut] limpiando sesión OTP…")
         UserDefaults.standard.removeObject(forKey: "buddy.accessToken")
         UserDefaults.standard.removeObject(forKey: "buddy.userId")
         UserDefaults.standard.removeObject(forKey: "buddy.refreshToken")
         UserDefaults.standard.set(false, forKey: "buddy.isLoggedIn")
+        UserDefaults.standard.removeObject(forKey: "buddy.onboardingDone")
+        UserDefaults.standard.removeObject(forKey: "buddy.device.id")
+        print("🚪 [AuthService.signOut] limpiando sesión Traveler (UserDefaults + Keychain)…")
+        TravelerService.shared.clearSession()
+        print("🚪 [AuthService.signOut] ✅ todo limpio — emitiendo userDidLogOut")
         NotificationCenter.default.post(name: .userDidLogOut, object: nil)
     }
 }

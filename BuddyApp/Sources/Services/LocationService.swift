@@ -5,14 +5,26 @@ import Combine
 final class LocationService: NSObject, ObservableObject {
     @Published var userLocation: CLLocation?
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
+    @Published var currentCity: String?
+    /// Distrito/barrio (subLocality) — en Lima el geocoder da locality="Lima" y
+    /// subLocality="San Miguel"/"Cercado de Lima". Necesario para trips distritales.
+    @Published var currentDistrict: String?
+
+    // Weak static reference so views that only need the current location at
+    // action time (e.g. sendLocation) can read it without subscribing to
+    // objectWillChange and re-rendering on every GPS fix.
+    static weak var current: LocationService?
 
     private let manager = CLLocationManager()
+    private var hasFetchedCity = false
+    private var lastGeocodedLocation: CLLocation?
 
     // place id -> triggered
     var onRegionEnter: ((String) -> Void)?
 
     override init() {
         super.init()
+        LocationService.current = self
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.distanceFilter = 10
@@ -56,6 +68,21 @@ extension LocationService: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         userLocation = locations.last
+        guard let loc = locations.last else { return }
+        // Re-geocode si es la primera vez, o si el usuario se movió más de 5 km desde la última geocodificación
+        let distanceMoved = lastGeocodedLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
+        guard !hasFetchedCity || distanceMoved > 5_000 else { return }
+        hasFetchedCity = true
+        lastGeocodedLocation = loc
+        CLGeocoder().reverseGeocodeLocation(loc) { [weak self] placemarks, _ in
+            let city = placemarks?.first?.locality
+            let district = placemarks?.first?.subLocality
+            print("📍 [LocationService] currentCity=\(city ?? "nil") currentDistrict=\(district ?? "nil")")
+            DispatchQueue.main.async {
+                self?.currentCity = city
+                self?.currentDistrict = district
+            }
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {

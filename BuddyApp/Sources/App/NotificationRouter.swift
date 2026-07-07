@@ -34,8 +34,7 @@ enum NotificationRouter {
             switchTab(.conexiones)
 
         case .buddyApproved:
-            post(.openBuddyProfile)
-            switchTab(.yo)
+            AppRouter.shared.openBuddyProfile()
 
         case .firstHelpCompleted:
             switchTab(.conexiones)
@@ -69,7 +68,7 @@ enum NotificationRouter {
     // MARK: – Helpers
 
     private static func switchTab(_ tab: AppTab) {
-        post(.switchToTab, userInfo: ["tab": tab.rawValue])
+        AppRouter.shared.switchTo(tab)
     }
 
     private static func post(_ name: Notification.Name, userInfo: [AnyHashable: Any]? = nil) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 
 // MARK: – APP TAB
 
@@ -37,14 +38,14 @@ struct RootView: View {
     @EnvironmentObject var locationService: LocationService
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var authState: AuthState
+    @EnvironmentObject var router: AppRouter
     @StateObject private var chatStore = ChatStore.shared
-    @State private var selectedTab: AppTab = .inicio
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .bottom) {
             // Tab content — keep all views alive to preserve scroll/nav state
-            TabView(selection: $selectedTab) {
+            TabView(selection: $router.selectedTab) {
                 InicioView().tag(AppTab.inicio)
                 TripsView().tag(AppTab.trips)
                 ConexionesView().environmentObject(chatStore).tag(AppTab.conexiones)
@@ -53,7 +54,7 @@ struct RootView: View {
             .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 70) }
 
             // Custom Liquid Glass tab bar
-            GlassTabBar(selection: $selectedTab, unreadChats: chatStore.totalUnread)
+            GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread)
         }
         .ignoresSafeArea(edges: .bottom)
         .onChange(of: scenePhase) { _, phase in
@@ -84,89 +85,79 @@ struct RootView: View {
                 Task { await chatStore.clearAfterLogout() }
             }
         }
-        .onChange(of: selectedTab) { _, tab in
-            if tab == .conexiones, authState.isLoggedIn {
-                Task { await chatStore.load() }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
-            if authState.isLoggedIn { Task { await chatStore.load() } }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .switchToTab)) { note in
-            if let raw = note.userInfo?["tab"] as? Int, let tab = AppTab(rawValue: raw) {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
-                    selectedTab = tab
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openBuddyProfile)) { _ in
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
-                selectedTab = .yo
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openPlaceInMap)) { note in
-            if let lat  = note.userInfo?["lat"]  as? Double,
-               let lng  = note.userInfo?["lng"]  as? Double,
-               let name = note.userInfo?["name"] as? String {
-                PlaceDeepLink.shared.pending = .init(lat: lat, lng: lng, name: name)
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
-                    selectedTab = .inicio
-                }
-            }
-        }
-        .onAppear {
-            // Remove native tab bar — replaced by GlassTabBar
-            UITabBar.appearance().isHidden = true
+        .modifier(RootViewEvents(
+            chatStore: chatStore,
+            locationService: locationService,
+            routeStore: routeStore,
+            authState: authState,
+            router: router
+        ))
+    }
+}
 
-            // SSE solo si hay sesión activa — los usuarios anónimos no tienen stream
-            if authState.isLoggedIn {
-                chatStore.startEventStream()
-            }
+// Extraído para aliviar el type-checker de SwiftUI con la cadena de modificadores.
+private struct RootViewEvents: ViewModifier {
+    let chatStore: ChatStore
+    let locationService: LocationService
+    let routeStore: RouteStore
+    let authState: AuthState
+    let router: AppRouter
 
-            locationService.requestPermission()
-            locationService.onRegionEnter = { id in
-                guard let uuid = UUID(uuidString: id) else { return }
-                DispatchQueue.main.async {
-                    routeStore.collect(placeId: uuid)
-                    Haptic.success()
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: router.selectedTab) { _, tab in
+                if tab == .conexiones, authState.isLoggedIn {
+                    Task { await chatStore.load() }
                 }
             }
-        }
-        .onChange(of: locationService.userLocation) { _, loc in
-            guard let coord = loc?.coordinate else { return }
-            routeStore.buildRouteIfNeeded(near: coord)
-            locationService.startMonitoring(places: routeStore.route.places)
-        }
-        .onChange(of: locationService.authorizationStatus) { _, status in
-            if status == .authorizedWhenInUse || status == .authorizedAlways {
-                locationService.startTracking()
+            .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
+                if authState.isLoggedIn { Task { await chatStore.load() } }
             }
-        }
-        .overlay {
-            if let place = routeStore.unlockedPlace {
-                StickerUnlockSheet(place: place) { routeStore.dismissUnlock() }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.spring(response: 0.45, dampingFraction: 0.8),
-                               value: routeStore.unlockedPlace?.id)
-                    .zIndex(999)
-                    .ignoresSafeArea()
-            }
-        }
-        // Encuesta de cierre — GLOBAL y en tiempo real: si el buddy cerró un
-        // apoyo, el viajero la responde sin importar en qué tab esté.
-        .sheet(item: $chatStore.pendingFeedbackMatch) { m in
-            let name = m.buddy?.fullName?.components(separatedBy: " ").first?.lowercased() ?? "tu buddy"
-            CloseFeedbackSheet(buddyName: name, buddyAvatarUrl: m.buddy?.avatarUrl, isMandatory: true) { feeling, pressure in
-                Task {
-                    try? await APIClient.shared.submitFeedback(matchId: m.id, feeling: feeling, commercialPressure: pressure)
-                    FeedbackTracker.markSubmitted(m.id)
-                    await MainActor.run { chatStore.pendingFeedbackMatch = nil }
+            .onAppear {
+                if authState.isLoggedIn { chatStore.startEventStream() }
+                locationService.requestPermission()
+                locationService.onRegionEnter = { id in
+                    guard let uuid = UUID(uuidString: id) else { return }
+                    DispatchQueue.main.async {
+                        routeStore.collect(placeId: uuid)
+                        Haptic.success()
+                    }
                 }
-            } onDismiss: {
-                // Obligatoria: interactiveDismissDisabled evita el swipe; este
-                // closure no se usa, pero lo dejamos por compatibilidad.
             }
-        }
+            .onChange(of: locationService.userLocation) { _, loc in
+                guard let coord = loc.map({ $0.coordinate }) else { return }
+                routeStore.buildRouteIfNeeded(near: coord)
+                locationService.startMonitoring(places: routeStore.route.places)
+            }
+            .onChange(of: locationService.authorizationStatus) { _, status in
+                if status == CLAuthorizationStatus.authorizedWhenInUse
+                    || status == CLAuthorizationStatus.authorizedAlways {
+                    locationService.startTracking()
+                }
+            }
+            .overlay {
+                if let place = routeStore.unlockedPlace {
+                    StickerUnlockSheet(place: place) { routeStore.dismissUnlock() }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(response: 0.45, dampingFraction: 0.8),
+                                   value: routeStore.unlockedPlace?.id)
+                        .zIndex(999)
+                        .ignoresSafeArea()
+                }
+            }
+            .sheet(item: Binding(
+                get: { chatStore.pendingFeedbackMatch },
+                set: { chatStore.pendingFeedbackMatch = $0 }
+            )) { m in
+                let name = m.buddy?.fullName?.components(separatedBy: " ").first?.lowercased() ?? "tu buddy"
+                CloseFeedbackSheet(buddyName: name, buddyAvatarUrl: m.buddy?.avatarUrl, isMandatory: true) { feeling, pressure in
+                    Task {
+                        try? await APIClient.shared.submitFeedback(matchId: m.id, feeling: feeling, commercialPressure: pressure)
+                        FeedbackTracker.markSubmitted(m.id)
+                        await MainActor.run { chatStore.pendingFeedbackMatch = nil }
+                    }
+                } onDismiss: { }
+            }
     }
 }
 

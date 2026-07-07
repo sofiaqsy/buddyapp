@@ -5,7 +5,9 @@ import SwiftUI
 struct TripsView: View {
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var authState: AuthState
+    @EnvironmentObject var router: AppRouter
     @State private var showIdentitySheet = false
+    @State private var pendingPublishJourneyId: String? = nil   // espera auth para publicar
     @State private var journeys: [APIJourney] = []
     @State private var isLoading = true
     @State private var hasLoadedOnce = false
@@ -23,11 +25,10 @@ struct TripsView: View {
     /// Trip seleccionado en el selector horizontal — el editor se vincula a este.
     @State private var selectedTripId: String? = nil
     // Acciones a nivel de tab (operan sobre el trip seleccionado / una locación)
-    @State private var showPublishConfirm = false
-    @State private var showBlankPublishAlert = false
     @State private var showCancelTripConfirm = false
     @State private var deleteTarget: APIJourney? = nil
-    @State private var isPublishing = false
+    @State private var activeMatch: APIMatch? = nil
+    @State private var showPublishConfirmFromParent = false   // disparado tras auth
 
     struct EditTarget: Identifiable {
         let id = UUID()
@@ -116,28 +117,11 @@ struct TripsView: View {
                             .padding(.horizontal, Spacing.edge)
                             .padding(.top, Spacing.md)
                     } else if let journey = selectedTrip {
-                        Group {
-                            if (journey.status ?? "") == "planning" {
-                                // Hub de planificación — mismo aspecto sin importar cuántos días falten
-                                PlanningHubCard(journey: journey) {
-                                    // El PATCH ya confirmó status=active en el server. El GET puede devolver
-                                    // stale, así que marcamos el id como activado localmente — esto fuerza
-                                    // el re-render (String? distinto de nil) y muestra el editor de inmediato.
-                                    locallyActivatedId = journey.id
-                                }
-                            } else {
-                                // En curso o completado → el taller de portadas (editor)
-                                TripFeedCard(journey: journey) { pageIndex in
-                                    editTarget = EditTarget(journey: journey, pageIndex: pageIndex)
-                                }
-                            }
-                        }
-                        // El id incluye el status: si un trip pasa active→completed
-                        // (al publicar), la card se recrea y el badge se refresca.
-                        .id("\(journey.id)-\(journey.status ?? "")")
-                        .transition(.opacity)            // crossfade en vez de corte brusco
-                        .padding(.horizontal, Spacing.edge)
-                        .padding(.top, Spacing.md)
+                        tripCard(for: journey)
+                            .id("\(journey.id)-\(journey.status ?? "")")
+                            .transition(.opacity)
+                            .padding(.horizontal, Spacing.edge)
+                            .padding(.top, Spacing.md)
                     } else {
                         emptyState
                     }
@@ -173,10 +157,12 @@ struct TripsView: View {
                     Task { await loadJourneys() }
                 }
             }
+            .navigationDestination(for: APIJourney.self) { journey in
+                TripDetailGate(journey: journey)
+                    .environmentObject(routeStore)
+            }
             .navigationDestination(for: String.self) { route in
                 if route == "register" {
-                    // Al crear desde Tu trip, volvemos al tab y recargamos → se muestra
-                    // el PlanningHubCard del nuevo trip (no el hero "Ya llegué" de Inicio).
                     RegisterTripView { _ in
                         navPath = NavigationPath()
                         Task { await loadJourneys() }
@@ -210,20 +196,22 @@ struct TripsView: View {
                 Task { await loadJourneys() }
             }
         }
-        .confirmationDialog("¿Publicar tu viaje?", isPresented: $showPublishConfirm, titleVisibility: .visible) {
-            Button("Publicar") { publishActiveTrip() }
-            Button("Cancelar", role: .cancel) {}
-        } message: {
-            Text("Todos los lugares de tu viaje quedarán visibles para la comunidad como una sola historia. Después no podrás editarlo.")
+        .sheet(isPresented: $showIdentitySheet, onDismiss: {
+            // Si cerró sin autenticarse, descarta la intención de publicar
+            if !authState.isLoggedIn { pendingPublishJourneyId = nil }
+        }) {
+            IdentitySheet(purpose: .publish) {
+                // Autenticado → lanzar confirmación de publicación
+                if pendingPublishJourneyId != nil {
+                    showPublishConfirmFromParent = true
+                }
+                pendingPublishJourneyId = nil
+            }
+            .environmentObject(authState)
         }
-        .alert("Tu viaje está en blanco", isPresented: $showBlankPublishAlert) {
-            Button("Entendido", role: .cancel) {}
-        } message: {
-            Text("Agrega al menos una foto a algún lugar antes de publicar tu viaje.")
-        }
-        .confirmationDialog("¿Eliminar todo el viaje?", isPresented: $showCancelTripConfirm, titleVisibility: .visible) {
-            Button("Eliminar viaje", role: .destructive) { cancelActiveTrip() }
-            Button("Cancelar", role: .cancel) {}
+        .confirmationDialog("¿Cancelar tu viaje?", isPresented: $showCancelTripConfirm, titleVisibility: .visible) {
+            Button("Cancelar trip", role: .destructive) { cancelActiveTrip() }
+            Button("Mantener", role: .cancel) {}
         } message: {
             Text("Se eliminarán todos los lugares de este viaje y sus momentos. No se puede deshacer.")
         }
@@ -239,6 +227,31 @@ struct TripsView: View {
             Button("Cancelar", role: .cancel) { deleteTarget = nil }
         } message: {
             Text("Se quitará este lugar del viaje. El resto se mantiene.")
+        }
+    }
+
+    @ViewBuilder private func tripCard(for journey: APIJourney) -> some View {
+        if (journey.status ?? "") == "planning" {
+            PlanningHubCard(journey: journey) {
+                locallyActivatedId = journey.id
+            }
+        } else {
+            TripFeedCard(
+                journey: journey,
+                onEdit: { pageIndex in
+                    editTarget = EditTarget(journey: journey, pageIndex: pageIndex)
+                },
+                onMapTap: { navPath.append(journey) },
+                buddyAvatarUrl: (journey.status ?? "") == "active" ? activeMatch?.buddy?.avatarUrl : nil,
+                buddyFirstName: (journey.status ?? "") == "active"
+                    ? activeMatch?.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
+                    : nil,
+                externalPublishTrigger: $showPublishConfirmFromParent,
+                onPublishTap: authState.isLoggedIn ? nil : {
+                    pendingPublishJourneyId = journey.id
+                    showIdentitySheet = true
+                }
+            )
         }
     }
 
@@ -269,88 +282,22 @@ struct TripsView: View {
         }
     }
 
-    // Menú de acciones del VIAJE (trip) — publica/elimina todos los lugares juntos.
+    // Menú de acciones del VIAJE — solo cancelar.
     @ViewBuilder
     private func tripActionsMenu(for trip: APIJourney) -> some View {
         Menu {
-            if visibleTrips.contains(where: { $0.status == "active" }) {
-                Button {
-                    Haptic.medium()
-                    if tripHasPublishableContent {
-                        showPublishConfirm = true
-                    } else {
-                        showBlankPublishAlert = true
-                    }
-                } label: {
-                    Label("Publicar viaje", systemImage: "paperplane")
-                }
-            }
             Button(role: .destructive) {
                 Haptic.medium()
                 showCancelTripConfirm = true
             } label: {
-                Label("Eliminar viaje", systemImage: "trash")
+                Label("Cancelar trip", systemImage: "xmark.circle")
             }
         } label: {
-            if isPublishing {
-                ProgressView().tint(Color.teal).scaleEffect(0.8)
-                    .frame(width: 40, height: 40)
-            } else {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(Color.ink)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
-            }
-        }
-    }
-
-    /// ¿Algún lugar del viaje tiene contenido real publicable?
-    private var tripHasPublishableContent: Bool {
-        visibleTrips.contains { j in
-            MemoirPersistence.shared.load(journeyId: j.id)
-                .contains { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
-        }
-    }
-
-    /// Publica el VIAJE completo: cada lugar se publica como una sola historia.
-    private func publishActiveTrip() {
-        print("📤 [publishActiveTrip] selectedTrip.tripId=\(selectedTrip?.tripId ?? "nil") visibleTrips=\(visibleTrips.map { "\($0.destination?.name ?? "·")[id:\($0.id.prefix(6)) trip:\(($0.tripId ?? "nil").prefix(6))]" })")
-        guard let tripId = selectedTrip?.tripId else {
-            print("📤 [publishActiveTrip] ABORTA: tripId nil")
-            return
-        }
-        let places = visibleTrips.map { j -> (String, [CollagePage]) in
-            let allPages = MemoirPersistence.shared.load(journeyId: j.id)
-            print("📤 [publishActiveTrip] journey=\(j.id.prefix(8)) BEFORE filter: \(allPages.count) page(s)")
-            for (i, p) in allPages.enumerated() {
-                let kept = !p.itemSnapshots.isEmpty || p.backgroundImageFile != nil
-                let reason = p.itemSnapshots.isEmpty ? "itemSnapshots=0" : ""
-                let bgReason = p.backgroundImageFile == nil ? (reason.isEmpty ? "bgFile=nil" : "+bgFile=nil") : ""
-                print("📤 [publishActiveTrip]   page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumb=\(p.thumbnailFileName ?? "nil") → \(kept ? "KEPT" : "DISCARDED(\(reason)\(bgReason))")")
-            }
-            let pages = allPages.filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
-            print("📤 [publishActiveTrip] journey=\(j.id.prefix(8)) AFTER filter: \(pages.count) page(s)")
-            return (j.id, pages)
-        }
-        print("📤 [publishActiveTrip] tripId=\(tripId) lugares=\(places.map { "\($0.0.prefix(6)):\($0.1.count)pgs" })")
-        isPublishing = true
-        Task {
-            try? await APIClient.shared.publishTrip(tripId: tripId, places: places)
-            await MainActor.run {
-                isPublishing = false
-                Haptic.success()
-                let removed = Set(journeys.filter { $0.tripId == tripId }.map { $0.id })
-                withAnimation {
-                    journeys.removeAll { removed.contains($0.id) }
-                    selectedTripId = nil
-                }
-                NotificationCenter.default.post(name: .journeyPublished, object: tripId)
-                // Navegar a Inicio y recargar el feed para mostrar la publicación
-                NotificationCenter.default.post(name: .switchToTab,
-                                                object: nil,
-                                                userInfo: ["tab": AppTab.inicio.rawValue])
-            }
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(Color.ink)
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
         }
     }
 
@@ -474,7 +421,7 @@ struct TripsView: View {
                    fetched.allSatisfy({ $0.tripId != dtid || $0.status == "cancelled" }) {
                     dismissedTripId = nil
                 }
-                print("🧳 [TripsView.load] journeys=\(fetched.map { "\($0.destination?.name ?? "·"):\($0.status ?? "nil"):trip=\(($0.tripId ?? "nil").prefix(6))" })")
+                print("🧳 [TripsView.load] journeys=\(fetched.map { "\($0.destination?.name ?? $0.place?.name ?? "·"):\($0.status ?? "nil"):trip=\(($0.tripId ?? "nil").prefix(6))" })")
             } else {
                 print("⚠️ [TripsView] travelerId cambió durante el fetch — descarto resultado")
             }
@@ -483,6 +430,17 @@ struct TripsView: View {
         // Si el trip seleccionado ya no existe (publicado/cancelado), reasigna.
         if selectedTripId == nil || !visibleTrips.contains(where: { $0.id == selectedTripId }) {
             selectedTripId = visibleTrips.first?.id
+        }
+        if let t = visibleTrips.first(where: { $0.id == selectedTripId }) ?? visibleTrips.first {
+            print("🧳 [TripsView] selectedTrip id=\(t.id.prefix(8)) dest=\(t.destination?.name ?? "nil") place=\(t.place?.name ?? "nil") title=\(t.title ?? "nil")")
+        }
+        // Cargar match activo para mostrar avatar del buddy
+        let hasActive = journeys.contains { $0.status == "active" }
+        if hasActive, let matches = try? await APIClient.shared.fetchMatches() {
+            let myTravelerId = Session.travelerId
+            activeMatch = matches.first { ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myTravelerId }
+        } else if !hasActive {
+            activeMatch = nil
         }
         isLoading = false
         hasLoadedOnce = true
@@ -506,8 +464,9 @@ struct TripSelectorCard: View {
                 CachedImage(urlString: journey.destination?.coverUrl) { img in
                     img.resizable().scaledToFill()
                 } placeholder: {
-                    LinearGradient(colors: [Color.tealDeep, Color.teal],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image("AppIconImage")
+                        .resizable()
+                        .scaledToFill()
                 }
                 .frame(width: 116, height: 70)
                 .clipped()
@@ -547,28 +506,39 @@ struct TripSelectorCard: View {
 
 struct TripFeedCard: View {
     let journey: APIJourney
-    let onEdit: (Int) -> Void
+    var onEdit: (Int) -> Void
+    var onMapTap: (() -> Void)? = nil
+    var buddyAvatarUrl: String? = nil
+    var buddyFirstName: String? = nil
+    var externalPublishTrigger: Binding<Bool>? = nil   // padre activa publicación tras auth
+    var onPublishTap: (() -> Void)? = nil              // nil = publicar directo; non-nil = pedir auth primero
 
     @State private var pages: [CollagePage] = []
     @State private var currentPage = 0
     @State private var tripStatus: String
-    @State private var showPublishConfirm = false
     @State private var isPublishing = false
+    @State private var showPublishConfirm = false
     @State private var deleteTarget: Int? = nil
     @StateObject private var chatStore = ChatStore.shared
     @State private var showContactBuddy = false
     @State private var showCancelConfirm = false
     @State private var isCanceling = false
     @State private var showBlankPublishAlert = false
+    @State private var hasBuddies: Bool = true
 
     /// Hay al menos una portada con contenido real (no en blanco)
     private var hasPublishableContent: Bool {
         pages.contains { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
     }
 
-    init(journey: APIJourney, onEdit: @escaping (Int) -> Void) {
+    init(journey: APIJourney, onEdit: @escaping (Int) -> Void, onMapTap: (() -> Void)? = nil, buddyAvatarUrl: String? = nil, buddyFirstName: String? = nil, externalPublishTrigger: Binding<Bool>? = nil, onPublishTap: (() -> Void)? = nil) {
         self.journey = journey
         self.onEdit = onEdit
+        self.onMapTap = onMapTap
+        self.buddyAvatarUrl = buddyAvatarUrl
+        self.buddyFirstName = buddyFirstName
+        self.externalPublishTrigger = externalPublishTrigger
+        self.onPublishTap = onPublishTap
         _tripStatus = State(initialValue: journey.status ?? "planning")
     }
 
@@ -576,8 +546,8 @@ struct TripFeedCard: View {
     private var isCompleted: Bool { tripStatus == "completed" }
     /// Total de slides incluyendo la de "agregar momento" (si es editable).
     private var dotCount: Int { pages.count + (isCompleted ? 0 : 1) }
-    private var destName: String  { journey.destination?.name ?? journey.title ?? "Trip" }
-    private var destCity: String { journey.destination?.city ?? "" }
+    private var destName: String  { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Trip" }
+    private var destCity: String { journey.destination?.city ?? journey.place?.city ?? "" }
     /// Altura del preview de portada — relativa a la pantalla para que toda la
     /// tarjeta quepa sin scroll.
     // Mismo aspect ratio que el canvas del editor (ancho_pantalla × 480), medido
@@ -592,27 +562,31 @@ struct TripFeedCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // — Trip header —
-            HStack(spacing: 10) {
-                // Destination avatar / cover
-                CachedImage(urlString: journey.destination?.coverUrl) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    Color.tealDeep
-                }
-                .frame(width: 40, height: 40)
-                .clipShape(Circle())
+            // — Trip header — tapping photo or name goes to the map
+            Button(action: { onMapTap?() }) {
+                HStack(spacing: 10) {
+                    CachedImage(urlString: journey.destination?.coverUrl) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        Image("AppIconImage")
+                            .resizable()
+                            .scaledToFill()
+                    }
+                    .frame(width: 40, height: 40)
+                    .clipShape(Circle())
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(destName)
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
-                    statusBadge
-                }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(destName)
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(Color.ink)
+                        statusBadge
+                    }
 
-                Spacer()
-                // Las acciones (publicar / eliminar) viven arriba, junto al título del tab.
+                    Spacer()
+                }
             }
+            .buttonStyle(.plain)
+            .disabled(onMapTap == nil)
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, 10)
 
@@ -673,14 +647,25 @@ struct TripFeedCard: View {
             }
 
             // — La promesa sigue viva en destino: ayuda a un toque —
-            if isActive {
+            if isActive && hasBuddies {
                 Divider().padding(.leading, 56).padding(.horizontal, Spacing.md)
                 Button { showContactBuddy = true } label: {
                     HStack(spacing: Spacing.sm) {
                         ZStack {
-                            Circle().fill(Color.teal.opacity(0.10)).frame(width: 36, height: 36)
-                            Image(systemName: "person.wave.2.fill")
-                                .font(.system(size: 14, weight: .medium)).foregroundStyle(Color.teal)
+                            if let avatarUrl = buddyAvatarUrl {
+                                CachedImage(urlString: avatarUrl) { img in
+                                    img.resizable().scaledToFill()
+                                } placeholder: {
+                                    Circle().fill(Color.teal.opacity(0.10))
+                                        .overlay(Image(systemName: "person.wave.2.fill").font(.system(size: 14, weight: .medium)).foregroundStyle(Color.teal))
+                                }
+                                .frame(width: 36, height: 36)
+                                .clipShape(Circle())
+                            } else {
+                                Circle().fill(Color.teal.opacity(0.10)).frame(width: 36, height: 36)
+                                Image(systemName: "person.wave.2.fill")
+                                    .font(.system(size: 14, weight: .medium)).foregroundStyle(Color.teal)
+                            }
                         }
                         .overlay(alignment: .topTrailing) {
                             let count = chatStore.travelerUnread
@@ -699,7 +684,7 @@ struct TripFeedCard: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text("¿Una duda en \(destName)?")
                                 .font(BT.footnoteBold).foregroundStyle(Color.ink)
-                            Text("Tu buddy sigue disponible")
+                            Text(buddyFirstName.map { "\($0) sigue disponible" } ?? "Tu buddy sigue disponible")
                                 .font(BT.caption1).foregroundStyle(Color.inkMuted)
                         }
                         Spacer()
@@ -711,6 +696,48 @@ struct TripFeedCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable)
+            }
+
+            // — Publicar historia — acción primaria, visible cuando hay contenido listo
+            if isActive && hasPublishableContent {
+                Divider().padding(.leading, Spacing.md)
+                Button {
+                    if let onPublishTap {
+                        onPublishTap()
+                    } else {
+                        showPublishConfirm = true
+                    }
+                } label: {
+                    HStack(spacing: Spacing.sm) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            if isPublishing {
+                                ProgressView().tint(Color.teal).scaleEffect(0.8)
+                            } else {
+                                Text("Publicar esta historia")
+                                    .font(BT.footnoteBold)
+                                    .foregroundStyle(Color.ink)
+                            }
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Color.teal)
+                                Text("Tu historia está lista")
+                                    .font(BT.caption1)
+                                    .foregroundStyle(Color.inkMuted)
+                            }
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .disabled(isPublishing)
             }
         }
         .background(Color.surface)
@@ -733,11 +760,11 @@ struct TripFeedCard: View {
         } message: {
             Text("Las fotos de esta portada se quitarán del trip.")
         }
-        .confirmationDialog("¿Publicar tu trip?", isPresented: $showPublishConfirm, titleVisibility: .visible) {
+        .confirmationDialog("¿Publicar esta historia?", isPresented: $showPublishConfirm, titleVisibility: .visible) {
             Button("Publicar") { publishTrip() }
             Button("Cancelar", role: .cancel) {}
         } message: {
-            Text("Tu trip quedará visible para la comunidad. Después no podrás editarlo.")
+            Text("Tu historia quedará visible para la comunidad. Después no podrás editarla.")
         }
         .alert("Tu portada está en blanco", isPresented: $showBlankPublishAlert) {
             Button("Entendido", role: .cancel) {}
@@ -751,11 +778,30 @@ struct TripFeedCard: View {
             Text("No podrás recuperar este trip ni sus momentos después de cancelarlo.")
         }
         .onAppear { loadPages() }
+        .task { await fetchBuddyAvailability() }
+        .onChange(of: externalPublishTrigger?.wrappedValue ?? false) { _, triggered in
+            if triggered {
+                showPublishConfirm = true
+                externalPublishTrigger?.wrappedValue = false
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .memoirPageSaved)) { note in
             if let id = note.object as? String, id == journey.id {
                 loadPages()
             }
         }
+    }
+
+    private func fetchBuddyAvailability() async {
+        let destId  = journey.destination?.id ?? journey.destinationId
+        let placeId = journey.placeId
+        let (id, source): (String, String)
+        if let d = destId       { id = d; source = "destination" }
+        else if let p = placeId { id = p; source = "place" }
+        else { await MainActor.run { hasBuddies = false }; return }
+        guard let ctx = try? await APIClient.shared.fetchPlaceContext(id: id, source: source) else { return }
+        print("🧳 [TripFeedCard] buddyContext id=\(id.prefix(8)) total=\(ctx.totalBuddies) status=\(ctx.status)")
+        await MainActor.run { hasBuddies = ctx.totalBuddies > 0 }
     }
 
     // MARK: - Sub-views
@@ -764,9 +810,29 @@ struct TripFeedCard: View {
     private var statusBadge: some View {
         let (label, color): (String, Color) = {
             switch tripStatus {
-            case "active":    return ("EN CURSO", Color.teal)
+            case "active":
+                let days = journey.arrivalAt.map {
+                    Calendar.current.dateComponents([.day],
+                        from: Calendar.current.startOfDay(for: $0),
+                        to:   Calendar.current.startOfDay(for: Date())).day ?? 0
+                } ?? 0
+                let text: String = {
+                    if days <= 0 { return "Desde hoy" }
+                    if days == 1 { return "Desde hace 1 día" }
+                    return "Desde hace \(days) días"
+                }()
+                return (text, Color.teal)
             case "completed": return ("COMPLETADO", Color.sand)
-            default:          return ("POR LLEGAR", Color.inkMuted)
+            default:
+                if let arrival = journey.arrivalAt {
+                    let days = Calendar.current.dateComponents([.day],
+                        from: Calendar.current.startOfDay(for: Date()),
+                        to:   Calendar.current.startOfDay(for: arrival)).day ?? 0
+                    if days == 0 { return ("Llega hoy", Color.inkMuted) }
+                    if days == 1 { return ("Llega mañana", Color.inkMuted) }
+                    return ("En \(days) días", Color.inkMuted)
+                }
+                return ("POR LLEGAR", Color.inkMuted)
             }
         }()
         HStack(spacing: 4) {
@@ -816,22 +882,22 @@ struct TripFeedCard: View {
 
     @ViewBuilder
     private var emptyCanvasCard: some View {
-        Button { onEdit(-1) } label: {
-            // Crece para llenar todo el espacio disponible
-            Color.clear
-                .frame(minHeight: previewHeight, maxHeight: .infinity)
-                .frame(maxWidth: .infinity)
-                .overlay {
-                    CachedImage(urlString: journey.destination?.coverUrl) { img in
-                        img.resizable().scaledToFill()
-                    } placeholder: {
-                        LinearGradient(colors: [Color.tealDeep, Color.teal],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing)
-                    }
+        Color.clear
+            .frame(minHeight: previewHeight, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .overlay {
+                CachedImage(urlString: journey.destination?.coverUrl) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    LinearGradient(colors: [Color.tealDeep, Color.teal],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
                 }
-                .overlay(Color.black.opacity(0.35))
-                .overlay {
-                    VStack(spacing: Spacing.md) {
+            }
+            .overlay(Color.black.opacity(0.35))
+            .overlay {
+                VStack(spacing: Spacing.md) {
+                    // + button goes to editor
+                    Button { onEdit(-1) } label: {
                         ZStack {
                             Circle()
                                 .strokeBorder(.white.opacity(0.7),
@@ -841,22 +907,24 @@ struct TripFeedCard: View {
                                 .font(.system(size: 24, weight: .light))
                                 .foregroundStyle(.white)
                         }
-                        VStack(spacing: 4) {
-                            Text("Tu historia empieza aquí")
-                                .font(BT.headline)
-                                .foregroundStyle(.white)
-                            Text("Guarda los momentos mientras vives \(destName)")
-                                .font(BT.footnote)
-                                .foregroundStyle(.white.opacity(0.8))
-                                .multilineTextAlignment(.center)
-                        }
                     }
-                    .padding(Spacing.lg)
+                    .buttonStyle(.plain)
+
+                    VStack(spacing: 4) {
+                        Text("Tu historia empieza aquí")
+                            .font(BT.headline)
+                            .foregroundStyle(.white)
+                        Text("Guarda los momentos mientras vives \(destName)")
+                            .font(BT.footnote)
+                            .foregroundStyle(.white.opacity(0.8))
+                            .multilineTextAlignment(.center)
+                    }
                 }
-                .clipped()
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+                .padding(Spacing.lg)
+            }
+            .clipped()
+            .contentShape(Rectangle())
+            .onTapGesture { if !isCompleted { Haptic.light(); onEdit(-1) } else { onMapTap?() } }
     }
 
     // MARK: - Logic
@@ -903,16 +971,13 @@ struct TripFeedCard: View {
         }
         isPublishing = true
         Task {
-            try? await APIClient.shared.publishJourney(journeyId: jId, pages: currentPages)
+            try? await APIClient.shared.publishJourney(journeyId: jId, tripId: journey.tripId, pages: currentPages)
             await MainActor.run {
                 tripStatus = "completed"
                 isPublishing = false
                 Haptic.success()
                 NotificationCenter.default.post(name: .journeyPublished, object: jId)
-                // Navegar a Inicio y recargar el feed para mostrar la publicación
-                NotificationCenter.default.post(name: .switchToTab,
-                                                object: nil,
-                                                userInfo: ["tab": AppTab.inicio.rawValue])
+                AppRouter.shared.switchTo(.inicio)
             }
         }
     }
@@ -1405,3 +1470,5 @@ struct TripEntry: Identifiable {
     }
     static let samples: [TripEntry] = []
 }
+
+// MARK: – GPS Place Map Gate

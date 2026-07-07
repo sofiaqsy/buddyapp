@@ -32,10 +32,14 @@ final class ImageCache {
 
     func set(_ image: UIImage, for url: URL) {
         let key = cacheKey(url)
+        // Memoria: NSCache es thread-safe, se puede escribir desde cualquier hilo
         let data = image.jpegData(compressionQuality: 0.85) ?? Data()
         memory.setObject(image, forKey: key as NSString, cost: data.count)
+        // Disco: JPEG encoding + write nunca en el main thread
         let file = diskURL.appendingPathComponent(key)
-        try? data.write(to: file, options: .atomic)
+        Task(priority: .utility) {
+            try? data.write(to: file, options: .atomic)
+        }
     }
 
     func load(_ url: URL) async -> UIImage? {
@@ -96,6 +100,25 @@ struct ShimmerEffect: ViewModifier {
 extension View {
     func shimmer() -> some View {
         modifier(ShimmerEffect())
+    }
+}
+
+// MARK: – Skeleton pulse animation
+
+struct SkeletonPulseModifier: ViewModifier {
+    @State private var pulsing = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(pulsing ? 0.45 : 1.0)
+            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulsing)
+            .onAppear { pulsing = true }
+    }
+}
+
+extension View {
+    func skeletonPulse() -> some View {
+        modifier(SkeletonPulseModifier())
     }
 }
 

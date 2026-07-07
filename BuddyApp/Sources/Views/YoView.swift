@@ -1,16 +1,14 @@
 import SwiftUI
 import PhotosUI
+import AuthenticationServices
 
 // MARK: – YO (PROFILE)
 
-enum IdentityMode: Identifiable {
-    case newUser, login
-    var id: Self { self }
-}
 
 struct YoView: View {
     @EnvironmentObject var authState: AuthState
     @EnvironmentObject var routeStore: RouteStore
+    @EnvironmentObject var router: AppRouter
     @State private var user: APIUser? = nil
     @State private var stickers: [APIUserSticker] = []
     @State private var journeys: [APIJourney] = []
@@ -27,15 +25,23 @@ struct YoView: View {
     @State private var showLogoutConfirm = false
     @State private var showDeleteConfirm = false
     @State private var isDeletingAccount = false
+    @State private var bioSaveFailed      = false
+    @State private var avatarUploadFailed = false
     @State private var buddyMe: APIBuddyMe? = nil
     @State private var destinations: [APIDestination] = []
     @State private var showBecomeBuddyConfirm = false
     @State private var isBecomingBuddy = false
-    @State private var identityMode: IdentityMode? = nil
+    @State private var showNameSheet = false
+    @State private var suggestedNameForProfile = ""
+    @State private var profileSocialLoading = false
+    @State private var profileSocialError: String? = nil
     // Guardia de logout: si hay apoyo activo no se puede cerrar sesión sin confirmar
     @State private var showActiveHelpLogoutAlert = false
     // Caché en memoria: evita recargar el perfil en cada cambio de tab
     @State private var lastFetchedAt: Date? = nil
+    // Previene llamadas concurrentes y rapid-retries (Task restarts por cambios de layout)
+    @State private var isLoadingProfile = false
+    @State private var lastFetchAttemptedAt: Date? = nil
 
     var body: some View {
         NavigationStack {
@@ -85,6 +91,7 @@ struct YoView: View {
                                         .frame(width: 36, height: 36)
                                         .contentShape(Rectangle())
                                 }
+                                .accessibilityLabel("Opciones de cuenta")
                             }
                             .padding(.horizontal, Spacing.edge)
                             .padding(.top, Spacing.md)
@@ -117,7 +124,7 @@ struct YoView: View {
                             tripsSection
                                 .padding(.top, Spacing.xl)
                         }
-                        .padding(.bottom, 100)
+                        .padding(.bottom, Spacing.xl).safeAreaPadding(.bottom)
                     }
                     .refreshable { await loadProfile(forceRefresh: true) }
                     .background(Color.canvas)
@@ -143,9 +150,13 @@ struct YoView: View {
             } message: {
                 Text("Hay un buddy ayudándote ahora mismo. Si cierras sesión puedes regresar verificando el mismo número de teléfono.")
             }
-            .sheet(item: $identityMode) { mode in
-                IdentitySheet(skipName: mode == .login) { Task { await loadProfile(forceRefresh: true) } }
-                    .environmentObject(authState)
+            .sheet(isPresented: $showNameSheet) {
+                IdentitySheet(purpose: .profile,
+                              suggestedName: suggestedNameForProfile,
+                              startAtName: true) {
+                    Task { await loadProfile(forceRefresh: true) }
+                }
+                .environmentObject(authState)
             }
             .confirmationDialog("¿Eliminar tu cuenta?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
                 Button("Eliminar cuenta permanentemente", role: .destructive) {
@@ -174,13 +185,23 @@ struct YoView: View {
                     }
                 }
             }
-            .task { await loadProfile() }
-            .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
-                Task { await loadProfile(forceRefresh: true) }
+            .alert("No se pudo guardar la bio", isPresented: $bioSaveFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Tu bio no se guardó. Verifica tu conexión e inténtalo de nuevo.")
             }
-            .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
-                Task { await loadProfile(forceRefresh: true) }
+            .alert("No se pudo subir la foto", isPresented: $avatarUploadFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Tu foto de perfil no se actualizó. Verifica tu conexión e inténtalo de nuevo.")
             }
+        }
+        .task { await loadProfile() }
+        .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
+            Task { await loadProfile(forceRefresh: true) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
+            Task { await loadProfile(forceRefresh: true) }
         }
     }
 
@@ -219,6 +240,8 @@ struct YoView: View {
                 }
                 .frame(width: 96, height: 96) // ancla el ZStack entero para que el badge no desplace el layout
             }
+            .accessibilityLabel("Cambiar foto de perfil")
+            .accessibilityHint("Abre el selector de fotos")
             .onChange(of: avatarItem) { _, item in
                 guard let item else { return }
                 Task { await uploadAvatar(item: item) }
@@ -460,8 +483,7 @@ struct YoView: View {
             if journeys.isEmpty {
                 // Empty state — invita a la acción, no lamenta el vacío
                 Button {
-                    NotificationCenter.default.post(name: .switchToTab, object: nil,
-                                                    userInfo: ["tab": AppTab.trips.rawValue])
+                    router.switchTo(.trips)
                 } label: {
                     VStack(spacing: Spacing.sm) {
                         Image(systemName: "plus.circle")
@@ -610,7 +632,7 @@ struct YoView: View {
                             Circle()
                                 .fill(Color.sandLight)
                                 .frame(width: 44, height: 44)
-                            Image(systemName: "point.topright.arrow.triangle.backward.to.point.bottomleft.scurvepath")
+                            Image(systemName: "figure.walk.arrival")
                                 .font(.system(size: 18, weight: .light))
                                 .foregroundStyle(Color.sand)
                         }
@@ -644,53 +666,157 @@ struct YoView: View {
                                          title: "Tu perfil de Buddy",
                                          subtitle: "Si decides ayudar a otros viajeros, puedes configurarlo desde aquí.")
                     }
-                    .padding(.bottom, Spacing.xl)
+                    .padding(.bottom, Spacing.md)
 
-                    // CTA primario
-                    Button {
-                        Haptic.medium()
-                        identityMode = .newUser
-                    } label: {
-                        Text("Crear mi perfil")
-                            .font(BT.footnoteBold)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 17)
-                            .background(Color.ink)
-                            .foregroundStyle(Color.inkInverse)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.pressable)
+                    Divider().overlay(Color.border)
+                        .padding(.bottom, Spacing.md)
+
+                    Text("Continúa con")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.bottom, Spacing.sm)
+
+                    // Apple
+                    SignInWithAppleButton(.signIn, onRequest: { req in
+                        req.requestedScopes = [.fullName, .email]
+                    }, onCompletion: { result in
+                        handleProfileAppleResult(result)
+                    })
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 50).clipShape(Capsule())
+                    .opacity(profileSocialLoading ? 0.5 : 1)
+                    .disabled(profileSocialLoading)
                     .padding(.bottom, Spacing.sm)
 
-                    // CTA secundario
-                    Button {
-                        Haptic.light()
-                        identityMode = .login
-                    } label: {
-                        Text("Ya tengo una cuenta")
-                            .font(BT.callout)
-                            .foregroundStyle(Color.inkMuted)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .contentShape(Rectangle())
+                    // Google
+                    Button(action: { handleProfileSignIn(provider: GoogleProvider()) }) {
+                        ZStack {
+                            if profileSocialLoading {
+                                ProgressView().progressViewStyle(.circular).tint(Color.ink)
+                            } else {
+                                HStack(spacing: 10) {
+                                    Image("google_logo").resizable().scaledToFit()
+                                        .frame(width: 20, height: 20)
+                                    Text("Continuar con Google")
+                                        .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .background(Color.canvas).clipShape(Capsule())
+                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
+                    .opacity(profileSocialLoading ? 0.7 : 1)
+                    .disabled(profileSocialLoading)
+
+                    if let err = profileSocialError {
+                        Text(err).font(BT.caption1).foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, Spacing.xs)
+                    }
+
+                    Text("Al continuar confirmas que tienes **18+ años** y aceptas nuestros **términos, privacidad** y **código de conducta**")
+                        .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, Spacing.sm)
                 }
                 .padding(Spacing.lg)
                 .background(Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
                 .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
                 .padding(.horizontal, Spacing.edge)
-
-                // Microcopy tranquilizador
-                Text("Nombre y teléfono. Nada más.")
-                    .font(BT.caption1)
-                    .foregroundStyle(Color.inkMuted.opacity(0.7))
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, Spacing.sm)
             }
         }
         .background(Color.canvas)
+    }
+
+    // MARK: – Inline auth (anonymousState)
+
+    private func handleProfileAppleResult(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let err):
+            let nsErr = err as NSError
+            if nsErr.code != ASAuthorizationError.canceled.rawValue {
+                profileSocialError = "Error con Apple."
+            }
+        case .success(let auth):
+            guard let cred = auth.credential as? ASAuthorizationAppleIDCredential,
+                  let tokenData = cred.identityToken,
+                  let token = String(data: tokenData, encoding: .utf8) else {
+                profileSocialError = "No se pudo leer el token de Apple."
+                return
+            }
+            var name: String? = nil
+            if let fn = cred.fullName {
+                let j = [fn.givenName, fn.familyName].compactMap { $0 }
+                    .joined(separator: " ").trimmingCharacters(in: .whitespaces)
+                if !j.isEmpty { name = j }
+            }
+            handleProfileSocialSignIn(credential: IdentityCredential(
+                provider: .apple, identityToken: token, email: cred.email, fullName: name
+            ))
+        }
+    }
+
+    private func handleProfileSignIn(provider: IdentityProvider) {
+        profileSocialLoading = true; profileSocialError = nil
+        Task {
+            do {
+                let result = try await AuthService.shared.signIn(with: provider)
+                await finishProfileAuth(result)
+            } catch {
+                let nsErr = error as NSError
+                await MainActor.run {
+                    profileSocialLoading = false
+                    let cancelCodes = [ASAuthorizationError.canceled.rawValue, 1]
+                    if !cancelCodes.contains(nsErr.code) {
+                        profileSocialError = "No se pudo iniciar sesión."
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleProfileSocialSignIn(credential: IdentityCredential) {
+        profileSocialLoading = true; profileSocialError = nil
+        Task {
+            do {
+                let result = try await AuthService.shared._postToBackend(credential)
+                await finishProfileAuth(result)
+            } catch {
+                await MainActor.run {
+                    profileSocialLoading = false
+                    profileSocialError = "No se pudo iniciar sesión."
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func finishProfileAuth(_ result: AuthResult) {
+        profileSocialLoading = false
+        let destination = AuthCoordinator.shared.handle(result)
+        switch destination {
+        case .home:
+            authState.didAuthenticate()
+            Task { await loadProfile(forceRefresh: true) }
+        case .needsProfileCompletion:
+            let name = result.suggestedName ?? ""
+            if name.trimmingCharacters(in: .whitespaces).count >= 2 {
+                Task {
+                    try? await AuthService.shared.completeProfileForSocialLogin(
+                        fullName: name.trimmingCharacters(in: .whitespaces)
+                    )
+                    authState.didAuthenticate()
+                    await loadProfile(forceRefresh: true)
+                }
+            } else {
+                suggestedNameForProfile = name
+                showNameSheet = true
+            }
+        }
     }
 
     private func anonymousBenefit(icon: String, title: String, subtitle: String) -> some View {
@@ -728,7 +854,7 @@ struct YoView: View {
                     Haptic.success()
                 }
             } catch {
-                await MainActor.run { isSavingBio = false }
+                await MainActor.run { isSavingBio = false; bioSaveFailed = true }
             }
         }
     }
@@ -760,11 +886,18 @@ struct YoView: View {
             }
         } catch {
             print("🖼️ [uploadAvatar] ❌ \(error)")
-            await MainActor.run { isUploadingAvatar = false }
+            await MainActor.run { isUploadingAvatar = false; avatarUploadFailed = true }
         }
     }
 
     private func loadProfile(forceRefresh: Bool = false) async {
+        // Prevent concurrent calls and rapid-fire retries (SwiftUI may restart .task on layout changes)
+        if !forceRefresh {
+            if isLoadingProfile { return }
+            if let lastAttempt = lastFetchAttemptedAt,
+               Date().timeIntervalSince(lastAttempt) < 2 { return }
+        }
+
         let tid  = TravelerService.shared.travelerId?.prefix(8) ?? "nil"
         let ttok = TravelerService.shared.token.map { String($0.prefix(16)) + "…" } ?? "nil"
         let atok = AuthService.shared.accessToken.map { String($0.prefix(16)) + "…" } ?? "nil"
@@ -782,13 +915,25 @@ struct YoView: View {
             isLoading = false; return
         }
 
+        isLoadingProfile = true
+        lastFetchAttemptedAt = Date()
+        defer { isLoadingProfile = false }
+
         if user == nil { isLoading = true }
 
         // ── Fase 1: header ─────────────────────────────────────────────────────
         // Carga /users/me primero y muestra el header inmediatamente.
         // El contenido inferior (stickers, trips) se carga en fase 2.
+        // Retry once after a brief delay — backend may need a moment to create the user
+        // record after social sign-in (Apple in particular has a propagation delay).
         print("👤 [YoView] fetchCurrentUser → /users/me…")
-        guard let me = try? await APIClient.shared.fetchCurrentUser() else {
+        var me: APIUser? = try? await APIClient.shared.fetchCurrentUser()
+        if me == nil {
+            print("👤 [YoView] fetchCurrentUser falló — reintentando en 1.5s…")
+            try? await Task.sleep(for: .seconds(1.5))
+            me = try? await APIClient.shared.fetchCurrentUser()
+        }
+        guard let me else {
             print("👤 [YoView] ❌ fetchCurrentUser falló — token inválido, sin red, o sin perfil en DB")
             isLoading = false; return
         }
@@ -848,18 +993,25 @@ struct YoView: View {
         }
     }
 
+    private static let memberSinceFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "es_PE")
+        f.dateFormat = "MMMM yyyy"
+        return f
+    }()
+    private static let shortDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "es_PE")
+        f.dateFormat = "d MMM"
+        return f
+    }()
+
     private func memberSinceLabel(date: Date) -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "es_PE")
-        df.dateFormat = "MMMM yyyy"
-        return df.string(from: date)
+        YoView.memberSinceFormatter.string(from: date)
     }
 
     private func shortDateFromDate(_ date: Date) -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "es_PE")
-        df.dateFormat = "d MMM"
-        return df.string(from: date)
+        YoView.shortDateFormatter.string(from: date)
     }
 }
 
@@ -1218,7 +1370,7 @@ private struct BuddyStatusCard: View {
             .disabled(savingZone)
             .sheet(isPresented: $showZonePicker) {
                 DestinationPickerSheet(selectedId: selectedZoneId) { picked in
-                    Task { await saveZone(picked.id, name: picked.name) }
+                    Task { await saveZone(picked) }
                 }
             }
         }
@@ -1260,12 +1412,14 @@ private struct BuddyStatusCard: View {
         }
     }
 
-    private func saveZone(_ id: String, name: String) async {
+    private func saveZone(_ destination: APIDestination) async {
         savingZone = true
-        selectedZoneName = name  // optimistic
+        selectedZoneName = destination.name  // optimistic
         defer { savingZone = false }
         do {
-            let updated = try await APIClient.shared.updateBuddyMe(destinationIds: [id], activeZoneIds: [id])
+            let updated = try await APIClient.shared.updateBuddyMe(
+                coverage: BuddyCoverageInput(from: destination)
+            )
             onUpdated(updated)
             Haptic.success()
         } catch {

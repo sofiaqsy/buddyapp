@@ -79,16 +79,25 @@ final class AppleProvider: NSObject, IdentityProvider,
 
 final class GoogleProvider: IdentityProvider {
     func signIn() async throws -> IdentityCredential {
-        guard let rootVC = await MainActor.run(body: {
-            UIApplication.shared
-                .connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first?.windows.first?.rootViewController
-        }) else {
-            throw AuthError.sendFailed("No hay ventana activa para presentar Google Sign In")
+        // GIDSignIn must run on the main thread (UIKit requirement)
+        let result: GIDSignInResult = try await withCheckedThrowingContinuation { cont in
+            Task { @MainActor in
+                guard let rootVC = UIApplication.shared
+                    .connectedScenes
+                    .compactMap({ $0 as? UIWindowScene })
+                    .first?.windows.first?.rootViewController
+                else {
+                    cont.resume(throwing: AuthError.sendFailed("No hay ventana activa para presentar Google Sign In"))
+                    return
+                }
+                do {
+                    let r = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootVC)
+                    cont.resume(returning: r)
+                } catch {
+                    cont.resume(throwing: error)
+                }
+            }
         }
-
-        let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootVC)
         guard let idToken = result.user.idToken?.tokenString else {
             throw AuthError.sendFailed("Google no devolvió un id_token")
         }
@@ -102,5 +111,15 @@ final class GoogleProvider: IdentityProvider {
             email:         profile?.email,
             fullName:      fullName.isEmpty ? nil : fullName
         )
+    }
+}
+
+
+// MARK: – Google URL callback (AppDelegate delegate)
+
+extension AppDelegate {
+    func application(_ app: UIApplication, open url: URL,
+                     options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        GIDSignIn.sharedInstance.handle(url)
     }
 }

@@ -8,9 +8,10 @@ struct TripDetailView: View {
     var unreadCount: Int = 0
     @EnvironmentObject var locationService: LocationService
     @EnvironmentObject var routeStore: RouteStore
+    @EnvironmentObject var router: AppRouter
     @Environment(\.dismiss) var dismiss
 
-    @State private var camera: MapCameraPosition = .automatic
+    @State private var camera: MapCameraPosition
     @State private var selectedPlace: Place? = nil
     @State private var showChat = false
     @State private var showContactar = false
@@ -23,6 +24,25 @@ struct TripDetailView: View {
     /// hasta el final se revelan los siguientes 10 y aparecen como markers.
     @State private var visibleCount = 10
     @State private var orderedIds: [UUID] = []   // orden congelado de la sesión
+
+    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0) {
+        self.route = route
+        self.match = match
+        self.journey = journey
+        self.unreadCount = unreadCount
+        // Si el destino no tiene spots curados, centrar el mapa en las coords explícitas
+        // desde el inicio — sin esperar el delay de fitMap().
+        if route.places.isEmpty, let center = route.explicitCenter {
+            print("🗺️ [TripDetailView.init] places=0 explicitCenter=(\(center.latitude),\(center.longitude)) → camera centrada en destino")
+            _camera = State(initialValue: .region(MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)
+            )))
+        } else {
+            print("🗺️ [TripDetailView.init] places=\(route.places.count) centerLat=\(route.centerLat.map{String($0)} ?? "nil") → camera=.automatic")
+            _camera = State(initialValue: .automatic)
+        }
+    }
 
     private let pageSize = 10
     private var isPlanning: Bool { tripStatus == "planning" }
@@ -58,6 +78,47 @@ struct TripDetailView: View {
         return known + extras
     }
     private func refreshOrder() { orderedIds = sortedPlaces.map(\.id) }
+
+    private func loadRouteContext() async {
+        if let jid = journey?.id { await routeStore.loadFavorites(journeyId: jid) }
+        await MainActor.run { refreshOrder() }
+
+        // /destinations/:id/context filtra por destination_ids — mismo criterio que Home.
+        // Solo cuenta buddies que explícitamente atienden este destino.
+        let destId = journey?.destinationId ?? journey?.destination?.id
+        if let destId,
+           let ctx = try? await APIClient.shared.fetchDestinationContext(id: destId) {
+            await MainActor.run { buddyCount = ctx.buddies }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { fitMap() }
+
+        // Deep-link desde chat: seleccionar lugar sugerido por el buddy
+        if let dp = PlaceDeepLink.shared.consume() {
+            await MainActor.run {
+                let match = livePlaces.first { $0.name.localizedCaseInsensitiveCompare(dp.name) == .orderedSame }
+                    ?? livePlaces.min(by: {
+                        abs($0.latitude - dp.lat) + abs($0.longitude - dp.lng) <
+                        abs($1.latitude - dp.lat) + abs($1.longitude - dp.lng)
+                    })
+                withAnimation(.easeInOut) { selectedPlace = match }
+                let coord = match.map {
+                    CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                } ?? CLLocationCoordinate2D(latitude: dp.lat, longitude: dp.lng)
+                withAnimation(.easeInOut(duration: 0.6)) {
+                    camera = .region(MKCoordinateRegion(
+                        center: coord,
+                        span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
+                    ))
+                }
+            }
+        }
+
+        guard let userId = Session.travelerId else { return }
+        if let userStickers = try? await APIClient.shared.fetchUserStickers(travelerId: userId) {
+            await routeStore.syncCollectedStickers(userStickers: userStickers)
+        }
+    }
 
     /// Lo que está cargado/visible ahora (ventana de paginación cliente)
     private var displayedPlaces: [Place] { Array(orderedPlaces.prefix(visibleCount)) }
@@ -102,56 +163,20 @@ struct TripDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             tripStatus = journey?.status ?? "active"
-            Task {
-                // Load the correct destination's places for this trip
-                if let destId = journey?.destinationId {
-                    await routeStore.fetchDestinationFromAPI(id: destId)
-                    if let jid = journey?.id { await routeStore.loadFavorites(journeyId: jid) }
-                    await MainActor.run { refreshOrder() }   // congela orden favoritos-primero
-                    if let c = try? await APIClient.shared.fetchBuddyCount(destinationId: destId) {
-                        await MainActor.run { buddyCount = c }
-                    }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { fitMap() }
-
-                // Deep-link desde chat: seleccionar lugar sugerido por el buddy
-                if let dp = PlaceDeepLink.shared.consume() {
-                    await MainActor.run {
-                        let match = livePlaces.first { $0.name.localizedCaseInsensitiveCompare(dp.name) == .orderedSame }
-                            ?? livePlaces.min(by: {
-                                abs($0.latitude - dp.lat) + abs($0.longitude - dp.lng) <
-                                abs($1.latitude - dp.lat) + abs($1.longitude - dp.lng)
-                            })
-                        withAnimation(.easeInOut) { selectedPlace = match }
-                        // Centrar y hacer zoom en el lugar
-                        let coord = match.map {
-                            CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
-                        } ?? CLLocationCoordinate2D(latitude: dp.lat, longitude: dp.lng)
-                        withAnimation(.easeInOut(duration: 0.6)) {
-                            camera = .region(MKCoordinateRegion(
-                                center: coord,
-                                span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
-                            ))
-                        }
-                    }
-                }
-
-                guard let userId = Session.travelerId else { return }
-                if let userStickers = try? await APIClient.shared.fetchUserStickers(travelerId: userId) {
-                    await routeStore.syncCollectedStickers(userStickers: userStickers)
-                }
-            }
+            Task { await loadRouteContext() }
         }
         .onChange(of: routeStore.route.id) { _, _ in
-            visibleCount = 10   // nuevo destino → vuelve al primer lote
+            // Nuevo destino cargado por RouteStore: resetear todo el estado dependiente
+            // y recargar en lugar de depender de onAppear que no re-dispara en reuso de vista.
+            visibleCount = 10
+            buddyCount = nil
             refreshOrder()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { fitMap() }
+            Task { await loadRouteContext() }
         }
         .sheet(isPresented: $showChat) {
             if let match, let journey {
-                BuddyChatView(match: match, journey: journey) {
-                    showChat = false
-                }
+                BuddyChatView(match: match, journey: journey).equatable()
             }
         }
         .sheet(isPresented: $showContactar) {
@@ -171,11 +196,11 @@ struct TripDetailView: View {
 
     private var mapView: some View {
         Map(position: $camera) {
-            // Solo los lugares cargados; featured al final → se dibujan encima
+            // Spots curados por la comunidad; featured al final → se dibujan encima
             ForEach(displayedPlaces.sorted { !$0.featured && $1.featured }) { place in
                 Annotation("", coordinate: place.coordinate) {
                     RecommendationPin(place: place, isSelected: selectedPlace?.id == place.id)
-                        .frame(minWidth: 44, minHeight: 44)   // área tocable ≥44pt sin recortar la etiqueta
+                        .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                         .highPriorityGesture(TapGesture().onEnded {
                             Haptic.select()
@@ -190,10 +215,16 @@ struct TripDetailView: View {
             }
             UserAnnotation()
         }
-        // Sin POIs nativos de Apple: solo brillan las recomendaciones de la comunidad
+        // Mapa de contexto: sin comercios, pero con carreteras / ríos / nombres de ciudad.
+        // .excludingAll elimina demasiadas referencias visuales y desorienta al usuario.
         .mapStyle(.standard(
             elevation: .flat,
-            pointsOfInterest: .excludingAll,
+            pointsOfInterest: .excluding([
+                .restaurant, .cafe, .bakery, .brewery, .winery,
+                .hotel, .store, .gasStation, .bank, .atm, .parking,
+                .carRental, .laundry, .fitnessCenter, .nightlife,
+                .movieTheater, .theater, .pharmacy
+            ]),
             showsTraffic: false
         ))
         .mapControls { EmptyView() }
@@ -208,12 +239,19 @@ struct TripDetailView: View {
                     .glassRounded(14)
                     .mapControlShadow()
 
+                // buddyActive solo true cuando hay confirmación explícita (buddyCount > 0, match activo o mensajes sin leer).
+                // Mientras buddyCount es nil (cargando) → deshabilitado por defecto para evitar tap prematuro.
+                let buddyActive = (buddyCount ?? 0) > 0 || match != nil || unreadCount > 0
                 VStack(spacing: 0) {
                     ZStack(alignment: .topTrailing) {
                         MapIconButton(icon: "person.wave.2.fill") {
                             if match != nil { showChat = true }
                             else if journey != nil { showContactar = true }
                         }
+                        .disabled(!buddyActive)
+                        .opacity(buddyActive ? 1 : 0.38)
+                        .grayscale(buddyActive ? 0 : 1)
+                        .accessibilityHidden(!buddyActive)
                         if unreadCount > 0 {
                             Text("\(min(unreadCount, 99))")
                                 .font(.system(size: 11, weight: .bold))
@@ -325,18 +363,72 @@ struct TripDetailView: View {
                 .padding(.top, 10)
             }
 
-            HStack(alignment: .firstTextBaseline) {
-                Text("Recomendado por la comunidad")
-                    .font(BT.title2)
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text("\(livePlaces.count) recomendaciones")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.teal)
+            if livePlaces.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    // — Título + descripción
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Sin explorar aún")
+                            .font(BT.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Nadie ha agregado recomendaciones aquí todavía. La guía de este lugar la construye su comunidad.")
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 14)
+
+                    // — Separador
+                    Divider()
+                        .padding(.horizontal, 20)
+                        .padding(.top, 14)
+
+                    // — Fila accionable estilo Apple Maps
+                    Button {
+                        router.switchTo(.yo)
+                    } label: {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.teal.opacity(0.12))
+                                    .frame(width: 36, height: 36)
+                                Image(systemName: "person.badge.plus")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(Color.teal)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Ser el primer buddy aquí")
+                                    .font(BT.footnoteBold)
+                                    .foregroundStyle(.primary)
+                                Text("Ayuda a viajeros y construye esta guía")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.inkMuted)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.inkMuted.opacity(0.6))
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Recomendado por la comunidad")
+                        .font(BT.title2)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Text("\(livePlaces.count) recomendaciones")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.teal)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 6)
-            .padding(.bottom, 8)
 
             if let place = selectedPlace {
                 placeDetail(place)
@@ -496,7 +588,23 @@ struct TripDetailView: View {
     private func fitMap() {
         // Encuadra los lugares cargados (primer lote en la carga inicial)
         let coords = displayedPlaces.map(\.coordinate)
-        guard !coords.isEmpty else { return }
+        print("🗺️ [fitMap] places=\(livePlaces.count) displayed=\(displayedPlaces.count) route.center=\(route.centerLat.map{String($0)} ?? "nil") routeStore.center=\(routeStore.route.centerLat.map{String($0)} ?? "nil")")
+        if coords.isEmpty {
+            // Sin spots: centrar en la coordenada explícita. Preferir `route` (prop del view)
+            // sobre `routeStore.route` porque este puede ser .placeholder si onChange dispara
+            // antes de que termine el fetch.
+            let center = route.explicitCenter ?? routeStore.route.explicitCenter
+            print("🗺️ [fitMap] sin places → center=\(center.map { "(\($0.latitude),\($0.longitude))" } ?? "NIL — mapa no se mueve")")
+            if let center {
+                withAnimation(.easeInOut(duration: 0.6)) {
+                    camera = .region(MKCoordinateRegion(
+                        center: center,
+                        span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)
+                    ))
+                }
+            }
+            return
+        }
 
         let minLat = coords.map(\.latitude).min()!
         let maxLat = coords.map(\.latitude).max()!
@@ -531,6 +639,38 @@ struct TripDetailView: View {
                     span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
                 ))
             }
+        }
+    }
+}
+
+// MARK: – DESTINATION PIN (pioneer: sin spots curados)
+
+struct DestinationPin: View {
+    let name: String
+
+    var body: some View {
+        VStack(spacing: 5) {
+            ZStack {
+                Circle()
+                    .fill(Color.sand)
+                    .frame(width: 46, height: 46)
+                    .shadow(color: Color.sand.opacity(0.4), radius: 8, y: 3)
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            Text(name)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.ink)
+                .lineLimit(1)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(Color.surface)
+                        .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+                )
+                .fixedSize()
         }
     }
 }

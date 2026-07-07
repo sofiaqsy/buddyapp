@@ -6,24 +6,26 @@ struct BuddyAppApp: App {
     @StateObject private var locationService = LocationService()
     @StateObject private var routeStore      = RouteStore()
     @StateObject private var authState       = AuthState()
+    @StateObject private var router          = AppRouter.shared
+
+    init() {
+        UITabBar.appearance().isHidden = true
+        print("🚀 [AppLaunch] ─────────────────────────────────────")
+        print("🚀 [AppLaunch] TravelerService.hasSession=\(TravelerService.shared.hasSession)")
+        print("🚀 [AppLaunch] travelerId=\(TravelerService.shared.travelerId?.prefix(8) ?? "NIL")")
+        print("🚀 [AppLaunch] travelerStatus=\(TravelerService.shared.status)")
+        print("🚀 [AppLaunch] AuthService.isLoggedIn=\(AuthService.shared.isLoggedIn)")
+        print("🚀 [AppLaunch] Session.hasSession=\(Session.hasSession)")
+        print("🚀 [AppLaunch] ─────────────────────────────────────")
+    }
 
     var body: some Scene {
         WindowGroup {
-            // RootView es siempre el punto de entrada.
-            // La autenticación controla capacidades, no navegación.
-            let _ = {
-                print("🚀 [AppLaunch] ─────────────────────────────────────")
-                print("🚀 [AppLaunch] TravelerService.hasSession=\(TravelerService.shared.hasSession)")
-                print("🚀 [AppLaunch] travelerId=\(TravelerService.shared.travelerId?.prefix(8) ?? "NIL")")
-                print("🚀 [AppLaunch] travelerStatus=\(TravelerService.shared.status)")
-                print("🚀 [AppLaunch] AuthService.isLoggedIn=\(AuthService.shared.isLoggedIn)")
-                print("🚀 [AppLaunch] Session.hasSession=\(Session.hasSession)")
-                print("🚀 [AppLaunch] ─────────────────────────────────────")
-            }()
             RootView()
                 .environmentObject(locationService)
                 .environmentObject(routeStore)
                 .environmentObject(authState)
+                .environmentObject(router)
                 .onAppear {
                     if authState.isLoggedIn {
                         appDelegate.requestPushPermission()

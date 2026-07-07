@@ -8,6 +8,13 @@ struct Route: Identifiable, Codable {
     let city: String
     var places: [Place]
     var radiusMeters: Int?
+    var centerLat: Double?
+    var centerLng: Double?
+
+    var explicitCenter: CLLocationCoordinate2D? {
+        guard let lat = centerLat, let lng = centerLng else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    }
 
     var collectedCount: Int { places.filter(\.isCollected).count }
     var isCompleted: Bool { collectedCount == places.count }

@@ -148,7 +148,7 @@ struct TripBookView: View {
         let currentPages = bookVM.pages
         let jId = journey.id
         Task {
-            try? await APIClient.shared.publishJourney(journeyId: jId, pages: currentPages)
+            try? await APIClient.shared.publishJourney(journeyId: jId, tripId: journey.tripId, pages: currentPages)
             await MainActor.run {
                 tripStatus = "completed"
                 isFinishing = false

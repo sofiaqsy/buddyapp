@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 
 // MARK: – CHAT STORE
 // Shared observable — loads matches+messages, exposes unread count for tab badge.
@@ -52,20 +53,39 @@ final class ChatStore: ObservableObject {
                     let parts = content.dropFirst("place:".count).split(separator: "|")
                     return parts.count > 2 ? "📍 \(parts[2])" : "Lugar compartido"
                 }
+                if content.hasPrefix("category_card:") {
+                    let key = String(content.dropFirst("category_card:".count))
+                    let label: String = {
+                        switch key {
+                        case "transport":     return "Cómo llegar"
+                        case "food":          return "Comer"
+                        case "translation":   return "Traducir"
+                        case "activities":    return "Qué hacer"
+                        case "accommodation": return "Alojamiento"
+                        case "emergency":     return "Seguridad"
+                        default:              return key
+                        }
+                    }()
+                    let verb = isBuddyRole ? "Necesita" : "Necesito"
+                    return "\(verb) ayuda con \(label)"
+                }
                 return content
             }
         }
 
+        private static let timeFormatter: DateFormatter = {
+            let f = DateFormatter(); f.timeStyle = .short; return f
+        }()
+        private static let shortDateFormatter: DateFormatter = {
+            let f = DateFormatter(); f.dateFormat = "d/M"; return f
+        }()
+
         var lastTime: String {
             guard let date = lastMessage?.createdAt else { return "" }
             let cal = Calendar.current
-            if cal.isDateInToday(date) {
-                let f = DateFormatter(); f.timeStyle = .short; return f.string(from: date)
-            } else if cal.isDateInYesterday(date) {
-                return "Ayer"
-            } else {
-                let f = DateFormatter(); f.dateFormat = "d/M"; return f.string(from: date)
-            }
+            if cal.isDateInToday(date)     { return ConnectionItem.timeFormatter.string(from: date) }
+            if cal.isDateInYesterday(date) { return "Ayer" }
+            return ConnectionItem.shortDateFormatter.string(from: date)
         }
     }
 
@@ -79,6 +99,38 @@ final class ChatStore: ObservableObject {
     /// true tras la primera carga (con o sin resultados) — el spinner de
     /// pantalla completa solo se muestra antes de este punto
     @Published var hasLoadedOnce = false
+
+    // ── Per-match message history cache ──────────────────────────────────────
+    // BuddyChatView writes here after every fetch and after every SSE message.
+    // On re-open it reads the cache first → 0ms to first message, then a
+    // background fetch merges any new arrivals without resetting the array.
+    // TTL: 5 min — enough to survive tab-switches but short enough to stay fresh.
+    // Not @Published: no view needs to observe cache changes directly.
+    var messageCache: [String: [APIMessage]] = [:]
+    private var messageCacheDate: [String: Date] = [:]
+    private let messageCacheTTL: TimeInterval = 300
+
+    /// Returns cached messages if they exist and are within the TTL, else nil.
+    func cachedHistory(for matchId: String) -> [APIMessage]? {
+        guard let date = messageCacheDate[matchId],
+              Date().timeIntervalSince(date) < messageCacheTTL else { return nil }
+        return messageCache[matchId]
+    }
+
+    /// Replaces the cached history for a match (called after a full fetch).
+    func updateCache(_ msgs: [APIMessage], for matchId: String) {
+        messageCache[matchId] = msgs
+        messageCacheDate[matchId] = Date()
+    }
+
+    /// Appends a single new message to the cache (called by SSE handler).
+    /// No-ops if the match has no cache entry yet (first open, cache not built).
+    func appendToCache(_ msg: APIMessage, for matchId: String) {
+        guard messageCache[matchId] != nil,
+              !(messageCache[matchId]!.contains(where: { $0.id == msg.id })) else { return }
+        messageCache[matchId]!.append(msg)
+        messageCacheDate[matchId] = Date()
+    }
 
     /// UN solo SSE multiplexado (offer + message + match) que vive mientras el
     /// usuario está logueado, en cualquier tab. Reemplaza los dos streams previos
@@ -197,10 +249,25 @@ final class ChatStore: ObservableObject {
         await MainActor.run { isLoading = true }
         do {
             let matches = try await APIClient.shared.fetchMatches()
+            // Capture cached connections so completed matches can reuse their last
+            // known message without a network round-trip.
+            let cachedConnections = await MainActor.run { connections }
             var items: [ConnectionItem] = []
             await withTaskGroup(of: ConnectionItem?.self) { group in
                 for match in matches {
+                    let cached = cachedConnections.first(where: { $0.match.id == match.id })
                     group.addTask {
+                        // Completed matches accumulate no new messages and no unread.
+                        // Reuse the cached last message to avoid N extra fetches on
+                        // every ChatStore.load() cycle. For 9 completed + 2 pending
+                        // matches this reduces 11 parallel fetches → 2.
+                        if match.status == "completed" {
+                            return ConnectionItem(
+                                match: match,
+                                lastMessage: cached?.lastMessage,
+                                unreadCount: 0
+                            )
+                        }
                         let msgs = try? await APIClient.shared.fetchMessages(matchId: match.id)
                         let last = msgs?.last
                         let unread = msgs?.filter { $0.senderId != currentTravelerId && $0.readAt == nil }.count ?? 0
@@ -295,8 +362,11 @@ final class ChatStore: ObservableObject {
 struct ConexionesView: View {
     @EnvironmentObject var chatStore: ChatStore
     @EnvironmentObject var authState: AuthState
+    @EnvironmentObject var router: AppRouter
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
-    @State private var identityMode: IdentityMode? = nil
+    @State private var showIdentitySheet = false
+    @State private var conexSocialLoading = false
+    @State private var conexSocialError: String? = nil
 
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["pending","accepted","active"].contains($0.match.status) }
@@ -392,13 +462,11 @@ struct ConexionesView: View {
         }
         .sheet(item: $chatTarget, onDismiss: { Task { await chatStore.load() } }) { item in
             if let journey = SyntheticJourney.make(for: item.match) {
-                BuddyChatView(match: item.match, journey: journey) {
-                    chatTarget = nil
-                }
+                BuddyChatView(match: item.match, journey: journey).equatable()
             }
         }
-        .sheet(item: $identityMode) { mode in
-            IdentitySheet(skipName: mode == .login) {
+        .sheet(isPresented: $showIdentitySheet) {
+            IdentitySheet(purpose: .buddy) {
                 Task { await chatStore.load() }
                 chatStore.startEventStream()
             }
@@ -447,51 +515,157 @@ struct ConexionesView: View {
                                          title: "Tu impacto",
                                          subtitle: "Recuerda también a quienes ayudaste tú.")
                     }
-                    .padding(.bottom, Spacing.xl)
+                    .padding(.bottom, Spacing.md)
 
-                    Button {
-                        Haptic.medium()
-                        identityMode = .newUser
-                    } label: {
-                        Text("Crear mi perfil")
-                            .font(BT.footnoteBold)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 17)
-                            .background(Color.ink)
-                            .foregroundStyle(Color.inkInverse)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.pressable)
+                    Divider().overlay(Color.border)
+                        .padding(.bottom, Spacing.md)
+
+                    Text("Continúa con")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.bottom, Spacing.sm)
+
+                    SignInWithAppleButton(.signIn, onRequest: { req in
+                        req.requestedScopes = [.fullName, .email]
+                    }, onCompletion: { result in
+                        handleConexAppleResult(result)
+                    })
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 50).clipShape(Capsule())
+                    .opacity(conexSocialLoading ? 0.5 : 1)
+                    .disabled(conexSocialLoading)
                     .padding(.bottom, Spacing.sm)
 
-                    Button {
-                        Haptic.light()
-                        identityMode = .login
-                    } label: {
-                        Text("Ya tengo una cuenta")
-                            .font(BT.callout)
-                            .foregroundStyle(Color.inkMuted)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .contentShape(Rectangle())
+                    Button(action: { handleConexSignIn(provider: GoogleProvider()) }) {
+                        ZStack {
+                            if conexSocialLoading {
+                                ProgressView().progressViewStyle(.circular).tint(Color.ink)
+                            } else {
+                                HStack(spacing: 10) {
+                                    Image("google_logo").resizable().scaledToFit()
+                                        .frame(width: 20, height: 20)
+                                    Text("Continuar con Google")
+                                        .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .background(Color.canvas).clipShape(Capsule())
+                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
+                    .opacity(conexSocialLoading ? 0.7 : 1)
+                    .disabled(conexSocialLoading)
+
+                    if let err = conexSocialError {
+                        Text(err).font(BT.caption1).foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, Spacing.xs)
+                    }
+
+                    Text("Al continuar confirmas que tienes **18+ años** y aceptas nuestros **términos, privacidad** y **código de conducta**")
+                        .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, Spacing.sm)
                 }
                 .padding(Spacing.lg)
                 .background(Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
                 .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
                 .padding(.horizontal, Spacing.edge)
-
-                Text("Nombre y teléfono. Nada más.")
-                    .font(BT.caption1)
-                    .foregroundStyle(Color.inkMuted.opacity(0.7))
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, Spacing.sm)
             }
             .padding(.top, Spacing.lg)
         }
         .background(Color.canvas)
+    }
+
+    // MARK: – Inline auth (anonymousConnectionState)
+
+    private func handleConexAppleResult(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let err):
+            let nsErr = err as NSError
+            if nsErr.code != ASAuthorizationError.canceled.rawValue {
+                conexSocialError = "Error con Apple."
+            }
+        case .success(let auth):
+            guard let cred = auth.credential as? ASAuthorizationAppleIDCredential,
+                  let tokenData = cred.identityToken,
+                  let token = String(data: tokenData, encoding: .utf8) else {
+                conexSocialError = "No se pudo leer el token de Apple."
+                return
+            }
+            var name: String? = nil
+            if let fn = cred.fullName {
+                let j = [fn.givenName, fn.familyName].compactMap { $0 }
+                    .joined(separator: " ").trimmingCharacters(in: .whitespaces)
+                if !j.isEmpty { name = j }
+            }
+            handleConexSocialSignIn(credential: IdentityCredential(
+                provider: .apple, identityToken: token, email: cred.email, fullName: name
+            ))
+        }
+    }
+
+    private func handleConexSignIn(provider: IdentityProvider) {
+        conexSocialLoading = true; conexSocialError = nil
+        Task {
+            do {
+                let result = try await AuthService.shared.signIn(with: provider)
+                await finishConexAuth(result)
+            } catch {
+                let nsErr = error as NSError
+                await MainActor.run {
+                    conexSocialLoading = false
+                    let cancelCodes = [ASAuthorizationError.canceled.rawValue, 1]
+                    if !cancelCodes.contains(nsErr.code) {
+                        conexSocialError = "No se pudo iniciar sesión."
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleConexSocialSignIn(credential: IdentityCredential) {
+        conexSocialLoading = true; conexSocialError = nil
+        Task {
+            do {
+                let result = try await AuthService.shared._postToBackend(credential)
+                await finishConexAuth(result)
+            } catch {
+                await MainActor.run {
+                    conexSocialLoading = false
+                    conexSocialError = "No se pudo iniciar sesión."
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func finishConexAuth(_ result: AuthResult) {
+        conexSocialLoading = false
+        let destination = AuthCoordinator.shared.handle(result)
+        switch destination {
+        case .home:
+            authState.didAuthenticate()
+            Task { await chatStore.load() }
+            chatStore.startEventStream()
+        case .needsProfileCompletion:
+            let name = result.suggestedName ?? ""
+            if name.trimmingCharacters(in: .whitespaces).count >= 2 {
+                Task {
+                    try? await AuthService.shared.completeProfileForSocialLogin(
+                        fullName: name.trimmingCharacters(in: .whitespaces)
+                    )
+                    authState.didAuthenticate()
+                    await chatStore.load()
+                    chatStore.startEventStream()
+                }
+            } else {
+                showIdentitySheet = true
+            }
+        }
     }
 
     private func anonymousBenefit(icon: String, title: String, subtitle: String) -> some View {
@@ -584,7 +758,7 @@ struct ConexionesView: View {
             .padding(.horizontal, Spacing.edge)
             .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
 
-        VStack(spacing: Spacing.md) {
+        VStack(spacing: 6) {
             ForEach(items) { item in
                 Button { chatTarget = item } label: {
                     ConnectionRow(item: item, isActive: true)
@@ -624,8 +798,7 @@ struct ConexionesView: View {
                     .multilineTextAlignment(.center)
             }
             Button {
-                NotificationCenter.default.post(name: .switchToTab, object: nil,
-                                                userInfo: ["tab": AppTab.trips.rawValue])
+                router.switchTo(.trips)
             } label: {
                 Text("Crear mi trip")
                     .font(BT.footnoteBold)
@@ -719,7 +892,12 @@ struct OfferCard: View {
             // CTAs
             HStack(spacing: 8) {
                 Button {
-                    Task { await accept() }
+                    guard !isAccepting, !isDeclining else { return }
+                    isAccepting = true
+                    Task {
+                        defer { isAccepting = false }
+                        await accept()
+                    }
                 } label: {
                     Group {
                         if isAccepting {
@@ -737,7 +915,12 @@ struct OfferCard: View {
                 .disabled(isAccepting || isDeclining)
 
                 Button {
-                    Task { await decline() }
+                    guard !isDeclining, !isAccepting else { return }
+                    isDeclining = true
+                    Task {
+                        defer { isDeclining = false }
+                        await decline()
+                    }
                 } label: {
                     Group {
                         if isDeclining {
@@ -769,7 +952,6 @@ struct OfferCard: View {
 
     private func accept() async {
         guard let requestId = offer.helpRequest?.id else { return }
-        isAccepting = true
         do {
             let match = try await APIClient.shared.acceptRequest(requestId: requestId)
             Haptic.success()
@@ -778,11 +960,9 @@ struct OfferCard: View {
         } catch {
             Haptic.error()
         }
-        isAccepting = false
     }
 
     private func decline() async {
-        isDeclining = true
         do {
             try await APIClient.shared.declineBuddyOffer(requestId: offer.requestId)
             Haptic.light()
@@ -790,7 +970,6 @@ struct OfferCard: View {
         } catch {
             Haptic.error()
         }
-        isDeclining = false
     }
 
     private func relativeArrival(_ date: Date) -> String {

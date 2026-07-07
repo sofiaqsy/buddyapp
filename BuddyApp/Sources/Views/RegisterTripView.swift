@@ -7,66 +7,77 @@ struct RegisterTripView: View {
 
     @EnvironmentObject var routeStore: RouteStore
 
-    @State private var searchText     = ""
-    @State private var selectedDest: APIDestination? = nil
-    @State private var destinations: [APIDestination] = []
+    @State private var searchText        = ""
+    @State private var selectedDest: APIDestination? = nil      // chip popular seleccionado
+    @State private var selectedPlace: APIPlaceResult? = nil     // resultado de search seleccionado
+    @State private var popularDests: [APIDestination] = []      // carga inicial (chips vacíos)
+    @State private var searchResults: [APIPlaceResult] = []     // resultados live del API
+    @State private var lastValidResults: [APIPlaceResult] = [] // último batch no vacío
+    @State private var isSearching       = false
+    @State private var searchTask: Task<Void, Never>? = nil
+    @State private var placeContext: APIPlaceContext? = nil
+    @State private var isLoadingContext  = false
+    @State private var contextTask: Task<Void, Never>? = nil
     @State private var selectedDate: Date  = Date()
-    @State private var quickOption: QuickOption? = .today
+    @State private var quickOption: QuickOption? = .here
     @State private var showDatePicker = false
     @State private var isCreating = false
     @State private var createdJourney: APIJourney? = nil
     @State private var showCreateError = false
     @State private var knowsHowToGet = true
     @State private var hasLodging = true
+    @State private var popularDestsLoadFailed = false
 
     enum QuickOption { case here, today, tomorrow }
 
     private var showPlanningQuestions: Bool { quickOption != .here }
 
-    private var visibleChips: [APIDestination] {
-        if searchText.isEmpty { return Array(destinations.prefix(5)) }
-        return destinations.filter {
-            $0.name.localizedCaseInsensitiveContains(searchText) ||
-            $0.city.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
-    private var canCreate: Bool { selectedDest != nil }
+    private var canCreate: Bool { selectedDest != nil || selectedPlace != nil }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
 
-                        // Eyebrow
-                        Text("TU PRÓXIMO TRIP")
+                        // Eyebrow — refleja si el usuario ya está en destino o planifica
+                        Text(quickOption == .here ? "DÓNDE ESTÁS AHORA" : "TU PRÓXIMO TRIP")
                             .font(BT.eyebrow)
                             .tracking(2)
                             .foregroundStyle(Color.inkMuted)
                             .padding(.horizontal, Spacing.edge)
                             .padding(.top, Spacing.lg)
                             .padding(.bottom, Spacing.md)
+                            .animation(.none, value: quickOption)
 
                         // ── Destination ─────────────────────────
-                        sectionLabel("¿A DÓNDE LLEGAS?")
+                        sectionLabel("¿DÓNDE ESTÁS O A DÓNDE VAS?")
 
                         // Search field
                         HStack(spacing: Spacing.sm) {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundStyle(Color.inkMuted)
-                                .font(.system(size: 15))
-                            TextField("Buscar destino…", text: $searchText)
+                            if isSearching {
+                                ProgressView().scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(Color.inkMuted)
+                                    .font(.system(size: 15))
+                            }
+                            TextField("¿A dónde vas?", text: $searchText)
                                 .font(BT.callout)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .onChange(of: searchText) { _, _ in
-                                    // Si el texto ya no coincide con el destino elegido, la selección expira
-                                    if let sel = selectedDest, sel.name != searchText {
-                                        selectedDest = nil
-                                    }
+                                .onChange(of: searchText) { _, newValue in
+                                    if let sel = selectedDest,  sel.name  != newValue { selectedDest  = nil }
+                                    if let sel = selectedPlace, sel.title != newValue { selectedPlace = nil }
+                                    triggerSearch(query: newValue)
                                 }
                             if !searchText.isEmpty {
                                 Button {
-                                    searchText = ""
-                                    selectedDest = nil
+                                    searchText       = ""
+                                    selectedDest     = nil
+                                    selectedPlace    = nil
+                                    searchResults    = []
+                                    lastValidResults = []
+                                    placeContext     = nil
+                                    searchTask?.cancel()
+                                    contextTask?.cancel()
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")
                                         .foregroundStyle(Color.inkMuted)
@@ -84,50 +95,86 @@ struct RegisterTripView: View {
                         .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
                         .padding(.horizontal, Spacing.edge)
 
-                        // Skeleton de chips mientras llegan los destinos
-                        if destinations.isEmpty && searchText.isEmpty {
-                            HStack(spacing: 8) {
-                                SkeletonBox(cornerRadius: 20).frame(width: 110, height: 38)
-                                SkeletonBox(cornerRadius: 20).frame(width: 90, height: 38)
-                                SkeletonBox(cornerRadius: 20).frame(width: 120, height: 38)
+                        // Chips de destinos populares: skeleton → datos o retry
+                        if popularDests.isEmpty && searchText.isEmpty {
+                            if popularDestsLoadFailed {
+                                Button {
+                                    popularDestsLoadFailed = false
+                                    Task {
+                                        do {
+                                            popularDests = try await APIClient.shared.fetchDestinations()
+                                        } catch {
+                                            print("❌ [RegisterTrip] retry fetchDestinations: \(error)")
+                                            popularDestsLoadFailed = true
+                                        }
+                                    }
+                                } label: {
+                                    Label("Reintentar destinos populares", systemImage: "arrow.clockwise")
+                                        .font(BT.caption1)
+                                        .foregroundStyle(Color.inkMuted)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.lg)
+                            } else {
+                                HStack(spacing: 8) {
+                                    SkeletonBox(cornerRadius: 20).frame(width: 110, height: 38)
+                                    SkeletonBox(cornerRadius: 20).frame(width: 90, height: 38)
+                                    SkeletonBox(cornerRadius: 20).frame(width: 120, height: 38)
+                                }
+                                .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.lg)
+                                .skeletonPulse()
                             }
-                            .padding(.horizontal, Spacing.edge)
-                            .padding(.top, Spacing.lg)
                         }
 
-                        if !searchText.isEmpty && selectedDest == nil {
-                            // Autocompletado: lista vertical de coincidencias bajo el campo
-                            if visibleChips.isEmpty {
+                        // ── Resultados de búsqueda en vivo ──────────
+                        let hasTyped = !searchText.trimmingCharacters(in: .whitespaces).isEmpty
+                        let nothingSelected = selectedDest == nil && selectedPlace == nil
+
+                        if hasTyped && nothingSelected {
+                            if !isSearching && searchResults.isEmpty {
                                 HStack(spacing: Spacing.sm) {
                                     Image(systemName: "mappin.slash")
                                         .foregroundStyle(Color.inkMuted)
                                         .font(.system(size: 15))
-                                    Text("Sin resultados para “\(searchText)”")
+                                    Text("Sin resultados para \"\(searchText)\"")
                                         .font(BT.callout)
                                         .foregroundStyle(Color.inkMuted)
                                 }
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.lg)
-                            } else {
+                            } else if !searchResults.isEmpty {
                                 VStack(spacing: 0) {
-                                    ForEach(Array(visibleChips.prefix(6).enumerated()), id: \.element.id) { idx, dest in
-                                        if idx > 0 {
-                                            Divider().padding(.horizontal, Spacing.md)
-                                        }
+                                    ForEach(Array(searchResults.prefix(8).enumerated()), id: \.element.id) { idx, place in
+                                        if idx > 0 { Divider().padding(.horizontal, Spacing.md) }
                                         Button {
                                             Haptic.select()
                                             withAnimation(.spring(response: 0.25)) {
-                                                selectedDest = dest
-                                                searchText = dest.name
+                                                selectedPlace = place
+                                                selectedDest  = nil
+                                                searchText    = place.title
                                             }
+                                            fetchContext(id: place.id, source: place.source)
+                                            UIApplication.shared.sendAction(
+                                                #selector(UIResponder.resignFirstResponder),
+                                                to: nil, from: nil, for: nil)
                                         } label: {
-                                            VStack(alignment: .leading, spacing: 1) {
-                                                Text(dest.name)
-                                                    .font(BT.callout)
-                                                    .foregroundStyle(Color.ink)
-                                                Text(dest.city)
-                                                    .font(BT.caption1)
+                                            HStack(spacing: Spacing.sm) {
+                                                Image(systemName: "mappin.circle")
+                                                    .font(.system(size: 14))
                                                     .foregroundStyle(Color.inkMuted)
+                                                VStack(alignment: .leading, spacing: 1) {
+                                                    Text(place.title)
+                                                        .font(BT.callout)
+                                                        .foregroundStyle(Color.ink)
+                                                    if let sub = place.subtitle, !sub.isEmpty {
+                                                        Text(sub)
+                                                            .font(BT.caption1)
+                                                            .foregroundStyle(Color.inkMuted)
+                                                    }
+                                                }
+                                                Spacer()
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .padding(.horizontal, Spacing.md)
@@ -142,7 +189,7 @@ struct RegisterTripView: View {
                                 .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
                                 .padding(.horizontal, Spacing.edge)
                             }
-                        } else if searchText.isEmpty, !visibleChips.isEmpty {
+                        } else if !hasTyped, !popularDests.isEmpty {
                             // Sin texto → chips de destinos populares
                             Text("POPULARES")
                                 .font(BT.eyebrow)
@@ -152,18 +199,30 @@ struct RegisterTripView: View {
                                 .padding(.top, Spacing.lg)
                                 .padding(.bottom, Spacing.sm)
 
-                            ChipFlow(items: visibleChips, selectedId: selectedDest?.id) { dest in
+                            ChipFlow(items: popularDests, selectedId: selectedDest?.id) { dest in
                                 Haptic.select()
                                 withAnimation(.spring(response: 0.25)) {
-                                    selectedDest = dest
-                                    searchText = dest.name
+                                    selectedDest  = dest
+                                    selectedPlace = nil
+                                    searchText    = dest.name
                                 }
+                                fetchContext(id: dest.id, source: "destination")
+                                UIApplication.shared.sendAction(
+                                    #selector(UIResponder.resignFirstResponder),
+                                    to: nil, from: nil, for: nil)
                             }
                             .padding(.horizontal, Spacing.edge)
                         }
 
+                        // ── Community context card ───────────────
+                        if selectedPlace != nil || selectedDest != nil {
+                            PlaceCommunityCard(context: placeContext, isLoading: isLoadingContext)
+                                .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.sm)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+
                         // ── Arrival ──────────────────────────────
-                        // Opciones rápidas primero: la mayoría llega hoy o mañana
                         sectionLabel("¿CUÁNDO LLEGAS?")
                             .padding(.top, Spacing.xl)
 
@@ -218,7 +277,8 @@ struct RegisterTripView: View {
 
                         if showDatePicker {
                             DatePicker("", selection: $selectedDate, in: Date()..., displayedComponents: .date)
-                                .datePickerStyle(.graphical)
+                                .datePickerStyle(.compact)
+                                .labelsHidden()
                                 .tint(Color.teal)
                                 .padding(.horizontal, Spacing.edge)
                                 .onChange(of: selectedDate) { _, _ in quickOption = nil }
@@ -248,6 +308,7 @@ struct RegisterTripView: View {
 
                         // ── CTA al final del scroll ─────────────────
                         Button {
+                            guard canCreate, !isCreating else { return }
                             Haptic.medium()
                             createTrip()
                         } label: {
@@ -270,13 +331,19 @@ struct RegisterTripView: View {
                         .disabled(!canCreate || isCreating)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg)
-                        .padding(.bottom, 90)
+                        .padding(.bottom, Spacing.xl)
+                        .safeAreaPadding(.bottom)
                     }
         }
         .background(Color.canvas)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            destinations = (try? await APIClient.shared.fetchDestinations()) ?? []
+            do {
+                popularDests = try await APIClient.shared.fetchDestinations()
+            } catch {
+                print("❌ [RegisterTrip] fetchDestinations error: \(error)")
+                popularDestsLoadFailed = true
+            }
         }
         .alert("No pudimos crear tu trip", isPresented: $showCreateError) {
             Button("Reintentar") { createTrip() }
@@ -286,30 +353,111 @@ struct RegisterTripView: View {
         }
     }
 
+    // MARK: – Place context (community card)
+
+    private func fetchContext(id: String, source: String) {
+        contextTask?.cancel()
+        placeContext     = nil
+        isLoadingContext = true
+        // Nominatim-only: sin DB → pioneer inmediato, sin llamada al backend
+        if source == "nominatim" {
+            placeContext     = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
+            isLoadingContext = false
+            return
+        }
+        contextTask = Task {
+            do {
+                let ctx = try await APIClient.shared.fetchPlaceContext(id: id, source: source)
+                await MainActor.run { placeContext = ctx; isLoadingContext = false }
+            } catch {
+                print("❌ [context] id=\(id) error: \(error)")
+                await MainActor.run { isLoadingContext = false }
+            }
+        }
+    }
+
+    // MARK: – Search (debounced live search via /search/places)
+
+    private func triggerSearch(query: String) {
+        searchTask?.cancel()
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 2 else {
+            searchResults    = []
+            lastValidResults = []
+            isSearching      = false
+            return
+        }
+        isSearching = true
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            do {
+                let results = try await APIClient.shared.searchPlaces(query: q)
+                await MainActor.run {
+                    if results.isEmpty {
+                        // Si el servidor devuelve vacío, mantener el último batch útil
+                        searchResults = lastValidResults
+                    } else {
+                        searchResults    = results
+                        lastValidResults = results
+                    }
+                    isSearching = false
+                }
+            } catch {
+                print("❌ [triggerSearch] q=\(q) error: \(error)")
+                await MainActor.run { isSearching = false }
+            }
+        }
+    }
+
     // MARK: – Create trip via buddy-core
 
     private func createTrip() {
-        guard let dest = selectedDest else { return }
+        // Resolver qué enviar al backend según el origen del lugar seleccionado
+        var destinationId: String? = selectedDest?.id
+        var placeId:       String? = nil
+        var osmId:         String? = nil
+        var lat:           Double? = nil
+        var lng:           Double? = nil
+
+        if let place = selectedPlace {
+            switch place.source {
+            case "place":       placeId       = place.id
+            case "destination": destinationId = destinationId ?? place.id
+            default:
+                // nominatim: mandar el osmKey para que backend lo resuelva sin reverse geocoding
+                lat = place.lat; lng = place.lng
+                if place.id.hasPrefix("N") || place.id.hasPrefix("W") || place.id.hasPrefix("R") {
+                    osmId = place.id
+                }
+            }
+        }
+
+        guard destinationId != nil || placeId != nil || (lat != nil && lng != nil) else { return }
+
         isCreating = true
         Task {
+            // defer garantiza que isCreating baje aunque el Task sea cancelado o
+            // la vista desaparezca antes de que el do/catch complete.
+            defer { Task { await MainActor.run { isCreating = false } } }
             do {
                 let journey = try await APIClient.shared.createJourney(
-                    destinationId: dest.id,
-                    title: nil,
-                    arrivalAt: quickOption == .here ? nil : selectedDate,
-                    knowsHowToGet: knowsHowToGet,
-                    hasLodging: hasLodging
+                    destinationId: destinationId,
+                    placeId:       placeId,
+                    osmId:         osmId,
+                    lat:           lat,
+                    lng:           lng,
+                    arrivalAt:     quickOption == .here ? nil : selectedDate,
+                    knowsHowToGet: quickOption == .here ? nil : knowsHowToGet,
+                    hasLodging:    quickOption == .here ? nil : hasLodging
                 )
                 await MainActor.run {
                     createdJourney = journey
                     onJourneyCreated(journey)
-                    isCreating = false
                 }
             } catch {
-                await MainActor.run {
-                    isCreating = false
-                    showCreateError = true
-                }
+                print("❌ [createTrip] error: \(error)")
+                await MainActor.run { showCreateError = true }
             }
         }
     }
@@ -330,20 +478,131 @@ struct RegisterTripView: View {
         Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
     }
 
-    private func formattedDate(_ date: Date) -> String {
+    private static let longDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "es_PE")
         f.dateFormat = "EEEE, d 'de' MMMM"
-        let s = f.string(from: date)
+        return f
+    }()
+
+    private static let shortDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "es_PE")
+        f.dateFormat = "d MMM"
+        return f
+    }()
+
+    private func formattedDate(_ date: Date) -> String {
+        let s = Self.longDateFormatter.string(from: date)
         return s.prefix(1).uppercased() + s.dropFirst()
     }
 
     private func shortDate(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "es_PE")
-        f.dateFormat = "d MMM"
-        return f.string(from: date)
+        Self.shortDateFormatter.string(from: date)
+    }
+}
+
+// MARK: – PLACE COMMUNITY CARD
+
+struct PlaceCommunityCard: View {
+    let context: APIPlaceContext?
+    let isLoading: Bool
+
+    var body: some View {
+        Group {
+            if isLoading || context == nil {
+                // Skeleton mientras carga
+                VStack(alignment: .leading, spacing: 10) {
+                    SkeletonBox(cornerRadius: 6).frame(width: 140, height: 14)
+                    SkeletonBox(cornerRadius: 6).frame(maxWidth: .infinity, minHeight: 14)
+                    SkeletonBox(cornerRadius: 6).frame(width: 100, height: 11)
+                }
+                .padding(Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+            } else if let ctx = context {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    // Estado de comunidad
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(statusColor(ctx.status))
+                            .frame(width: 8, height: 8)
+                        Text(statusHeadline(ctx.status))
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(Color.ink)
+                    }
+
+                    Text(statusCopy(ctx.status))
+                        .font(BT.callout)
+                        .foregroundStyle(Color.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Conteos solo si hay algo que mostrar
+                    if ctx.buddies > 0 || ctx.stories > 0 {
+                        HStack(spacing: Spacing.md) {
+                            if ctx.buddies > 0 {
+                                Label("\(ctx.buddies) buddy\(ctx.buddies == 1 ? "" : "s")", systemImage: "person.2")
+                                    .font(BT.caption1)
+                                    .foregroundStyle(Color.inkMuted)
+                            }
+                            if ctx.stories > 0 {
+                                Label("\(ctx.stories) histori\(ctx.stories == 1 ? "a" : "as")", systemImage: "book")
+                                    .font(BT.caption1)
+                                    .foregroundStyle(Color.inkMuted)
+                            }
+                        }
+                    }
+                }
+                .padding(Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(statusBackgroundColor(ctx.status))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(statusBorderColor(ctx.status), lineWidth: 1))
+            }
         }
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        switch status {
+        case "active":  return Color.teal
+        case "growing": return Color.yellow
+        default:        return Color.inkMuted
+        }
+    }
+
+    private func statusBackgroundColor(_ status: String) -> Color {
+        switch status {
+        case "active":  return Color.teal.opacity(0.06)
+        case "growing": return Color.yellow.opacity(0.06)
+        default:        return Color.surface
+        }
+    }
+
+    private func statusBorderColor(_ status: String) -> Color {
+        switch status {
+        case "active":  return Color.teal.opacity(0.3)
+        case "growing": return Color.yellow.opacity(0.3)
+        default:        return Color.border
+        }
+    }
+
+    private func statusHeadline(_ status: String) -> String {
+        switch status {
+        case "active":  return "Comunidad activa"
+        case "growing": return "Comunidad creciendo"
+        default:        return "Sé el primero aquí"
+        }
+    }
+
+    private func statusCopy(_ status: String) -> String {
+        switch status {
+        case "active":  return "Siempre encontrarás alguien que te ayude."
+        case "growing": return "Ya hay personas ayudando en esta zona."
+        default:        return "Todavía no hay buddies en este lugar. Puedes crear el primer trip."
+        }
+    }
 }
 
 // MARK: – CHIP FLOW (wrapping layout)
@@ -514,5 +773,7 @@ struct QuickOptionCard: View {
             ))
         }
         .buttonStyle(.pressable)
+        .accessibilityLabel(subtitle.isEmpty ? title : "\(title), \(subtitle)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

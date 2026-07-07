@@ -129,6 +129,7 @@ struct PlacesSheet: View {
     let places: [Place]
     @Binding var selectedPlace: Place?
     let onSelectPlace: (Place) -> Void
+    var onAddFirstSpot: (() -> Void)? = nil
 
     var body: some View {
         NavigationStack {
@@ -139,7 +140,7 @@ struct PlacesSheet: View {
                     }
                     .transition(.opacity)
                 } else {
-                    PlaceListSheet(places: places, onSelect: onSelectPlace)
+                    PlaceListSheet(places: places, onSelect: onSelectPlace, onAddFirstSpot: onAddFirstSpot)
                         .transition(.opacity)
                 }
             }
@@ -153,37 +154,83 @@ struct PlacesSheet: View {
 struct PlaceListSheet: View {
     let places: [Place]
     let onSelect: (Place) -> Void
+    var onAddFirstSpot: (() -> Void)? = nil
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Recomendado por la comunidad")
-                        .font(BT.displayMedium)
-                        .foregroundStyle(Color.ink)
-                    Text("\(places.count) sitios que recomiendan viajeros y buddies")
-                        .font(BT.footnote)
-                        .foregroundStyle(Color.inkMuted)
-                }
-                .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.md)
-                .padding(.bottom, Spacing.md)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Spacing.sm) {
-                        ForEach(Array(places.enumerated()), id: \.element.id) { i, place in
-                            Button { onSelect(place) } label: {
-                                PlaceCard(place: place, index: i)
-                            }
-                            .buttonStyle(.pressable)
-                        }
+                if places.isEmpty {
+                    PlaceListEmptyState(onAddFirstSpot: onAddFirstSpot)
+                        .padding(.top, Spacing.md)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Recomendado por la comunidad")
+                            .font(BT.displayMedium)
+                            .foregroundStyle(Color.ink)
+                        Text("\(places.count) sitio\(places.count == 1 ? "" : "s") recomendado\(places.count == 1 ? "" : "s") por viajeros y buddies")
+                            .font(BT.footnote)
+                            .foregroundStyle(Color.inkMuted)
                     }
                     .padding(.horizontal, Spacing.edge)
+                    .padding(.top, Spacing.md)
                     .padding(.bottom, Spacing.md)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Spacing.sm) {
+                            ForEach(Array(places.enumerated()), id: \.element.id) { i, place in
+                                Button { onSelect(place) } label: {
+                                    PlaceCard(place: place, index: i)
+                                }
+                                .buttonStyle(.pressable)
+                            }
+                        }
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.bottom, Spacing.md)
+                    }
                 }
             }
         }
         .background(Color.canvas)
+    }
+}
+
+private struct PlaceListEmptyState: View {
+    var onAddFirstSpot: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text("Este lugar está\nsin explorar aún.")
+                    .font(BT.displayMedium)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("La guía de cada lugar la construyen quienes lo conocen. Sé quien inicie la comunidad aquí y ayuda a los próximos viajeros a descubrirlo.")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, Spacing.edge)
+
+            if let onAddFirstSpot {
+                Button(action: onAddFirstSpot) {
+                    HStack(spacing: Spacing.sm) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text("Agregar el primer sitio")
+                            .font(BT.footnoteBold)
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.brand)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                }
+                .buttonStyle(.pressable)
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.lg)
+            }
+        }
     }
 }
 
@@ -277,9 +324,17 @@ struct PlaceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomLeading) {
-                LinearGradient(colors: cardColors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .frame(height: 110)
-                    .overlay { Text(place.stickerEmoji).font(.system(size: 40)) }
+                // Foto real si existe, gradiente como fallback
+                if let coverUrl = place.coverUrl {
+                    CachedImage(urlString: coverUrl) { img in
+                        img.resizable().scaledToFill()
+                    }
+                    .frame(height: 110).clipped()
+                } else {
+                    LinearGradient(colors: cardColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                        .frame(height: 110)
+                        .overlay { Text(place.stickerEmoji).font(.system(size: 40)) }
+                }
 
                 Text(place.category.label)
                     .font(BT.caption2)
@@ -295,10 +350,12 @@ struct PlaceCard: View {
                 Text(place.name)
                     .font(BT.footnoteBold)
                     .foregroundStyle(Color.ink)
-                Text(place.description)
-                    .font(BT.caption1)
-                    .foregroundStyle(Color.inkMuted)
-                    .lineLimit(2)
+                if !place.description.isEmpty {
+                    Text(place.description)
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(2)
+                }
                 Label("a 5 min", systemImage: "location.circle")
                     .font(BT.caption2)
                     .foregroundStyle(Color.teal)

@@ -1,6 +1,16 @@
 import SwiftUI
 import AVFoundation
 import MapKit
+import PhotosUI
+import os
+
+// Root-cause investigation of the ~1s first-keyboard-focus delay (see KeyboardPrewarmer).
+// Measures: raw tap → FocusState flips → keyboardWillShow → keyboardDidShow.
+// Visible in Instruments (Points of Interest) and via the printed deltas below.
+enum KeyboardTiming {
+    static let signposter = OSSignposter(subsystem: "com.buddyapp.app", category: "Keyboard")
+    static func now() -> Double { Date().timeIntervalSince1970 }
+}
 
 // MARK: – FEEDBACK TRACKER
 // Registra localmente qué matches ya respondieron la encuesta de cierre, para
@@ -20,11 +30,22 @@ enum FeedbackTracker {
 
 // MARK: – CONTACTAR BUDDY SHEET
 
+/// Backoff exponencial con tope y jitter — compartido por ContactarBuddyView y BuddyChatView.
+/// Mismo patrón que ChatStore.backoff(_:).
+private func sseBackoff(_ attempt: inout Int) async {
+    guard !Task.isCancelled else { return }
+    attempt += 1
+    let capped = min(Double(attempt) * 2.0, 20.0)
+    let jitter = Double.random(in: 0...1.5)
+    try? await Task.sleep(nanoseconds: UInt64((capped + jitter) * 1_000_000_000))
+}
+
 struct ContactarBuddyView: View {
     /// Opcional: en el flujo de la Home aún NO existe un Trip (se crea recién
     /// cuando un buddy acepta). Cuando hay Trip se pasa; si no, basta el destino.
     var journey: APIJourney? = nil
     var destinationId: String? = nil
+    var destinationName: String? = nil
     var preselectedCategory: String? = nil
     /// Si viene seteado, se crea la solicitud de inmediato (la Home ya eligió
     /// categoría/texto) → el usuario aterriza directo en "buscando", sin repetir
@@ -39,17 +60,22 @@ struct ContactarBuddyView: View {
     private var resolvedDestinationId: String? {
         journey?.destination?.id ?? journey?.destinationId ?? destinationId
     }
+    private var resolvedDestinationName: String? {
+        journey?.destination?.name ?? destinationName
+    }
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var router: AppRouter
     @State private var phase: Phase = .loading
 
     private var effectiveUserId: String? { Session.travelerId }
     @State private var match: APIMatch?
-    @State private var pollTimer: Timer?
+    @State private var pollTask: Task<Void, Never>?
     @State private var sseMatchTask: Task<Void, Never>? = nil
     @State private var buddyCount: Int = 0
     @State private var activeRequestId: String? = nil   // solicitud en curso (para cancelarla)
+    @State private var chosenCategory: String? = nil    // apiKey elegido, para el primer msg del chat
     /// true cuando el backend ya escaló al menos una vez — cambia el copy de la UI.
     @State private var isExpandingSearch: Bool = false
     /// Evita que el timer y el SSE disparen pollForMatch() simultáneamente.
@@ -60,12 +86,13 @@ struct ContactarBuddyView: View {
     }
 
     var body: some View {
+        let _ = print("🔶 [ContactarBuddyView] body — phase=\(phase)")
         NavigationStack {
             ZStack {
                 Color.canvas.ignoresSafeArea()
                 switch phase {
                 case .loading:        loadingView
-                case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, onRequest: handleRequest)
+                case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, destinationName: resolvedDestinationName, onRequest: handleRequest)
                 case .searching:      SearchingView(buddyCount: buddyCount, isExpandingSearch: isExpandingSearch, onCancel: cancelSearch)
                 case .matched:        chatView
                 case .error(let m):   errorView(m)
@@ -92,7 +119,7 @@ struct ContactarBuddyView: View {
         .onDisappear {
             // Limpiar ambos mecanismos para evitar recursos colgados si el sheet se cierra
             // sin pasar por cancelSearch() (p.ej. swipe-dismiss del sheet).
-            pollTimer?.invalidate()
+            pollTask?.cancel()
             stopSSEMatch()
         }
         // Reconexión tras volver al primer plano: el SSE del matching cae cuando iOS
@@ -127,7 +154,7 @@ struct ContactarBuddyView: View {
 
     private var chatView: some View {
         Group {
-            if let match { BuddyChatView(match: match, journey: journey, onDismiss: { dismiss() }) }
+            if let match { BuddyChatView(match: match, journey: journey, initialCategory: chosenCategory).equatable() }
             else { loadingView }
         }
     }
@@ -183,7 +210,10 @@ struct ContactarBuddyView: View {
             let activeStatuses = ["pending", "accepted", "active"]
             if let active = matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
                 print("✅ [checkStatus] match activo encontrado id=\(active.id) status=\(active.status ?? "nil") → abriendo chat")
-                match = active; phase = .matched; return
+                match = active
+                let cat = initialRequest?.category
+                chosenCategory = (cat == nil || cat == "general") ? nil : cat
+                phase = .matched; return
             }
             print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
             // La encuesta pendiente la presenta RootView globalmente (en cualquier
@@ -198,7 +228,9 @@ struct ContactarBuddyView: View {
                 phase = .searching; startPolling(); startSSEMatch(requestId: open.id)
             } else if let seed = initialRequest {
                 // La Home ya eligió → crear la solicitud directamente.
+                // handleRequest() requiere phase == .selectCategory; se setea antes de llamarlo.
                 print("⚡️ [checkStatus] initialRequest=\(seed.category) → solicitando directo")
+                phase = .selectCategory
                 await handleRequest(category: seed.category, description: seed.description)
             } else {
                 print("📋 [checkStatus] sin match ni solicitud → mostrando selector de categoría")
@@ -209,12 +241,17 @@ struct ContactarBuddyView: View {
 
     func handleRequest(category: String, description: String?) async {
         print("📤 [handleRequest] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL") category=\(category)")
+        guard phase == .selectCategory else {
+            print("⚠️ [handleRequest] ignorado — phase ya es \(phase)")
+            return
+        }
         guard let userId = effectiveUserId else {
             print("❌ [handleRequest] effectiveUserId=nil — session missing at request time")
             return
         }
         let destIdOpt2: String? = resolvedDestinationId
         guard let destId = destIdOpt2 else { return }
+        chosenCategory = category == "general" ? nil : category
         phase = .searching
         do {
             // Activate the journey so the home hero card shows it and
@@ -232,11 +269,20 @@ struct ContactarBuddyView: View {
     }
 
     private func cancelSearch() {
-        pollTimer?.invalidate()
+        pollTask?.cancel()
         stopSSEMatch()
         if let rid = activeRequestId {
-            Task { try? await APIClient.shared.cancelHelpRequest(requestId: rid) }
+            let capturedRid = rid
             activeRequestId = nil
+            Task {
+                do {
+                    try await APIClient.shared.cancelHelpRequest(requestId: capturedRid)
+                } catch {
+                    // Si el cancel falla en red, el servidor puede tener la solicitud activa.
+                    // checkStatus() al re-abrir la detectará y reanudará la búsqueda.
+                    print("⚠️ [cancelSearch] cancelHelpRequest falló — el servidor puede tener la solicitud activa: \(error)")
+                }
+            }
         }
         // Si vino de la Home (sin pasar por el selector) → cerrar y volver al
         // inicio. Si vino del selector → volver a elegir categoría.
@@ -249,17 +295,21 @@ struct ContactarBuddyView: View {
     }
 
     private func startPolling() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-            Task { await pollForMatch() }
+        pollTask?.cancel()
+        pollTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { return }
+                await pollForMatch()
+            }
         }
     }
 
     private func startSSEMatch(requestId: String) {
         sseMatchTask?.cancel()
         sseMatchTask = Task {
-            // Bucle de reconexión: como ChatStore.eventStreamTask, el SSE de búsqueda
-            // no muere en el primer error de red — reintenta hasta que se cancele explícitamente.
+            // Bucle de reconexión con backoff exponencial — igual que ChatStore.startEventStream.
+            var attempt = 0
             while !Task.isCancelled {
                 guard let token = Session.token else {
                     try? await Task.sleep(nanoseconds: 3_000_000_000); continue
@@ -273,9 +323,10 @@ struct ContactarBuddyView: View {
 
                 guard let (stream, _) = try? await URLSession.shared.bytes(for: req) else {
                     if Task.isCancelled { return }
-                    try? await Task.sleep(nanoseconds: 2_000_000_000); continue
+                    await sseBackoff(&attempt); continue
                 }
 
+                attempt = 0   // conexión exitosa
                 do {
                     for try await line in stream.lines {
                         guard !Task.isCancelled else { return }
@@ -293,13 +344,11 @@ struct ContactarBuddyView: View {
                     }
                 } catch { }
 
-                // Conexión caída — breve pausa antes de reconectar (no thundering herd).
-                if !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                }
+                await sseBackoff(&attempt)
             }
         }
     }
+
 
     /// Transición directa al chat, activada SOLO por el SSE cuando confirma el match.
     /// No respeta isPollInFlight porque el SSE es el mecanismo primario — su señal
@@ -311,9 +360,11 @@ struct ContactarBuddyView: View {
         guard let active = matches.first(where: {
             activeStatuses.contains($0.status ?? "") && $0.travelerId == userId
         }) else { return }
-        pollTimer?.invalidate()
+        pollTask?.cancel()
         match = active
         withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
+        UIAccessibility.post(notification: .announcement,
+            argument: "¡Encontramos tu buddy! Conectando al chat.")
         // La tarea SSE sale por sí sola vía `return` en startSSEMatch —
         // no hace falta llamar stopSSEMatch() desde aquí.
     }
@@ -344,10 +395,12 @@ struct ContactarBuddyView: View {
                 if let active = matches.first(where: {
                     activeStatuses.contains($0.status ?? "") && $0.travelerId == userId
                 }) {
-                    pollTimer?.invalidate()
+                    pollTask?.cancel()
                     stopSSEMatch()
                     match = active
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
+                    UIAccessibility.post(notification: .announcement,
+                        argument: "¡Encontramos tu buddy! Conectando al chat.")
                 }
 
             case "searching":
@@ -357,20 +410,26 @@ struct ContactarBuddyView: View {
 
             case "failed":
                 // Se agotaron todos los candidatos del Top-N.
-                pollTimer?.invalidate()
+                pollTask?.cancel()
                 stopSSEMatch()
-                phase = .error("No encontramos un buddy disponible en este momento. Intenta de nuevo en unos minutos.")
+                // Si es un flujo pioneer (desde home sin buddies), navegar a Tu trip
+                if initialRequest != nil {
+                    dismiss()
+                    await MainActor.run { router.switchTo(.trips) }
+                } else {
+                    phase = .error("No encontramos un buddy disponible en este momento. Intenta de nuevo en unos minutos.")
+                }
 
             case "cancelled":
                 // El viajero (u operador) canceló la solicitud desde otro dispositivo.
-                pollTimer?.invalidate()
+                pollTask?.cancel()
                 stopSSEMatch()
                 phase = .selectCategory
 
             default:
                 // "none" → la cola no existe (solicitud inválida o borrada).
                 // Tratamos como si no hubiera solicitud activa → volver al selector.
-                pollTimer?.invalidate()
+                pollTask?.cancel()
                 stopSSEMatch()
                 activeRequestId = nil
                 phase = .selectCategory
@@ -386,6 +445,21 @@ struct ContactarBuddyView: View {
 struct CategoryPickerView: View {
     var buddyCount: Int = 0
     var preselectedCategory: String? = nil
+    var destinationName: String? = nil
+    var onDestinationTap: (() -> Void)? = nil
+    var activeBuddyName: String? = nil
+    var activeBuddyAvatarUrl: String? = nil
+    var communityContext: APIPlaceContext? = nil
+    /// True while InicioView is still loading data. Renders this exact component
+    /// redacted instead of a hand-built skeleton, so there is zero visual jump when
+    /// real data arrives — same layout, padding, radius, just real content
+    /// fading in where the placeholder bars were. The heading stays un-redacted: it's
+    /// static copy, not data, so it can (and should) be visible from frame one.
+    var isSkeleton: Bool = false
+    /// Cuando true, el modo pioneer NO auto-habilita el botón — se exige selección de categoría.
+    /// Pasar true desde noTripComposer cuando no hay buddies en la zona.
+    var pioneerRequiresCategory: Bool = false
+    var isLoading: Bool = false
     let onRequest: (String, String?) async -> Void
 
     @State private var selected: BuddyCategory? = nil
@@ -413,14 +487,74 @@ struct CategoryPickerView: View {
         "emergency":     "Emergencias y consejos útiles",
     ]
 
-    private var canRequest: Bool { selected != nil }
+    // En estado pioneer (sin buddies registrados en el lugar), el botón siempre
+    // está habilitado aunque no haya categoría seleccionada: la intención es
+    // "necesito ayuda", el sistema resuelve el flujo internamente.
+    private var canRequest: Bool {
+        selected != nil || activeBuddyName != nil
+            || (!pioneerRequiresCategory && communityContext != nil && communityContext!.totalBuddies == 0)
+    }
 
-    /// Nunca un "0" desangelado — la promesa es que siempre habrá alguien.
+    private var subtitleAttributed: AttributedString {
+        if let city = destinationName {
+            var prefix = AttributedString("Cuéntanos qué necesitas. Te conectaremos con un buddy de ")
+            prefix.foregroundColor = UIColor(Color.inkMuted)
+
+            var cityStr = AttributedString(city)
+            cityStr.foregroundColor = UIColor(Color.brand)
+            cityStr.inlinePresentationIntent = .stronglyEmphasized
+            if onDestinationTap != nil {
+                cityStr.underlineStyle = .single
+                cityStr.link = URL(string: "buddy://destination")
+            }
+
+            var dot = AttributedString(".")
+            dot.foregroundColor = UIColor(Color.inkMuted)
+
+            return prefix + cityStr + dot
+        } else {
+            var str = AttributedString("Cuéntanos qué necesitas. Te conectaremos con un buddy.")
+            str.foregroundColor = UIColor(Color.inkMuted)
+            return str
+        }
+    }
+
+    private var noBuddies: Bool {
+        guard activeBuddyName == nil else { return false }
+        if let ctx = communityContext { return ctx.buddies <= 0 && ctx.totalBuddies <= 0 }
+        return buddyCount <= 0
+    }
+
+    /// Texto debajo del botón "Hablar con un buddy".
+    /// Refleja el estado de la comunidad en lugar de hablar de errores del sistema.
     private var availabilityText: String {
-        if buddyCount <= 0 { return "Te conectamos con el primer buddy disponible" }
-        return buddyCount == 1
-            ? "1 buddy disponible para ti ahora"
-            : "\(buddyCount) buddies disponibles para ti ahora"
+        // Si hay un buddy activo asignado, siempre el mensaje de continuidad
+        if activeBuddyName != nil { return "Tu buddy sigue disponible para ayudarte." }
+
+        guard let ctx = communityContext else {
+            // Sin contexto (ContactarBuddyView con journey activo): fallback numérico
+            if buddyCount <= 0 { return "Te conectamos con el primer buddy disponible" }
+            return buddyCount == 1
+                ? "1 buddy disponible para ti ahora"
+                : "\(buddyCount) buddies disponibles para ti ahora"
+        }
+
+        if ctx.buddies > 0 {
+            return ctx.buddies == 1
+                ? "1 buddy disponible para ti ahora"
+                : "\(ctx.buddies) buddies disponibles para ti ahora"
+        }
+        if ctx.totalBuddies > 0 {
+            return ctx.totalBuddies == 1
+                ? "1 buddy ayuda en esta zona. Ahora mismo está ocupado."
+                : "\(ctx.totalBuddies) buddies ayudan en esta zona. Ahora mismo están ocupados."
+        }
+        if ctx.stories > 0 {
+            return ctx.stories == 1
+                ? "1 viajero ya visitó aquí. Aún buscamos buddies locales."
+                : "\(ctx.stories) viajeros visitaron aquí. Aún buscamos buddies locales."
+        }
+        return "Todavía no hay buddies aquí. Sé el primero en explorar."
     }
 
     var body: some View {
@@ -428,15 +562,23 @@ struct CategoryPickerView: View {
             // Hero heading
             VStack(alignment: .leading, spacing: 6) {
                 Group {
-                    Text("¿Qué ").foregroundColor(Color.ink)
-                    + Text("necesitas").foregroundColor(Color.brand)
-                    + Text(" hoy?").foregroundColor(Color.ink)
+                    Text("Consulta con un ").foregroundColor(Color.ink)
+                    + Text("buddy").foregroundColor(Color.brand)
                 }
                 .font(BT.displayLarge)
-                Text("Cuéntanos y un buddy te ayudará en minutos.")
+                .lineLimit(isSkeleton ? 1 : nil)
+                .minimumScaleFactor(isSkeleton ? 0.8 : 1)
+                Text(subtitleAttributed)
                     .font(BT.callout)
-                    .foregroundStyle(Color.inkMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                    .environment(\.openURL, OpenURLAction { url in
+                        if url.absoluteString == "buddy://destination" {
+                            onDestinationTap?()
+                            return .handled
+                        }
+                        return .systemAction(url)
+                    })
+                    .redacted(reason: isSkeleton ? .placeholder : [])
             }
             .padding(.horizontal, Spacing.edge)
             .padding(.top, Spacing.md)
@@ -487,6 +629,8 @@ struct CategoryPickerView: View {
                     .buttonStyle(.pressable)
                 }
             }
+            .redacted(reason: isSkeleton ? .placeholder : [])
+            .disabled(isSkeleton)
             .padding(.horizontal, Spacing.edge)
 
             Spacer().frame(height: Spacing.md)
@@ -495,23 +639,34 @@ struct CategoryPickerView: View {
             Button {
                 guard canRequest else { return }
                 Haptic.medium()
-                let cat = selected?.apiKey ?? "general"
-                Task { await onRequest(cat, nil) }
+                let cat = selected?.apiKey
+                selected = nil
+                Task { await onRequest(cat ?? "general", nil) }
             } label: {
                 HStack(spacing: 14) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(Color.white.opacity(0.15))
                             .frame(width: 44, height: 44)
-                        Image(systemName: "bubble.left.fill")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.white)
+                        if let avatarUrl = activeBuddyAvatarUrl {
+                            CachedImage(urlString: avatarUrl) { img in
+                                img.resizable().scaledToFill()
+                            } placeholder: {
+                                Color.white.opacity(0.3)
+                            }
+                            .frame(width: 44, height: 44)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        } else {
+                            Image(systemName: "bubble.left.fill")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(.white)
+                        }
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Hablar con un buddy")
+                        Text(activeBuddyName.map { "Sigue hablando con \($0)" } ?? (noBuddies ? "Sé el primero en explorar" : "Hablar con un buddy"))
                             .font(BT.footnoteBold)
                             .foregroundStyle(.white)
-                        Text(availabilityText)
+                        Text(activeBuddyName != nil ? "Tu buddy sigue disponible para ayudarte." : availabilityText)
                             .font(BT.caption1)
                             .foregroundStyle(.white.opacity(0.75))
                     }
@@ -520,9 +675,16 @@ struct CategoryPickerView: View {
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color.white.opacity(0.15))
                             .frame(width: 36, height: 36)
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
+                        if isLoading {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -530,7 +692,10 @@ struct CategoryPickerView: View {
                 .background(canRequest ? Color.brand : Color.brandDisabled)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
             }
-            .disabled(!canRequest)
+            .disabled(isSkeleton || !canRequest)
+            .redacted(reason: isSkeleton ? .placeholder : [])
+            .accessibilityLabel(activeBuddyName.map { "Sigue hablando con \($0)" } ?? (noBuddies ? "Sé el primero en explorar" : "Hablar con un buddy"))
+            .accessibilityHint(canRequest ? availabilityText : "Selecciona una categoría primero")
             .padding(.horizontal, Spacing.edge)
             .padding(.bottom, Spacing.sm)
         }
@@ -538,6 +703,11 @@ struct CategoryPickerView: View {
             if let key = preselectedCategory, selected == nil {
                 selected = categories.first { $0.apiKey == key }
             }
+        }
+        .onDisappear {
+            // La selección de categoría no debe persistir entre visitas al tab.
+            // Si hay un buddy activo, el botón se habilita vía activeBuddyName, no vía selected.
+            selected = nil
         }
     }
 }
@@ -608,7 +778,12 @@ private struct SearchingView: View {
                             .foregroundStyle(Color.teal)
                     )
             }
-            .onAppear { appear = true }
+            .onAppear {
+                    appear = true
+                    UIAccessibility.post(notification: .announcement,
+                        argument: "Buscando un buddy para ti. Esto toma solo unos minutos.")
+                }
+                .onDisappear { appear = false }
 
             Spacer().frame(height: 52)
 
@@ -633,36 +808,75 @@ private struct SearchingView: View {
 struct BuddyChatView: View {
     let match: APIMatch
     var journey: APIJourney? = nil
-    var onDismiss: (() -> Void)? = nil
+    var initialCategory: String? = nil
 
-    @EnvironmentObject private var locationService: LocationService
+    @Environment(\.dismiss) private var dismiss
+
+    // LocationService is read only at action time (sendLocation), not in body.
+    // Using LocationService.current avoids subscribing to objectWillChange and
+    // prevents the whole chat view from re-rendering on every GPS fix.
 
     private var effectiveUserId: String? { Session.travelerId }
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var matchStatus:   String = ""
     @State private var messages:      [APIMessage] = []
     @State private var inputText      = ""
-    @State private var isSending      = false
-    @State private var sseTask:       Task<Void, Never>?
+    @State private var isSending        = false
+    @State private var sendFailed       = false
+    @State private var pendingSendKey   = ""   // idempotency key para el retry
+    @State private var sseTask:           Task<Void, Never>?
+    @State private var markReadTask:      Task<Void, Never>?   // debounce markMessagesRead
     @StateObject private var recVM    = AudioRecorderVM()
     @Namespace private var bottomID
     @FocusState private var inputFocused: Bool
     @GestureState private var micDragX: CGFloat = .zero
+    @State private var micHoldTask:              Task<Void, Never>? = nil
+    @State private var keyboardWasOpenOnRecordStart = false
     /// Burbuja optimista de audio: se muestra inmediatamente con el archivo local
     @State private var pendingAudioLocalURL: URL? = nil
     /// Card de cierre de ciclo — dismissible si el usuario quiere seguir
     @State private var closeCardDismissed = false
-    @State private var showReportSheet    = false
     @State private var reportSent         = false
-    /// Sheet de feedback antes de cerrar apoyo (solo viajero)
-    @State private var showCloseSheet = false
-    /// Modal de confirmación simple (solo buddy — no responde encuesta)
     @State private var showCloseConfirm = false
     @State private var isSendingLocation = false
-    @State private var showAttachSheet   = false
+    @State private var showPhotoPicker   = false
+    @State private var locationFailed    = false
+
+    private enum ChatSheet: Identifiable {
+        case attach, camera, placePicker, closeFeedback, report
+        var id: Self { self }
+    }
+    @State private var activeSheet: ChatSheet?
+    @State private var isSendingImage    = false
+    @State private var resolvedDestinationId: String? = nil
     // Pagination
-    @State private var hasMoreMessages = true
-    @State private var isLoadingMore   = false
+    @State private var hasMoreMessages  = true
+    @State private var isLoadingMore    = false
+    /// Prevents loadMoreMessages() from firing before the initial scroll-to-bottom
+    /// completes. Without this guard the ProgressView at the top of LazyVStack is
+    /// immediately visible (before any scroll) and triggers a second batch fetch,
+    /// producing up to 3 competing scrollTo(bottomID) calls on first open.
+    @State private var initialScrollDone = false
+    /// True while the user is at (or very close to) the bottom of the message list.
+    /// Used to decide whether to re-scroll when the keyboard appears: if the user
+    /// is reading history we must NOT scroll them away; if they're at the bottom we
+    /// must keep the last message visible as the keyboard rises.
+    @State private var isNearBottom = true
+    /// ID of the message that was at the top of the visible area just BEFORE a
+    /// load-more prepend. After the prepend, onChange(prependAnchorId) scrolls
+    /// back to that message so the user's reading position is preserved.
+    @State private var prependAnchorId: String? = nil
+    /// Count of new messages that arrived via SSE while the user was scrolled up
+    /// reading history. Drives the "↓ N nuevos" floating button.
+    @State private var unseenCount = 0
+    /// True while the other participant has an active SSE connection to this chat.
+    /// Driven by `event: presence` from buddy-core — never hardcoded.
+    @State private var buddyIsOnline: Bool = false
+
+    // ── Keyboard latency investigation (temporary instrumentation) ──────────
+    @State private var keyboardSignpostState: OSSignpostIntervalState? = nil
+    @State private var lastTapTimestamp: Double? = nil
 
     /// Muestra la card si han pasado >10 min desde el inicio del match y el último msg es del buddy
     private var shouldShowCloseCard: Bool {
@@ -696,7 +910,7 @@ struct BuddyChatView: View {
         VStack(spacing: 0) {
             // ── Header ──────────────────────────────────────────────
             HStack(spacing: 12) {
-                Button { Haptic.light(); onDismiss?() } label: {
+                Button { Haptic.light(); dismiss() } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.ink)
@@ -707,26 +921,42 @@ struct BuddyChatView: View {
                 .padding(.leading, -10)   // mantiene el glifo cerca del borde pese al target 44
 
                 // Avatar
-                Circle()
-                    .fill(Color.sandLight)
-                    .frame(width: 38, height: 38)
-                    .overlay(
-                        Text(buddyInitials)
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(Color.sand)
-                    )
-                    .overlay(alignment: .bottomTrailing) {
-                        Circle().fill(Color.onlineGreen).frame(width: 10, height: 10)
-                            .overlay(Circle().stroke(Color.surface, lineWidth: 1.5))
+                ZStack(alignment: .bottomTrailing) {
+                    if let url = buddyAvatarUrl {
+                        CachedImage(urlString: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: {
+                            Circle().fill(Color.sandLight)
+                                .overlay(Text(buddyInitials).font(.system(size: 14, weight: .bold)).foregroundStyle(Color.sand))
+                        }
+                        .frame(width: 38, height: 38)
+                        .clipShape(Circle())
+                    } else {
+                        Circle()
+                            .fill(Color.sandLight)
+                            .frame(width: 38, height: 38)
+                            .overlay(
+                                Text(buddyInitials)
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(Color.sand)
+                            )
                     }
+                }
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(buddyName)
                         .font(BT.headline)
                         .foregroundStyle(Color.ink)
-                    Text("en línea")
-                        .font(BT.caption1)
-                        .foregroundStyle(Color.onlineGreen)
+                    HStack(spacing: 4) {
+                        if buddyIsOnline {
+                            Circle()
+                                .fill(Color.onlineGreen)
+                                .frame(width: 7, height: 7)
+                        }
+                        Text(buddyIsOnline ? "en línea" : (isCurrentUserBuddy ? "Tu viajero" : "Tu buddy"))
+                            .font(BT.caption1)
+                            .foregroundStyle(buddyIsOnline ? Color.onlineGreen : Color.inkMuted)
+                    }
                 }
 
                 Spacer()
@@ -741,7 +971,7 @@ struct BuddyChatView: View {
                     }
                     Divider()
                     Button(role: .destructive) {
-                        showReportSheet = true
+                        activeSheet = .report
                     } label: {
                         Label("Reportar usuario", systemImage: "flag")
                     }
@@ -752,6 +982,7 @@ struct BuddyChatView: View {
                         .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }
+                .accessibilityLabel("Opciones de conversación")
             }
             .padding(.horizontal, Spacing.edge)
             .padding(.vertical, 12)
@@ -780,21 +1011,21 @@ struct BuddyChatView: View {
                             ProgressView()
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
-                                .onAppear { Task { await loadMoreMessages() } }
+                                .onAppear {
+                                    // Only load older messages once the initial scroll
+                                    // to the bottom has completed. Before that moment the
+                                    // ProgressView is technically "visible" at the top of
+                                    // the unscrolled LazyVStack, and firing here causes a
+                                    // duplicate fetch + multiple competing scrollTo calls.
+                                    guard initialScrollDone else { return }
+                                    Task { await loadMoreMessages() }
+                                }
                         }
                         if messages.isEmpty {
                             welcomeMessage.padding(.top, Spacing.xl)
                         }
                         ForEach(Array(messages.enumerated()), id: \.element.id) { i, msg in
-                            // Date separator
-                            if i == 0 || !sameDay(messages[i-1].createdAt, msg.createdAt) {
-                                dateSeparator(msg.createdAt)
-                            }
-                            BuddyMessageBubble(
-                                message: msg,
-                                isMe: msg.senderId != nil && msg.senderId == effectiveUserId
-                            )
-                            .padding(.bottom, 4)
+                            messageRow(msg: msg, index: i)
                         }
                         // Card de cierre de ciclo
                         if shouldShowCloseCard {
@@ -812,6 +1043,7 @@ struct BuddyChatView: View {
                         // Burbuja optimista — aparece al soltar el mic, desaparece cuando llega por SSE
                         if let localURL = pendingAudioLocalURL {
                             AudioPlayerBubble(audioUrl: localURL.absoluteString, isMe: true)
+                            .accessibilityLabel("Mensaje de audio enviando…")
                             .padding(.bottom, 4)
                             .overlay(alignment: .bottomTrailing) {
                                 // Indicador de "enviando…"
@@ -823,66 +1055,339 @@ struct BuddyChatView: View {
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
                         Color.clear.frame(height: 1).id(bottomID)
+                            .onAppear   { isNearBottom = true  }
+                            .onDisappear { isNearBottom = false }
                     }
                     .padding(.horizontal, Spacing.edge)
                     .padding(.vertical, Spacing.md)
                 }
-                .onChange(of: messages.count) { _, _ in
-                    withAnimation { proxy.scrollTo(bottomID, anchor: .bottom) }
+                // ── Keyboard: allow swipe-to-dismiss like iMessage ────────────
+                // .interactively lets the user drag the keyboard down with a scroll
+                // gesture, matching the WhatsApp / iMessage UX pattern.
+                .scrollDismissesKeyboard(.interactively)
+                // ── Input bar as safeAreaInset (the iMessage pattern) ─────────
+                // Placing the input bar here instead of below the ScrollView is the
+                // key fix. safeAreaInset anchors the input bar to the ScrollView's
+                // safe area bottom:
+                //  • When the keyboard appears, iOS updates safeAreaInsets.bottom →
+                //    the input bar rises WITH the keyboard in the same animation,
+                //    same curve — no double animation, no jump.
+                //  • The ScrollView's contentInset.bottom auto-expands by the
+                //    combined height of (input bar + keyboard), so the last message
+                //    is never hidden behind either.
+                //  • UIKit's UIScrollView maintains the "at-bottom" contentOffset
+                //    when contentInset increases, so the user stays at the last
+                //    message automatically.
+                // The explicit scrollTo below is a safety net for the cases where
+                // UIKit's auto-adjustment isn't quite precise enough.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if matchStatus == "completed" {
+                        closedBar
+                    } else {
+                        chatInputBar
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    // "↓ N nuevos" badge — shown when new SSE messages arrive while
+                    // the user is reading history (isNearBottom == false).
+                    // Tapping scrolls to the bottom and resets the counter.
+                    if unseenCount > 0 {
+                        Button {
+                            unseenCount = 0
+                            isNearBottom = true
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                proxy.scrollTo(bottomID, anchor: .bottom)
+                            }
+                        } label: {
+                            Label(
+                                unseenCount == 1 ? "1 nuevo" : "\(unseenCount) nuevos",
+                                systemImage: "chevron.down"
+                            )
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.accentColor, in: Capsule())
+                            .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+                        }
+                        .padding(.bottom, 12)
+                        .transition(.scale.combined(with: .opacity))
+                        .animation(.spring(duration: 0.3), value: unseenCount)
+                    }
+                }
+                .onChange(of: messages.count) { oldCount, newCount in
+                    if !initialScrollDone {
+                        // ── First load: jump to bottom instantly, zero animation ──
+                        // withAnimation(nil) suppresses the animation context so the
+                        // scroll is a hard jump, not the slide-from-top the user would
+                        // otherwise see (the WhatsApp anti-pattern).
+                        withAnimation(nil) { proxy.scrollTo(bottomID, anchor: .bottom) }
+                        initialScrollDone = true
+                        isNearBottom = true
+                        print("⏱ [scroll] initial jump done — \(newCount) messages")
+                    } else if !isLoadingMore && newCount > oldCount {
+                        // ── New message appended (SSE / send) ────────────────────
+                        if isNearBottom {
+                            // User is at the bottom: scroll them to the new message
+                            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
+                        } else {
+                            // User is reading history: show a "N nuevos" badge instead
+                            unseenCount += (newCount - oldCount)
+                            print("📬 [scroll] \(newCount - oldCount) new msg(s) while reading — unseenCount=\(unseenCount)")
+                        }
+                    }
+                    // Load-more prepends older messages (isLoadingMore == true):
+                    // position is restored by onChange(of: prependAnchorId) below.
+                }
+                .onChange(of: prependAnchorId) { _, anchorId in
+                    guard let anchorId else { return }
+                    // After prepend, ScrollView resets contentOffset to 0 (top of the
+                    // now-larger content), showing the freshly-added older messages.
+                    // Jumping to anchorId with .top anchor restores the user's visual
+                    // position so load-more feels seamless, not jarring.
+                    withAnimation(nil) { proxy.scrollTo(anchorId, anchor: .top) }
+                    print("⏱ [scroll] position restored after prepend → anchor=\(anchorId.prefix(6))")
+                    prependAnchorId = nil
                 }
                 .onChange(of: pendingAudioLocalURL) { _, _ in
-                    withAnimation { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    isNearBottom = true
                 }
-            }
-
-            // ── Input bar ────────────────────────────────────────────
-            if matchStatus == "completed" {
-                closedBar
-            } else {
-                chatInputBar
+                .onChange(of: inputFocused) { _, focused in
+                    let t = KeyboardTiming.now()
+                    print("⌨️ [focus] inputFocused → \(focused) t=\(String(format: "%.3f", t.truncatingRemainder(dividingBy: 1000)))")
+                    if focused, let tap = lastTapTimestamp {
+                        print("⏱ [keyboard] tap→focus delta = \(String(format: "%.1f", (t - tap) * 1000))ms")
+                    }
+                    print("🎙️ [mic] inputFocused changed → \(focused) (isRecording=\(recVM.isRecording))")
+                    // If the keyboard was dismissed while actively recording, restore it
+                    // immediately. AVAudioSession activation (.playAndRecord) can interrupt
+                    // the system audio session and cause UIKit to resign first-responder,
+                    // which would collapse the input bar and move the mic button down.
+                    if !focused && recVM.isRecording {
+                        inputFocused = true
+                        print("🎙️ [mic] inputFocused restored — keeping keyboard up during recording")
+                        return
+                    }
+                    // When the keyboard appears and the user was already at the bottom,
+                    // scroll explicitly to pin the last message just above the input bar.
+                    // The safeAreaInset handles the geometry automatically, but
+                    // UIKit's contentOffset adjustment has ~1 frame of lag — this
+                    // call eliminates that lag so the user never sees a gap.
+                    // If the user is reading history (isNearBottom == false), we must
+                    // NOT scroll them away from where they are.
+                    guard focused && isNearBottom else { return }
+                    // 1-frame delay: let the safeAreaInset height update propagate first
+                    // so scrollTo targets the correct final position.
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo(bottomID, anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: recVM.isRecording) { _, isRecording in
+                    guard !isRecording else { return }
+                    // Recording ended: the body re-render makes the TextField
+                    // visible+interactive again, and UIKit may restore it as
+                    // first-responder synchronously during that render pass.
+                    // Deferring to the next run loop ensures we override that
+                    // restoration AFTER it happens, before keyboard animation starts.
+                    DispatchQueue.main.async {
+                        if recVM.cancelled && keyboardWasOpenOnRecordStart {
+                            // Cancel by slide: keyboard was open before recording → restore it
+                            inputFocused = true
+                            print("🎙️ [mic] isRecording ended (cancelled) → keyboard restored (was open before recording)")
+                        } else {
+                            inputFocused = false
+                            print("🎙️ [mic] isRecording ended → force-cleared focus (deferred)")
+                        }
+                    }
+                }
             }
         }
         .background(Color.canvas)
         .navigationBarHidden(true)
-        .background(KeyboardPrewarmer())
-        .sheet(isPresented: $showCloseSheet) {
-            CloseFeedbackSheet(buddyName: buddyName, buddyAvatarUrl: buddyAvatarUrl) { feeling, pressure in
-                showCloseSheet = false
-                Task { await closeMatch(feeling: feeling, pressure: pressure) }
-            } onDismiss: {
-                showCloseSheet = false
-            }
-        }
-        .sheet(isPresented: $showReportSheet) {
-            ReportUserSheet(
-                buddyName: buddyName,
-                matchId: match.id,
-                reportedUserId: (isCurrentUserBuddy ? match.traveler?.id : match.buddy?.id) ?? ""
-            ) {
-                showReportSheet = false
-                reportSent = true
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .closeFeedback:
+                CloseFeedbackSheet(buddyName: buddyName, buddyAvatarUrl: buddyAvatarUrl) { feeling, pressure in
+                    activeSheet = nil
+                    Task { await closeMatch(feeling: feeling, pressure: pressure) }
+                } onDismiss: {
+                    activeSheet = nil
+                }
+            case .report:
+                ReportUserSheet(
+                    buddyName: buddyName,
+                    matchId: match.id,
+                    reportedUserId: (isCurrentUserBuddy ? match.traveler?.id : match.buddy?.id) ?? ""
+                ) {
+                    activeSheet = nil
+                    reportSent = true
+                }
+            case .attach:
+                attachSheet
+                    .presentationDetents([.height(220)])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(Color.canvas)
+            case .camera:
+                CameraPickerView { image in
+                    if let data = image.jpegData(compressionQuality: 0.82) {
+                        Task { await sendImage(data: data) }
+                    }
+                }
+                .ignoresSafeArea()
+            case .placePicker:
+                PlacePickerSheet(destinationId: resolvedDestinationId) { name, lat, lng in
+                    activeSheet = nil
+                    Task {
+                        let content = "place:\(lat)|\(lng)|\(name)|"
+                        if let msg = try? await APIClient.shared.sendMessage(matchId: match.id, content: content) {
+                            await MainActor.run { messages.append(msg) }
+                        }
+                    }
+                }
             }
         }
         .toast(isPresented: $reportSent, message: "Reporte enviado. Lo revisaremos pronto.")
         .task {
             matchStatus = match.status
             ChatPresenceTracker.shared.activeChatMatchId = match.id
-            await loadMessages()
+
+            // ── Synchronous: instant ──────────────────────────────────────────
+            resolvedDestinationId = journey?.destination?.id ?? journey?.destinationId
+
+            // ── 1. Show cached history immediately (0ms) ─────────────────────
+            // ChatStore.messageCache holds the last N messages fetched or received
+            // via SSE for this match. Reading it here makes re-opening an already-
+            // visited chat feel instant: the conversation appears before the network
+            // response arrives.
+            // initialScrollDone starts false → onChange(messages.count) will fire
+            // and trigger the instant no-animation scroll-to-bottom.
+            let cached = ChatStore.shared.cachedHistory(for: match.id)
+            if let cached, !cached.isEmpty {
+                messages = cached
+                print("⏱ [chat] cache hit — \(cached.count) msgs shown instantly")
+            }
+
+            // ── 2. Background fetch (network) ────────────────────────────────
+            // loadMessages() now merges new arrivals into the array instead of
+            // replacing it, so a cache hit above doesn't lose its scroll state.
+            // fetchHelpRequestInfo runs concurrently (only needed when no journey).
+            if resolvedDestinationId == nil {
+                async let destFetch = APIClient.shared.fetchHelpRequestInfo(requestId: match.requestId)
+                await loadMessages()
+                resolvedDestinationId = (try? await destFetch)?.destinationId
+            } else {
+                await loadMessages()
+            }
+
+            // ── category_card send ───────────────────────────────────────────
+            // Kept sequential (before startSSE) to avoid a timing race:
+            // if SSE starts first and the server echoes the category_card message
+            // back on the stream before sendMessage() returns, the SSE path
+            // (which has a dedup guard) appends it; then sendMessage() returns the
+            // same message and the direct append would create a duplicate.
+            // Keeping this before startSSE() eliminates that window entirely.
+            if let cat = initialCategory {
+                if let msg = try? await APIClient.shared.sendMessage(matchId: match.id, content: "category_card:\(cat)") {
+                    if !messages.contains(where: { $0.id == msg.id }) {
+                        messages.append(msg)
+                    }
+                }
+            }
+
+            // ── SSE starts AFTER loadMessages() ─────────────────────────────
+            // Race condition avoided: if SSE started before loadMessages(),
+            // a message arriving on the stream before loadMessages() completes
+            // would be appended to `messages`; then the merge in loadMessages()
+            // would already include it (dedup by id), so the SSE append would
+            // be a no-op. Keeping SSE after loadMessages() costs ~0ms with
+            // zero correctness risk.
             startSSE()
-            await APIClient.shared.markMessagesRead(matchId: match.id)
-            // La encuesta obligatoria (buddy cerró) la presenta RootView de forma
-            // global; aquí solo manejamos el cierre iniciado por el viajero.
-            await ChatStore.shared.load()
+
+            // ── Fire-and-forget: don't block the UI ─────────────────────────
+            // markMessagesRead is housekeeping that doesn't affect visible state.
+            // ChatStore.load is intentionally NOT called here: the SSE connection
+            // already delivers real-time updates, and calling load() would trigger
+            // parallel /messages fetches + a full parent re-render cascade.
+            // ChatStore.load() is only called when leaving the chat (closeMatch /
+            // closeAsHelper / SSE match-completed event) so the chat list badge
+            // and last-message preview update at the right moment.
+            Task { await APIClient.shared.markMessagesRead(matchId: match.id) }
         }
         .onDisappear {
+            print("🔌 [presence] chat onDisappear — cancelling SSE (leaves 'online')")
             sseTask?.cancel()
             if ChatPresenceTracker.shared.activeChatMatchId == match.id {
                 ChatPresenceTracker.shared.activeChatMatchId = nil
             }
         }
+        // "En línea" debe significar "dentro del app/chat, listo para responder" — no solo
+        // "el socket SSE aún no murió". Sin esto, al mandar la app a segundo plano el stream
+        // sigue vivo hasta que iOS lo suspende (puede tardar), y el otro participante seguiría
+        // viendo el punto verde aunque el usuario ya no esté mirando la pantalla.
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            print("📲 [presence] scenePhase \(oldPhase) → \(newPhase) (match=\(match.id.prefix(6)))")
+            if newPhase == .background {
+                print("🔌 [presence] app backgrounded — cancelling SSE so the other side sees 'offline'")
+                sseTask?.cancel()
+                buddyIsOnline = false
+            } else if newPhase == .active, oldPhase == .background {
+                print("🔌 [presence] app foregrounded — reconnecting SSE so the other side sees 'online' again")
+                startSSE()
+            }
+        }
+        // Notificación tapeada mientras el chat ya estaba en pantalla → recargar mensajes.
+        // No llamar startSSE() si ya hay una conexión activa (evita dos SSE simultáneos
+        // cuando foreground + push llegan al mismo tiempo).
+        .onReceive(NotificationCenter.default.publisher(for: .openChatForMatch)) { note in
+            guard note.userInfo?["match_id"] as? String == match.id else { return }
+            Task {
+                await loadMessages()
+                if sseTask == nil || sseTask!.isCancelled { startSSE() }
+            }
+        }
         // Re-evalúa la card cada 60s (por si el tiempo supera los 10 min mientras el chat está abierto)
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+            guard !closeCardDismissed, matchStatus != "completed" else { return }
             if shouldShowCloseCard { closeCardDismissed = false }
+        }
+        // Keyboard timing instrumentation — measures gap between FocusState change and actual keyboard animation
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { n in
+            let t = KeyboardTiming.now()
+            let duration = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
+            print("⌨️ [keyboard] willShow t=\(String(format: "%.3f", t.truncatingRemainder(dividingBy: 1000))) animDuration=\(String(format: "%.2f", duration))s")
+            if let tap = lastTapTimestamp {
+                print("⏱ [keyboard] tap→willShow delta = \(String(format: "%.1f", (t - tap) * 1000))ms")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+            let t = KeyboardTiming.now()
+            print("⌨️ [keyboard] didShow t=\(String(format: "%.3f", t.truncatingRemainder(dividingBy: 1000)))")
+            if let tap = lastTapTimestamp {
+                print("⏱ [keyboard] tap→didShow TOTAL = \(String(format: "%.1f", (t - tap) * 1000))ms  ← this is what the user actually perceives")
+            }
+            if let state = keyboardSignpostState {
+                KeyboardTiming.signposter.endInterval("TapToKeyboard", state)
+                keyboardSignpostState = nil
+            }
+            lastTapTimestamp = nil
+        }
+        .alert("No se pudo enviar", isPresented: $sendFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("El mensaje no se envió. Inténtalo de nuevo.")
+        }
+        .alert("Sin acceso a tu ubicación", isPresented: $locationFailed) {
+            Button("Abrir ajustes") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Permite el acceso a tu ubicación en Ajustes para compartirla.")
         }
         // Confirmación simple para el buddy (no responde encuesta)
         .alert("¿Cerrar acompañamiento?", isPresented: $showCloseConfirm) {
@@ -893,13 +1398,22 @@ struct BuddyChatView: View {
         } message: {
             Text("\(buddyName) quedará libre para acompañar a otro viajero.")
         }
+        // Keyboard pre-warmer: pays the iOS keyboard subsystem init cost (~400–800ms on
+        // real device) during the chat's appear transition — the right moment because:
+        //   1. The user already tapped "Hablar con un buddy" / opened the chat — there is
+        //      clear intent to write; the Home screen remains completely unaware of this.
+        //   2. The user is reading messages for several seconds before typing — the init
+        //      runs in the background with zero visual artifact (inputView = UIView() means
+        //      UIKit shows no keyboard UI, only initialises the text-input service).
+        //   3. Only runs once per process lifetime (KeyboardPrewarmer.hasWarmed guard).
+        .background(KeyboardPrewarmer())
     }
 
     /// Enruta el cierre según el rol: el buddy confirma; el viajero responde la
     /// encuesta de cierre.
     private func requestClose() {
         if isCurrentUserBuddy { showCloseConfirm = true }
-        else                  { showCloseSheet = true }
+        else                  { activeSheet = .closeFeedback }
     }
 
     // ── Conexión cerrada ─────────────────────────────────────────────
@@ -919,100 +1433,56 @@ struct BuddyChatView: View {
     }
 
     // ── WhatsApp-style input bar ──────────────────────────────────────
+    // KEY INVARIANT: TextField stays in the view tree at all times (opacity 0 when
+    // recording). This prevents the keyboard from dismissing on recording start,
+    // which is what causes the mic button to "jump" when the keyboard slides away.
+    // The + button is also always in the tree (opacity 0 when recording) so the
+    // HStack never redistributes its widths.
     private var chatInputBar: some View {
-        let hasText = !inputText.trimmingCharacters(in: .whitespaces).isEmpty
-        // Cancel threshold: drag left more than 100pt cancels recording
-        let cancelled = micDragX < -100
+        let hasText   = !inputText.trimmingCharacters(in: .whitespaces).isEmpty
+        let recording = recVM.isRecording
+        let cancelled = micDragX < -80
 
-        return Group {
-            if recVM.isRecording {
-                // ── Recording state: full-width bar with slide-to-cancel ──
-                HStack(spacing: 0) {
-                    // Blinking red dot + timer
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color.errorRed)
-                            .frame(width: 8, height: 8)
-                            .opacity(recVM.seconds % 2 == 0 ? 1 : 0.25)
-                            .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true),
-                                       value: recVM.seconds)
-                        Text(fmtSecs(recVM.seconds))
-                            .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Color.ink)
-                    }
-                    .frame(width: 70, alignment: .leading)
-
-                    Spacer()
-
-                    // "< slide to cancel" — se desplaza con el dedo
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .medium))
-                        Text("Desliza para cancelar")
-                            .font(BT.callout)
-                    }
-                    .foregroundStyle(cancelled ? Color.errorRed : Color.inkMuted)
-                    .offset(x: max(micDragX, -120))
-                    .animation(.interactiveSpring(), value: micDragX)
-
-                    Spacer()
-
-                    // Mic button (held, draggable, red pulse)
-                    ZStack {
-                        Circle()
-                            .fill(cancelled ? Color.errorRed.opacity(0.15) : Color.teal.opacity(0.15))
-                            .frame(width: 54, height: 54)
-                            .scaleEffect(1.1)
-                            .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true),
-                                       value: recVM.isRecording)
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(cancelled ? Color.errorRed : Color.teal)
-                            .frame(width: 42, height: 42)
-                            .background(cancelled ? Color.errorRed.opacity(0.1) : Color.teal.opacity(0.1))
-                            .clipShape(Circle())
-                    }
-                    .offset(x: max(micDragX * 0.3, -40))
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .updating($micDragX) { val, state, _ in
-                                state = min(0, val.translation.width) // only left
-                            }
-                            .onEnded { val in
-                                if val.translation.width < -100 {
-                                    recVM.cancel()
-                                    Haptic.light()
-                                } else {
-                                    Task { await stopAndSendAudio() }
-                                }
-                            }
-                    )
+        return VStack(spacing: 0) {
+            if isSendingImage {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.75)
+                    Text("Enviando imagen…")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, Spacing.edge)
-                .padding(.vertical, 14)
-                .background(Color.surface)
-                .overlay(alignment: .top) { Divider() }
-                .transition(.opacity)
+                .padding(.vertical, 6)
+            }
+            Divider()
+            HStack(spacing: 8) {
 
-            } else {
-                // ── Normal state ──────────────────────────────────────
-                HStack(spacing: 8) {
-                    // + attach button
-                    Button {
-                        Haptic.light()
-                        inputFocused = false
-                        showAttachSheet = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(Color.inkMuted)
-                            .frame(width: 38, height: 38)
-                            .background(Color.canvas)
-                            .clipShape(Circle())
-                            .overlay(Circle().stroke(Color.border, lineWidth: 1))
-                    }
+                // ── Left: + button — always in layout, invisible while recording ──
+                Button {
+                    Haptic.light()
+                    inputFocused = false
+                    activeSheet = .attach
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.inkMuted)
+                        .frame(width: 38, height: 38)
+                        .background(Color.canvas)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.border, lineWidth: 1))
+                }
+                .opacity(recording ? 0 : 1)
+                .allowsHitTesting(!recording)
+                .accessibilityLabel("Adjuntar archivo")
 
-                    // Campo de texto (pill)
+                // ── Center: TextField always in tree; recording UI overlaid ──
+                ZStack(alignment: .leading) {
+                    // TextField always present — keeps keyboard anchored.
+                    // allowsHitTesting is intentionally NOT disabled during recording:
+                    // disabling it on a first-responder UITextField causes UIKit to
+                    // resign first responder, which collapses the keyboard and moves
+                    // the mic button. The recording overlay above absorbs gestures.
                     TextField("escríbele a \(buddyName)…", text: $inputText, axis: .vertical)
                         .font(BT.body)
                         .lineLimit(4)
@@ -1023,68 +1493,173 @@ struct BuddyChatView: View {
                         .background(Color.canvas)
                         .clipShape(Capsule())
                         .overlay(Capsule().stroke(Color.border, lineWidth: 1))
+                        .opacity(recording ? 0 : 1)
+                        // Raw tap timestamp — fires on touch-down, before FocusState even
+                        // updates. simultaneousGesture so it never steals the tap from
+                        // the TextField's own first-responder handling.
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                let t = KeyboardTiming.now()
+                                lastTapTimestamp = t
+                                keyboardSignpostState = KeyboardTiming.signposter.beginInterval("TapToKeyboard")
+                                print("👆 [keyboard] raw tap t=\(String(format: "%.3f", t.truncatingRemainder(dividingBy: 1000)))")
+                            }
+                        )
 
-                    // Botón derecho: send si hay texto, mic si no
-                    if hasText {
-                        Button {
-                            Task { await sendMessage() }
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 17, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 42, height: 42)
-                                .background(isSending ? Color.teal.opacity(0.4) : Color.teal)
-                                .clipShape(Circle())
+                    // Recording UI fades in over the TextField, same frame
+                    if recording {
+                        HStack(spacing: 0) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(Color.errorRed)
+                                    .frame(width: 8, height: 8)
+                                    .opacity(recVM.seconds % 2 == 0 ? 1 : 0.3)
+                                    .animation(
+                                        .easeInOut(duration: 0.5).repeatForever(autoreverses: true),
+                                        value: recVM.seconds
+                                    )
+                                Text(fmtSecs(recVM.seconds))
+                                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(Color.ink)
+                            }
+                            Spacer()
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text("Desliza para cancelar")
+                                    .font(BT.callout)
+                            }
+                            .foregroundStyle(cancelled ? Color.errorRed : Color.inkMuted)
+                            .offset(x: max(micDragX * 0.6, -110))
+                            .animation(.interactiveSpring(), value: micDragX)
+                            Spacer()
                         }
-                        .disabled(isSending)
-                        .transition(.scale.combined(with: .opacity))
-                    } else {
-                        // Mic — hold to record, drag left to cancel
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(Color.inkMuted)
-                            .frame(width: 42, height: 42)
-                            .background(Color.canvas)
-                            .clipShape(Circle())
-                            .overlay(Circle().stroke(Color.border, lineWidth: 1))
-                            .gesture(
-                                DragGesture(minimumDistance: 0)
-                                    .updating($micDragX) { val, state, _ in
-                                        state = min(0, val.translation.width)
-                                    }
-                                    .onChanged { _ in
-                                        if !recVM.isRecording {
-                                            Task {
-                                                let ok = await recVM.start()
-                                                if ok { Haptic.medium() }
-                                            }
-                                        }
-                                    }
-                                    .onEnded { val in
-                                        if val.translation.width < -100 {
-                                            recVM.cancel()
-                                            Haptic.light()
-                                        } else {
-                                            // Siempre intentar enviar — stopAndSendAudio() hace guard internamente
-                                            Task { await stopAndSendAudio() }
-                                        }
-                                    }
-                            )
-                            .transition(.scale.combined(with: .opacity))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .transition(.opacity)
                     }
                 }
-                .padding(.horizontal, Spacing.edge)
-                .padding(.vertical, 10)
-                .background(Color.surface)
-                .overlay(alignment: .top) { Divider() }
-                .animation(.spring(response: 0.25, dampingFraction: 0.8), value: hasText)
+                .animation(.easeInOut(duration: 0.15), value: recording)
+
+                // ── Right: send (text mode) OR mic (no text / recording) ──
+                if hasText && !recording {
+                    Button {
+                        guard !isSending else { return }
+                        isSending = true
+                        Task {
+                            defer { isSending = false }
+                            await sendMessage()
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 42, height: 42)
+                            .background(isSending ? Color.teal.opacity(0.4) : Color.teal)
+                            .clipShape(Circle())
+                    }
+                    .disabled(isSending)
+                    .accessibilityLabel("Enviar mensaje")
+                    .transition(.scale.combined(with: .opacity))
+                } else if !hasText {
+                    // Mic button — single persistent gesture; never removed from tree
+                    ZStack {
+                        // Pulsing halo while recording
+                        Circle()
+                            .fill(cancelled ? Color.errorRed.opacity(0.15) : Color.teal.opacity(0.15))
+                            .frame(width: 54, height: 54)
+                            .scaleEffect(recording ? 1.12 : 0.01)
+                            .animation(
+                                recording
+                                    ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
+                                    : .easeOut(duration: 0.15),
+                                value: recording
+                            )
+
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: recording ? 22 : 18, weight: .medium))
+                            .foregroundStyle(
+                                recording ? (cancelled ? Color.errorRed : Color.teal) : Color.inkMuted
+                            )
+                            .frame(width: 42, height: 42)
+                            .background(
+                                recording
+                                    ? (cancelled ? Color.errorRed.opacity(0.1) : Color.teal.opacity(0.1))
+                                    : Color.canvas
+                            )
+                            .clipShape(Circle())
+                            .overlay(!recording ? Circle().stroke(Color.border, lineWidth: 1) : nil)
+                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: recording)
+                    }
+                    .accessibilityLabel(recVM.isRecording ? "Grabando. Desliza para cancelar." : "Grabar mensaje de voz")
+                    .accessibilityHint(recVM.isRecording ? "" : "Mantén presionado para grabar")
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .updating($micDragX) { val, state, _ in
+                                state = min(0, val.translation.width)
+                            }
+                            .onChanged { _ in
+                                guard micHoldTask == nil, !recVM.isRecording else { return }
+                                let wasKeyboardOpen = inputFocused
+                                keyboardWasOpenOnRecordStart = wasKeyboardOpen
+                                print("🎙️ [mic] onChanged — inputFocused=\(wasKeyboardOpen) isRecording=\(recVM.isRecording)")
+                                // Do NOT dismiss keyboard here — it would move the input bar
+                                // (and the mic button with it) while the user is pressing.
+                                // Keyboard is dismissed in stopAndSendAudio / cancel instead.
+                                micHoldTask = Task {
+                                    // 150ms: tap releases before this → nothing happens
+                                    print("🎙️ [mic] sleeping 150ms — keyboardWasOpen=\(wasKeyboardOpen)")
+                                    try? await Task.sleep(nanoseconds: 150_000_000)
+                                    if Task.isCancelled {
+                                        print("🎙️ [mic] task cancelled during 150ms sleep — gesture ended too early")
+                                        return
+                                    }
+                                    print("🎙️ [mic] calling recVM.start()")
+                                    let ok = await recVM.start()
+                                    print("🎙️ [mic] recVM.start() → \(ok)")
+                                    if ok { Haptic.medium() }
+                                    await MainActor.run { micHoldTask = nil }
+                                }
+                            }
+                            .onEnded { val in
+                                let tx = val.translation.width
+                                let wasRecording = recVM.isRecording
+                                let hadTask = micHoldTask != nil
+                                print("🎙️ [mic] onEnded — tx=\(Int(tx)) isRecording=\(wasRecording) hadTask=\(hadTask)")
+                                micHoldTask?.cancel()
+                                micHoldTask = nil
+                                guard recVM.isRecording else {
+                                    print("🎙️ [mic] onEnded — not recording (tap too short or start failed)")
+                                    return
+                                }
+                                if tx < -80 {
+                                    print("🎙️ [mic] onEnded — cancelled by slide (tx=\(Int(tx))) keyboardWasOpen=\(keyboardWasOpenOnRecordStart)")
+                                    // Only close keyboard if it wasn't open before recording started.
+                                    // If the user had the keyboard up, we restore it after cancel.
+                                    if !keyboardWasOpenOnRecordStart { inputFocused = false }
+                                    recVM.cancel()
+                                    Haptic.light()
+                                } else {
+                                    print("🎙️ [mic] onEnded — sending audio")
+                                    Task { await stopAndSendAudio() }
+                                }
+                            }
+                    )
+                }
             }
+            .padding(.horizontal, Spacing.edge)
+            .padding(.vertical, 10)
+            .background(Color.surface)
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: hasText)
         }
-        .sheet(isPresented: $showAttachSheet) {
-            attachSheet
-                .presentationDetents([.height(200)])
-                .presentationDragIndicator(.visible)
-        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: Binding(
+            get: { [] },
+            set: { items in
+                if let item = items.first {
+                    Task { await sendPickedPhoto(item) }
+                }
+            }
+        ), maxSelectionCount: 1, matching: .images)
     }
 
     private var attachSheet: some View {
@@ -1093,49 +1668,75 @@ struct BuddyChatView: View {
                 .font(BT.footnoteBold)
                 .foregroundStyle(Color.inkMuted)
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.md)
-                .padding(.bottom, Spacing.sm)
+                .padding(.top, Spacing.lg)
+                .padding(.bottom, Spacing.md)
 
-            Divider()
-
-            Button {
-                showAttachSheet = false
-                Task { await sendLocation() }
-            } label: {
-                HStack(spacing: Spacing.md) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.teal.opacity(0.12))
-                            .frame(width: 44, height: 44)
-                        Image(systemName: "location.fill")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(Color.teal)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Ubicación actual")
-                            .font(BT.footnoteBold)
-                            .foregroundStyle(Color.ink)
-                        Text("Comparte dónde estás ahora mismo")
-                            .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted)
-                    }
-                    Spacer()
-                    if isSendingLocation {
-                        ProgressView().tint(Color.teal)
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.border)
-                    }
+            HStack(spacing: 0) {
+                attachOption(icon: "photo.fill", label: "Fotos", color: .purple) {
+                    activeSheet = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showPhotoPicker = true }
                 }
-                .padding(.horizontal, Spacing.edge)
-                .padding(.vertical, Spacing.md)
-                .contentShape(Rectangle())
+                attachOption(icon: "camera.fill", label: "Cámara", color: .brand) {
+                    activeSheet = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activeSheet = .camera }
+                }
+                attachOption(icon: "location.fill", label: "Ubicación", color: .teal) {
+                    activeSheet = nil
+                    Task { await sendLocation() }
+                }
+                attachOption(icon: "map.fill", label: "Locaciones", color: .orange) {
+                    activeSheet = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activeSheet = .placePicker }
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(isSendingLocation)
+            .padding(.horizontal, Spacing.edge)
+            .padding(.bottom, Spacing.xl)
         }
-        .background(Color.canvas)
+    }
+
+    private func attachOption(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(color.opacity(0.15))
+                        .frame(width: 58, height: 58)
+                    Image(systemName: icon)
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(color)
+                }
+                Text(label)
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.ink)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sendPickedPhoto(_ item: PhotosPickerItem) async {
+        print("📷 [chat] sendPickedPhoto — loading transferable…")
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            print("❌ [chat] sendPickedPhoto — loadTransferable falló (nil)")
+            return
+        }
+        print("📷 [chat] sendPickedPhoto — data cargada: \(data.count / 1024) KB")
+        await sendImage(data: data)
+    }
+
+    private func sendImage(data: Data) async {
+        print("📤 [chat] sendImage — \(data.count / 1024) KB → matchId=\(match.id)")
+        await MainActor.run { isSendingImage = true }
+        let clientId = UUID().uuidString
+        do {
+            let msg = try await APIClient.shared.uploadChatImage(matchId: match.id, imageData: data, clientMessageId: clientId)
+            print("✅ [chat] sendImage — mensaje recibido id=\(msg.id) imageUrl=\(msg.imageUrl ?? "nil")")
+            await MainActor.run { messages.append(msg) }
+        } catch {
+            print("❌ [chat] sendImage — error: \(error)")
+            await MainActor.run { sendFailed = true }
+        }
+        await MainActor.run { isSendingImage = false }
     }
 
     private var welcomeMessage: some View {
@@ -1144,8 +1745,8 @@ struct BuddyChatView: View {
                 .fill(Color.sandLight)
                 .frame(width: 64, height: 64)
                 .overlay {
-                    if let urlStr = buddyAvatarUrl, let url = URL(string: urlStr) {
-                        AsyncImage(url: url) { img in img.resizable().scaledToFill() }
+                    if let urlStr = buddyAvatarUrl {
+                        CachedImage(urlString: urlStr) { img in img.resizable().scaledToFill() }
                             placeholder: { Color.sandLight }
                             .clipShape(Circle())
                     } else {
@@ -1153,10 +1754,6 @@ struct BuddyChatView: View {
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(Color.sand)
                     }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    Circle().fill(Color.onlineGreen).frame(width: 14, height: 14)
-                        .overlay(Circle().stroke(Color.canvas, lineWidth: 2))
                 }
             Text(isCurrentUserBuddy ? "Acompañando a \(buddyName)" : "Conectado con \(buddyName)")
                 .font(BT.title3).foregroundStyle(Color.ink)
@@ -1169,13 +1766,7 @@ struct BuddyChatView: View {
     }
 
     private func dateSeparator(_ date: Date?) -> some View {
-        let label: String = {
-            guard let d = date else { return "" }
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "es_PE")
-            f.dateFormat = "EEEE · H:mm"
-            return f.string(from: d)
-        }()
+        let label = date.map { BuddyMessageBubble.dateSepFormatter.string(from: $0) } ?? ""
         return Text(label)
             .font(BT.caption1)
             .foregroundStyle(Color.inkMuted)
@@ -1188,11 +1779,54 @@ struct BuddyChatView: View {
         return Calendar.current.isDate(a, inSameDayAs: b)
     }
 
+    /// Extracted from ForEach to keep BuddyChatView.body small enough for the
+    /// Swift type-checker. Complex ViewBuilder expressions with nested conditions,
+    /// local lets, and chained modifiers can exceed the type-check budget when
+    /// inlined directly inside a large body.
+    @ViewBuilder
+    private func messageRow(msg: APIMessage, index i: Int) -> some View {
+        if i == 0 || !sameDay(messages[i-1].createdAt, msg.createdAt) {
+            dateSeparator(msg.createdAt)
+        }
+        let isMe = msg.senderId != nil && msg.senderId == effectiveUserId
+        let prevSame = i > 0 && messages[i-1].senderId == msg.senderId
+        BuddyMessageBubble(message: msg, isMe: isMe, onDismissSheet: { dismiss() })
+            .equatable()  // skips body re-eval when message.id + isMe are unchanged
+            .padding(.bottom, prevSame ? 2 : 6)
+            .onAppear {
+                #if DEBUG
+                BuddyMessageBubble._appears += 1
+                print("👁 [virtual] onAppear #\(BuddyMessageBubble._appears) idx=\(i) id=\(msg.id.prefix(6))")
+                #endif
+            }
+    }
+
     private func loadMessages() async {
+        let t0 = Date()
         do {
             let fetched = try await APIClient.shared.fetchMessages(matchId: match.id, limit: 30)
-            messages = fetched
+            let networkMs = Int(Date().timeIntervalSince(t0) * 1000)
+            if messages.isEmpty {
+                // Cold open (no cache) — simple assign
+                messages = fetched
+            } else {
+                // Cache was pre-loaded — merge: keep any SSE messages that arrived
+                // while the fetch was in flight, append fetched that aren't present
+                let existingIds = Set(messages.map(\.id))
+                let newOnes = fetched.filter { !existingIds.contains($0.id) }
+                if !newOnes.isEmpty {
+                    // Insert fetched (older) before the SSE-only tail
+                    // fetched is sorted newest-last from the API
+                    messages = fetched + messages.filter { msg in
+                        !fetched.contains(where: { $0.id == msg.id })
+                    }
+                }
+                print("⏱ [chat] loadMessages merge: \(fetched.count) fetched, \(newOnes.count) new, total=\(messages.count)")
+            }
             hasMoreMessages = fetched.count == 30
+            // Write to cache so next open is instant
+            ChatStore.shared.updateCache(messages, for: match.id)
+            print("⏱ [chat] loadMessages: \(fetched.count) msgs, network=\(networkMs)ms, cache written")
         } catch {
             print("❌ loadMessages error → \(error)")
         }
@@ -1201,38 +1835,67 @@ struct BuddyChatView: View {
     private func loadMoreMessages() async {
         guard hasMoreMessages, !isLoadingMore, let oldest = messages.first?.createdAt else { return }
         isLoadingMore = true
+        isNearBottom = false  // user scrolled up to load history → don't auto-scroll on keyboard
+        prependAnchorId = messages.first?.id  // capture before prepend for position restore
         defer { isLoadingMore = false }
         do {
             let fetched = try await APIClient.shared.fetchMessages(matchId: match.id, limit: 30, before: oldest)
             if fetched.isEmpty {
                 hasMoreMessages = false
+                prependAnchorId = nil
             } else {
                 messages = fetched + messages
                 hasMoreMessages = fetched.count == 30
+                // Cache updated with full history
+                ChatStore.shared.updateCache(messages, for: match.id)
             }
         } catch {
             print("❌ loadMoreMessages error → \(error)")
+            prependAnchorId = nil
+        }
+    }
+
+    // Debounce: 10 mensajes en ráfaga = 1 PATCH, no 10.
+    private func scheduleMarkRead() {
+        markReadTask?.cancel()
+        markReadTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)   // 300 ms
+            guard !Task.isCancelled else { return }
+            await APIClient.shared.markMessagesRead(matchId: match.id)
         }
     }
 
     private func sendMessage() async {
         let text = inputText.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty, let userId = effectiveUserId else { return }
+        guard !text.isEmpty, let _ = effectiveUserId else { return }
         Haptic.light()
-        inputText = ""; isSending = true
-        if let msg = try? await APIClient.shared.sendMessage(matchId: match.id, content: text) {
+        inputText = ""
+        // Genera clave sólo si es un envío nuevo (no un retry).
+        // El retry reutiliza pendingSendKey para que el servidor devuelva
+        // el mensaje ya creado en vez de duplicarlo.
+        if pendingSendKey.isEmpty { pendingSendKey = UUID().uuidString }
+        let key = pendingSendKey
+        do {
+            let msg = try await APIClient.shared.sendMessage(matchId: match.id, content: text, idempotencyKey: key)
+            pendingSendKey = ""   // éxito — siguiente envío usa clave nueva
             messages.append(msg)
+        } catch {
+            // Restore text so the user can retry; pendingSendKey se mantiene para el retry
+            inputText = text
+            sendFailed = true
+            print("❌ [chat] sendMessage failed: \(error)")
         }
-        isSending = false
-        Task { await ChatStore.shared.load() }
+        // ChatStore.load() omitted: SSE handles the delivered message bubble;
+        // load() would fire 11 parallel network fetches for no visible benefit.
     }
 
     private func sendLocation() async {
-        guard let loc = locationService.userLocation,
-              let userId = effectiveUserId else {
+        guard let loc = LocationService.current?.userLocation else {
             Haptic.light()
+            await MainActor.run { locationFailed = true }
             return
         }
+        guard effectiveUserId != nil else { return }
         isSendingLocation = true
         let lat = loc.coordinate.latitude
         let lng = loc.coordinate.longitude
@@ -1241,25 +1904,35 @@ struct BuddyChatView: View {
             messages.append(msg)
         }
         isSendingLocation = false
-        Task { await ChatStore.shared.load() }
     }
 
     private func stopAndSendAudio() async {
-        guard let fileURL = recVM.stop() else { return }
+        print("🎙️ [mic] stopAndSendAudio() called — stopping recorder")
+        // Set inputFocused = false BEFORE recVM.stop() publishes isRecording = false.
+        // When isRecording goes false, SwiftUI re-renders and UIKit tries to restore
+        // first responder to the TextField. Pre-emptively clearing focus blocks that.
+        inputFocused = false
+        guard let fileURL = recVM.stop() else {
+            print("🎙️ [mic] stopAndSendAudio() — recVM.stop() returned nil (was cancelled)")
+            return
+        }
+        print("🎙️ [mic] stopAndSendAudio() — uploading \(fileURL.lastPathComponent)")
         withAnimation(.spring(response: 0.3)) { pendingAudioLocalURL = fileURL }
         Haptic.light()
+        let audioClientId = UUID().uuidString
         do {
-            let msg = try await recVM.upload(fileURL: fileURL, matchId: match.id)
+            let msg = try await recVM.upload(fileURL: fileURL, matchId: match.id, clientMessageId: audioClientId)
+            print("🎙️ [mic] stopAndSendAudio() — upload OK msgId=\(msg.id.prefix(8))")
             if !messages.contains(where: { $0.id == msg.id }) {
                 messages.append(msg)
             }
             withAnimation(.easeOut(duration: 0.2)) { pendingAudioLocalURL = nil }
             try? FileManager.default.removeItem(at: fileURL)
         } catch {
-            print("❌ audio send error: \(error)")
+            print("❌ [mic] audio send error: \(error)")
             withAnimation { pendingAudioLocalURL = nil }
+            sendFailed = true // reuse same "No se pudo enviar" alert
         }
-        Task { await ChatStore.shared.load() }
     }
 
     private func closeMatch(feeling: String, pressure: String) async {
@@ -1277,7 +1950,7 @@ struct BuddyChatView: View {
         Haptic.success()
         Task { await ChatStore.shared.load() }
         NotificationCenter.default.post(name: .helpCompleted, object: nil)
-        onDismiss?()
+        dismiss()
     }
 
     /// Cierre del buddy (quien ayuda): sin encuesta, solo marca completado.
@@ -1286,7 +1959,7 @@ struct BuddyChatView: View {
         Haptic.success()
         Task { await ChatStore.shared.load() }
         NotificationCenter.default.post(name: .helpCompleted, object: nil)
-        onDismiss?()
+        dismiss()
     }
 
     private func fmtSecs(_ s: Int) -> String {
@@ -1294,6 +1967,7 @@ struct BuddyChatView: View {
     }
 
     private func startSSE() {
+        print("📡 [presence] startSSE — opening chat stream (this device → 'online')")
         sseTask?.cancel()
         sseTask = Task {
             await connectSSE()
@@ -1302,67 +1976,95 @@ struct BuddyChatView: View {
 
     private func connectSSE() async {
         guard let url = URL(string: "\(APIClient.shared.baseURL)/messages/\(match.id)/stream") else { return }
-        var request = URLRequest(url: url)
-        if let token = Session.token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.timeoutInterval = 300 // 5 min — se reconecta si cae
+        var attempt = 0
 
-        do {
-            let (bytes, _) = try await URLSession.shared.bytes(for: request)
-            // Accumulate raw bytes so multi-byte UTF-8 characters (é, ñ, ü…) are not split
-            var rawBuffer = Data()
-            let newline2 = Data([0x0A, 0x0A]) // \n\n
-            for try await byte in bytes {
-                guard !Task.isCancelled else { break }
-                rawBuffer.append(byte)
-                // SSE messages end with \n\n — only decode once the full frame is in the buffer
-                if rawBuffer.suffix(2) == newline2,
-                   let chunk = String(data: rawBuffer, encoding: .utf8) {
-                    rawBuffer = Data()
-                    let lines = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .components(separatedBy: "\n")
-                    var eventType = "message"
-                    for line in lines {
-                        if line.hasPrefix("event:") {
-                            eventType = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-                        } else if line.hasPrefix("data:"),
-                                  let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces).data(using: .utf8) {
-                            if eventType == "match" {
-                                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                                   let newStatus = obj["status"] as? String,
-                                   let matchId   = obj["id"] as? String,
-                                   matchId == match.id,
-                                   ["completed", "cancelled"].contains(newStatus) {
-                                    await MainActor.run {
-                                        // Actualiza el estado visible: cambia el input bar a "Conexión cerrada"
-                                        matchStatus = newStatus
-                                        // Solo el viajero recibe la encuesta; el buddy solo ve el chat cerrarse.
-                                        if newStatus == "completed" && !isCurrentUserBuddy {
-                                            NotificationCenter.default.post(name: .matchCompleted, object: nil)
+        while !Task.isCancelled {
+            // Reset presence on every (re)connect — corrected state arrives immediately via
+            // the `presence` event the backend emits for already-online participants.
+            await MainActor.run { buddyIsOnline = false }
+            print("📡 [presence] connectSSE — connecting to \(url.path)")
+            var request = URLRequest(url: url)
+            if let token = Session.token {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.timeoutInterval = 300 // 5 min — se reconecta si cae
+
+            do {
+                let (bytes, _) = try await URLSession.shared.bytes(for: request)
+                attempt = 0   // conexión exitosa
+                // Accumulate raw bytes so multi-byte UTF-8 characters (é, ñ, ü…) are not split
+                var rawBuffer = Data()
+                let newline2 = Data([0x0A, 0x0A]) // \n\n
+                for try await byte in bytes {
+                    guard !Task.isCancelled else { break }
+                    rawBuffer.append(byte)
+                    // SSE messages end with \n\n — only decode once the full frame is in the buffer
+                    if rawBuffer.suffix(2) == newline2,
+                       let chunk = String(data: rawBuffer, encoding: .utf8) {
+                        rawBuffer = Data()
+                        let lines = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+                            .components(separatedBy: "\n")
+                        var eventType = "message"
+                        for line in lines {
+                            if line.hasPrefix("event:") {
+                                eventType = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                            } else if line.hasPrefix("data:"),
+                                      let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces).data(using: .utf8) {
+                                if eventType == "match" {
+                                    if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                       let newStatus = obj["status"] as? String,
+                                       let matchId   = obj["id"] as? String,
+                                       matchId == match.id,
+                                       ["completed", "cancelled"].contains(newStatus) {
+                                        await MainActor.run {
+                                            // Actualiza el estado visible: cambia el input bar a "Conexión cerrada"
+                                            matchStatus = newStatus
+                                            // Solo el viajero recibe la encuesta; el buddy solo ve el chat cerrarse.
+                                            if newStatus == "completed" && !isCurrentUserBuddy {
+                                                NotificationCenter.default.post(name: .matchCompleted, object: nil)
+                                            }
                                         }
+                                        await ChatStore.shared.load()
                                     }
-                                    await ChatStore.shared.load()
-                                }
-                            } else if let msg = try? JSONDecoder.buddy.decode(APIMessage.self, from: data) {
-                                await MainActor.run {
-                                    if !messages.contains(where: { $0.id == msg.id }) {
-                                        messages.append(msg)
+                                } else if eventType == "presence",
+                                          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                          let presenceUserId = obj["userId"] as? String,
+                                          let status          = obj["status"]  as? String,
+                                          presenceUserId != effectiveUserId {
+                                    print("🟢 [presence] other user \(presenceUserId) → \(status)")
+                                    await MainActor.run { buddyIsOnline = status == "online" }
+                                } else if let msg = try? JSONDecoder.buddy.decode(APIMessage.self, from: data) {
+                                    await MainActor.run {
+                                        if !messages.contains(where: { $0.id == msg.id }) {
+                                            messages.append(msg)
+                                        }
+                                        // Keep the cache in sync so a future re-open is instant
+                                        ChatStore.shared.appendToCache(msg, for: match.id)
                                     }
+                                    scheduleMarkRead()
                                 }
-                                await APIClient.shared.markMessagesRead(matchId: match.id)
                             }
                         }
                     }
                 }
+            } catch {
+                print("📡 [presence] SSE dropped (\(error.localizedDescription)) cancelled=\(Task.isCancelled)")
             }
-        } catch {
-            // Reconectar tras 2s si no fue cancelado por el usuario
-            if !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                await connectSSE()
-            }
+
+            await sseBackoff(&attempt)
         }
+    }
+}
+
+// Two BuddyChatView instances are "equal" for SwiftUI's optimization purposes
+// when they represent the same match conversation. This lets .equatable() block
+// body re-evaluation when ContactarBuddyView re-renders due to parent state
+// changes (e.g. InicioView refreshTripState), avoiding 14-bubble cascade waves.
+extension BuddyChatView: Equatable {
+    static func == (lhs: BuddyChatView, rhs: BuddyChatView) -> Bool {
+        lhs.match.id == rhs.match.id &&
+        lhs.journey?.id == rhs.journey?.id &&
+        lhs.initialCategory == rhs.initialCategory
     }
 }
 
@@ -1371,55 +2073,200 @@ struct BuddyChatView: View {
 struct BuddyMessageBubble: View {
     let message: APIMessage
     let isMe: Bool
-    @Environment(\.dismiss) private var dismiss
+    // Closure replaces @Environment(\.dismiss): DismissAction is non-Equatable,
+    // so @Environment(\.dismiss) causes SwiftUI to bypass .equatable() and call
+    // body on every parent re-render (inputFocused, GPS refresh, etc.).
+    // Stored as a closure so == ignores it → equatable check uses only message.id+isMe.
+    let onDismissSheet: (() -> Void)?
+
+    // Phase 4: static formatters — DateFormatter and NSRegularExpression are
+    // expensive to initialise (~0.5 ms each). Previously created per-bubble per
+    // render; with 30 messages and frequent parent re-renders (every keystroke,
+    // every SSE tick) this added up noticeably.
+    // fileprivate (not private) so BuddyChatView.dateSeparator() — which lives in
+    // the same file — can access dateSepFormatter without duplication.
+    fileprivate static let timeFormatter: DateFormatter = {
+        let f = DateFormatter(); f.timeStyle = .short; return f
+    }()
+    fileprivate static let dateSepFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "es_PE")
+        f.dateFormat = "EEEE · H:mm"
+        return f
+    }()
+    private static let urlRegex: NSRegularExpression? =
+        try? NSRegularExpression(pattern: #"https?://[^\s]+"#, options: .caseInsensitive)
+
+    // ── Rendering audit (DEBUG only) ──────────────────────────────────────────
+    // Tracks how many times each bubble's body is recomputed and when it first
+    // appears (onAppear = virtualization check).
+    // Check the console after opening a chat to see:
+    //   🔵 [render] body eval — tells you which state change caused the re-render
+    //   👁 [virtual] onAppear — tells you how many cells LazyVStack actually mounted
+    // If onAppear fires for all N messages at once, LazyVStack is NOT virtualizing.
+    // If it fires only for ~10–15 (the visible viewport), virtualization is correct.
+    #if DEBUG
+    fileprivate static var _bodyEvals = 0
+    fileprivate static var _appears   = 0
+    #endif
 
     var body: some View {
+        #if DEBUG
+        let _ = {
+            BuddyMessageBubble._bodyEvals += 1
+            // If you see this firing on every inputFocused/GPS update after the fix,
+            // uncomment _printChanges() to see exactly which property changed:
+            // Self._printChanges()
+            print("🔵 [render] bubble body eval #\(BuddyMessageBubble._bodyEvals) id=\(message.id.prefix(6))")
+        }()
+        #endif
+
         let isAudio    = message.type == "audio" || message.type == "audio_message"
+        let isImage    = message.type == "image" && message.imageUrl != nil
         let isLocation = message.content?.hasPrefix("location:") == true
         let isPlace    = message.content?.hasPrefix("place:") == true
+        let isCategory = message.content?.hasPrefix("category_card:") == true
+
+        let timeStr = message.createdAt.map { shortTime($0) }
 
         return HStack(spacing: 0) {
-            if isMe { Spacer(minLength: 64) }
+            if isMe { Spacer(minLength: 56) }
 
-            VStack(alignment: isMe ? .trailing : .leading, spacing: 3) {
+            VStack(alignment: isMe ? .trailing : .leading, spacing: 2) {
                 if isAudio, let url = message.audioUrl {
-                    AudioPlayerBubble(audioUrl: url, isMe: isMe)
+                    AudioPlayerBubble(audioUrl: url, isMe: isMe, timeStr: timeStr)
+                } else if isImage, let url = message.imageUrl {
+                    // Image: time overlaid bottom-right inside image
+                    ZStack(alignment: .bottomTrailing) {
+                        imageBubble(url: url)
+                        if let t = timeStr {
+                            Text(t)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Color.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.black.opacity(0.35))
+                                .clipShape(Capsule())
+                                .padding(6)
+                        }
+                    }
+                } else if isCategory, let content = message.content {
+                    categoryCard(content: content, isMe: isMe)
+                    // Cards keep time below (compact)
+                    if let t = timeStr {
+                        Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
+                    }
                 } else if isPlace, let content = message.content {
                     placeCard(content: content)
+                    if let t = timeStr {
+                        Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
+                    }
                 } else if isLocation, let content = message.content {
                     locationCard(content: content)
+                    if let t = timeStr {
+                        Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
+                    }
                 } else {
-                    textBubble
-                }
-                if let date = message.createdAt {
-                    Text(shortTime(date))
-                        .font(BT.caption2)
-                        .foregroundStyle(Color.inkMuted)
-                        .padding(.horizontal, 4)
+                    // Text bubble: time embedded inside, bottom-right
+                    textBubble(timeStr: timeStr)
                 }
             }
 
-            if !isMe { Spacer(minLength: 64) }
+            if !isMe { Spacer(minLength: 56) }
         }
     }
 
-    private var textBubble: some View {
-        Text(linkedText(message.content ?? ""))
-            .font(BT.body)
-            .foregroundStyle(isMe ? Color.white : Color.ink)
-            .tint(isMe ? Color.white.opacity(0.85) : Color.teal)
-            .environment(\.openURL, OpenURLAction { url in
-                UIApplication.shared.open(url)
-                return .handled
-            })
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(isMe ? Color.teal : Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(isMe ? Color.clear : Color.border, lineWidth: 1)
-            )
+    private func textBubble(timeStr: String?) -> some View {
+        // Time is injected as a trailing zero-width spacer trick:
+        // append invisible spacer = width of time label so the last text line
+        // never overlaps the time.
+        // +6 extra chars = ~4pt gap between last word and time label
+        let timeSpacer = timeStr.map { String(repeating: " ", count: $0.count + 6) } ?? ""
+        return ZStack(alignment: .bottomTrailing) {
+            (Text(linkedText(message.content ?? ""))
+                .font(BT.body)
+                .foregroundStyle(isMe ? Color.white : Color.ink)
+             + Text(timeSpacer).font(BT.body))
+                .tint(isMe ? Color.white.opacity(0.85) : Color.teal)
+                .environment(\.openURL, OpenURLAction { url in
+                    UIApplication.shared.open(url)
+                    return .handled
+                })
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let t = timeStr {
+                Text(t)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(isMe ? Color.white.opacity(0.65) : Color.inkMuted)
+                    .padding(.bottom, 1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+        .background(isMe ? Color.teal : Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(isMe ? Color.clear : Color.border, lineWidth: 1)
+        )
+    }
+
+    private func imageBubble(url: String) -> some View {
+        CachedImage(urlString: url) { img in
+            img.resizable().scaledToFill()
+        } placeholder: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16).fill(Color.groupedBg)
+                ProgressView().tint(Color.inkMuted)
+            }
+        }
+        .frame(width: 220, height: 220)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func categoryCard(content: String, isMe: Bool = false) -> some View {
+        let key = String(content.dropFirst("category_card:".count))
+        let info: (icon: String, label: String, subtitle: String) = {
+            switch key {
+            case "transport":     return ("map.fill",            "Cómo llegar",   "Rutas y transporte")
+            case "food":          return ("cup.and.saucer.fill", "Comer",          "Comida y restaurantes")
+            case "translation":   return ("bubble.left.fill",    "Traducir",       "Frases, señales y más")
+            case "activities":    return ("sparkles",            "Qué hacer",      "Tours y actividades")
+            case "accommodation": return ("bed.double.fill",     "Alojamiento",    "Hoteles, hostales y más")
+            case "emergency":     return ("shield.fill",         "Seguridad",      "Emergencias y consejos")
+            default:              return ("questionmark",        key,              "Solicitud de ayuda")
+            }
+        }()
+        return HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.brand.opacity(0.12))
+                    .frame(width: 42, height: 42)
+                Image(systemName: info.icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.brand)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isMe ? "Necesito ayuda con" : "Necesita ayuda con")
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
+                Text(info.label)
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.ink)
+                Text(info.subtitle)
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+        .frame(maxWidth: 260, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(isMe ? "Pedí ayuda con" : "Pide ayuda con") \(info.label): \(info.subtitle)")
     }
 
     private func placeCard(content: String) -> some View {
@@ -1431,46 +2278,44 @@ struct BuddyMessageBubble: View {
         let addr  = parts.count > 3 ? String(parts[3]) : ""
 
         return Button {
-            NotificationCenter.default.post(
-                name: .openPlaceInMap, object: nil,
-                userInfo: ["lat": lat, "lng": lng, "name": name]
-            )
-            dismiss()
+            AppRouter.shared.openPlace(lat: lat, lng: lng, name: name)
+            onDismissSheet?()
         } label: {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(spacing: 12) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 10)
                         .fill(Color.teal.opacity(0.12))
-                        .frame(width: 36, height: 36)
+                        .frame(width: 42, height: 42)
                     Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 20))
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(Color.teal)
                 }
                 VStack(alignment: .leading, spacing: 2) {
+                    Text("Locación sugerida")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
                     Text(name)
                         .font(BT.footnoteBold)
                         .foregroundStyle(Color.ink)
                         .lineLimit(2)
-                    if !addr.isEmpty {
-                        Text(addr)
-                            .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted)
-                            .lineLimit(2)
-                    }
                     Text("Ver en el mapa")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(BT.caption1)
                         .foregroundStyle(Color.teal)
-                        .padding(.top, 2)
                 }
                 Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted)
             }
-            .padding(12)
-            .frame(width: 240)
+            .padding(14)
             .background(Color.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+            .frame(maxWidth: 260, alignment: .leading)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Locación sugerida: \(name)")
+        .accessibilityHint("Abre en Maps")
     }
 
     private func locationCard(content: String) -> some View {
@@ -1520,13 +2365,16 @@ struct BuddyMessageBubble: View {
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Ubicación compartida")
+        .accessibilityHint("Abre en Maps")
     }
 
     private func linkedText(_ raw: String) -> AttributedString {
         var attr = AttributedString(raw)
-        let pattern = try? NSRegularExpression(pattern: #"https?://[^\s]+"#, options: .caseInsensitive)
         let nsRaw = raw as NSString
-        pattern?.enumerateMatches(in: raw, range: NSRange(location: 0, length: nsRaw.length)) { match, _, _ in
+        BuddyMessageBubble.urlRegex?.enumerateMatches(
+            in: raw, range: NSRange(location: 0, length: nsRaw.length)
+        ) { match, _, _ in
             guard let range = match?.range,
                   let swiftRange = Range(range, in: raw),
                   let url = URL(string: String(raw[swiftRange])) else { return }
@@ -1539,7 +2387,19 @@ struct BuddyMessageBubble: View {
     }
 
     private func shortTime(_ d: Date) -> String {
-        let f = DateFormatter(); f.timeStyle = .short; return f.string(from: d)
+        BuddyMessageBubble.timeFormatter.string(from: d)
+    }
+}
+
+// Equatable conformance for .equatable() — SwiftUI skips body re-evaluation
+// when the parent re-renders but the bubble's message content hasn't changed.
+// Messages are immutable once sent: same id → same content, same isMe → same layout.
+// onDismissSheet is intentionally excluded: it's a new closure each parent render
+// but DismissAction (its source) is stable for the sheet lifetime. Excluding it
+// keeps == returning true so body stays blocked on every parent re-render.
+extension BuddyMessageBubble: Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message.id == rhs.message.id && lhs.isMe == rhs.isMe
     }
 }
 
@@ -1549,7 +2409,7 @@ typealias MessageBubble = BuddyMessageBubble
 // MARK: – Audio Recorder Service
 
 @MainActor
-final class AudioRecorderVM: ObservableObject {
+final class AudioRecorderVM: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published var isRecording  = false
     @Published var isUploading  = false
     @Published var seconds      = 0
@@ -1566,9 +2426,29 @@ final class AudioRecorderVM: ObservableObject {
     }
 
     func start() async -> Bool {
-        guard await requestPermission() else { return false }
-        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: .defaultToSpeaker)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        let permOk = await requestPermission()
+        print("🎙️ [recVM] start() — permission=\(permOk)")
+        guard permOk else { return false }
+        let session = AVAudioSession.sharedInstance()
+        let currentCategory = session.category
+        let currentMode = session.mode
+        print("🎙️ [recVM] AVAudioSession before setCategory — category=\(currentCategory.rawValue) mode=\(currentMode.rawValue)")
+        do {
+            // .mixWithOthers prevents the session from interrupting the system audio
+            // (keyboard click sounds etc.) which would otherwise resign the TextField's
+            // first-responder and collapse the input bar mid-gesture.
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .mixWithOthers])
+            try session.setActive(true)
+            print("🎙️ [recVM] AVAudioSession activated ✓")
+        } catch {
+            print("🎙️ [recVM] AVAudioSession error: \(error)")
+        }
+
+        // Listen for interruptions (phone call, etc.)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleInterruption),
+            name: AVAudioSession.interruptionNotification, object: session
+        )
 
         let dir = FileManager.default.temporaryDirectory
         fileURL = dir.appendingPathComponent("audio_\(Date().timeIntervalSince1970).m4a")
@@ -1580,9 +2460,14 @@ final class AudioRecorderVM: ObservableObject {
             AVEncoderAudioQualityKey:  AVAudioQuality.high.rawValue
         ]
         guard let url = fileURL,
-              let rec = try? AVAudioRecorder(url: url, settings: settings) else { return false }
+              let rec = try? AVAudioRecorder(url: url, settings: settings) else {
+            print("🎙️ [recVM] AVAudioRecorder init failed — url=\(fileURL?.lastPathComponent ?? "nil")")
+            return false
+        }
         recorder = rec
-        rec.record()
+        recorder?.delegate = self
+        let started = rec.record()
+        print("🎙️ [recVM] rec.record() → \(started)")
         isRecording = true; seconds = 0; cancelled = false
 
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -1592,23 +2477,50 @@ final class AudioRecorderVM: ObservableObject {
     }
 
     func stop() -> URL? {
+        print("🎙️ [recVM] stop() — isRecording=\(isRecording) cancelled=\(cancelled) secs=\(seconds)")
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
         timer?.invalidate(); timer = nil
         recorder?.stop(); recorder = nil
         isRecording = false
-        return cancelled ? nil : fileURL
+        let result = cancelled ? nil : fileURL
+        print("🎙️ [recVM] stop() → returning \(result?.lastPathComponent ?? "nil (cancelled)")")
+        return result
     }
 
     func cancel() {
+        print("🎙️ [recVM] cancel() — isRecording=\(isRecording) secs=\(seconds)")
+        guard isRecording || recorder != nil else {
+            print("🎙️ [recVM] cancel() — already stopped, ignoring")
+            return
+        }
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
         cancelled = true
         timer?.invalidate(); timer = nil
         recorder?.stop(); recorder = nil
         if let url = fileURL { try? FileManager.default.removeItem(at: url) }
+        fileURL = nil
         isRecording = false
+    }
+
+    // Interruption (phone call, siri, background) → cancel cleanly
+    @objc private func handleInterruption(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+        print("🎙️ [recVM] AVAudioSession interruption — type=\(type == .began ? "began" : "ended") isRecording=\(isRecording)")
+        guard type == .began else { return }
+        Task { @MainActor in self.cancel() }
+    }
+
+    // AVAudioRecorderDelegate: recording stopped externally
+    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        print("🎙️ [recVM] audioRecorderDidFinishRecording — success=\(flag) isRecording=\(isRecording)")
+        if !flag { Task { @MainActor in self.cancel() } }
     }
 
     // Upload to buddy-core storage proxy (multipart)
     // El endpoint /audio ya crea el registro en DB y devuelve el APIMessage completo
-    func upload(fileURL: URL, matchId: String) async throws -> APIMessage {
+    func upload(fileURL: URL, matchId: String, clientMessageId: String) async throws -> APIMessage {
         isUploading = true
         defer { isUploading = false }
 
@@ -1623,9 +2535,13 @@ final class AudioRecorderVM: ObservableObject {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        // Backend derives sender_id from the JWT — no multipart field needed.
         let audioData = try Data(contentsOf: fileURL)
         var body = Data()
+        // client_message_id enables deterministic storage path on the backend.
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"client_message_id\"\r\n\r\n".data(using: .utf8)!)
+        body.append(clientMessageId.data(using: .utf8)!)
+        body.append("\r\n".data(using: .utf8)!)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"audio\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: audio/mp4\r\n\r\n".data(using: .utf8)!)
@@ -1646,33 +2562,69 @@ final class AudioRecorderVM: ObservableObject {
 
 @MainActor
 final class AudioPlayerVM: ObservableObject {
-    @Published var isPlaying = false
-    @Published var progress  = 0.0
-    @Published var duration  = 0.0
-    @Published var isLoading = true
-    @Published var hasError  = false
+    @Published var isPlaying  = false
+    @Published var progress   = 0.0
+    @Published var duration   = 0.0
+    /// true only while the AVAsset duration is being resolved after the first tap.
+    /// Starts false so the bubble renders immediately without a spinner on appear.
+    @Published var isLoading  = false
+    @Published var hasError   = false
 
+    // Nil until the user first taps play. This is the lazy-load sentinel —
+    // no AVPlayer, AVAudioSession, or time observers exist before that point.
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
 
-    func load(urlString: String) {
-        guard let url = URL(string: urlString) else { hasError = true; isLoading = false; return }
+    // MARK: – Public API
+
+    /// Call this from the play button. On first call it loads the AVPlayer and
+    /// starts playback automatically. On subsequent calls it toggles play/pause.
+    func play(urlString: String) {
+        if player == nil {
+            loadAndPlay(urlString: urlString)
+        } else {
+            togglePlay()
+        }
+    }
+
+    func seek(to ratio: Double) {
+        guard let player, duration > 0 else { return }
+        player.seek(to: CMTime(seconds: ratio * duration, preferredTimescale: 600))
+        progress = ratio
+    }
+
+    // MARK: – Private
+
+    private func loadAndPlay(urlString: String) {
+        guard !isLoading else { return }
+        guard let url = URL(string: urlString) else { hasError = true; return }
+
+        isLoading = true
         let item = AVPlayerItem(url: url)
-        player   = AVPlayer(playerItem: item)
+        let p    = AVPlayer(playerItem: item)
+        player   = p
+
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
 
+        // Resolve duration, then start playback
         Task {
             do {
                 let dur = try await item.asset.load(.duration)
-                if dur.isValid && !dur.isIndefinite { self.duration = CMTimeGetSeconds(dur) }
-                self.isLoading = false
-            } catch { self.isLoading = false; self.hasError = true }
+                if dur.isValid && !dur.isIndefinite { duration = CMTimeGetSeconds(dur) }
+                isLoading = false
+                p.play()
+                isPlaying = true
+            } catch {
+                isLoading = false
+                hasError  = true
+            }
         }
 
+        // Time observer — 50 ms interval, only active while this instance is alive
         let interval = CMTime(seconds: 0.05, preferredTimescale: 600)
-        timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+        timeObserver = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self, let dur = self.player?.currentItem?.duration,
                   dur.isValid, !dur.isIndefinite else { return }
             let total = CMTimeGetSeconds(dur)
@@ -1682,21 +2634,16 @@ final class AudioPlayerVM: ObservableObject {
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
-            self?.isPlaying = false; self?.progress = 0
+            self?.isPlaying = false
+            self?.progress  = 0
             self?.player?.seek(to: .zero)
         }
     }
 
-    func togglePlay() {
+    private func togglePlay() {
         guard let player else { return }
         isPlaying ? player.pause() : player.play()
         isPlaying.toggle()
-    }
-
-    func seek(to ratio: Double) {
-        guard let player, duration > 0 else { return }
-        player.seek(to: CMTime(seconds: ratio * duration, preferredTimescale: 600))
-        progress = ratio
     }
 
     deinit {
@@ -1705,87 +2652,117 @@ final class AudioPlayerVM: ObservableObject {
     }
 }
 
-private let waveHeights: [CGFloat] = [3,5,9,5,13,7,16,10,5,12,8,15,4,10,7,5,13,7,11,4,8,14,6,10,5,12,9,4,15,7]
+// Waveform pattern — 26 bars, reduced from 30 for a cleaner look
+private let waveHeights: [CGFloat] = [4,7,12,6,14,9,17,11,6,13,9,16,5,11,8,13,6,14,8,11,5,9,15,7,11,6]
 
 struct AudioPlayerBubble: View {
     let audioUrl: String
     let isMe: Bool
+    var timeStr: String? = nil
 
     @StateObject private var vm = AudioPlayerVM()
 
-    private var bubbleBg:   Color { isMe ? Color.teal   : Color.surface }
-    private var playFg:     Color { isMe ? Color.ink    : Color.white }
-    private var playBg:     Color { isMe ? Color.white  : Color.ink }
-    private var waveActive: Color { isMe ? Color.white  : Color.teal }
-    private var waveIdle:   Color { isMe ? Color.white.opacity(0.35) : Color.inkMuted.opacity(0.3) }
-    private var dotColor:   Color { isMe ? Color.white  : Color.teal }
-    private var timeFg:     Color { isMe ? Color.white.opacity(0.55) : Color.inkMuted }
+    // Color aliases
+    private var bubbleBg:   Color { isMe ? Color.teal  : Color.surface }
+    private var playFg:     Color { isMe ? Color.teal  : Color.white }
+    private var playBg:     Color { isMe ? Color.white : Color.ink }
+    private var waveActive: Color { isMe ? Color.white : Color.teal }
+    private var waveIdle:   Color { isMe ? Color.white.opacity(0.3) : Color.inkMuted.opacity(0.25) }
+    private var metaFg:     Color { isMe ? Color.white.opacity(0.6) : Color.inkMuted }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
 
-            // ── Play / pause ────────────────────────────────────────
-            Button { vm.togglePlay() } label: {
+            // ── Play / Pause / Loading / Error — circular button ────
+            // vm.play() loads the AVPlayer lazily on first tap (Phase 3):
+            // no AVPlayer/AVAudioSession/timer is created until the user taps here.
+            Button { vm.play(urlString: audioUrl) } label: {
                 ZStack {
+                    Circle().fill(playBg).frame(width: 36, height: 36)
                     if vm.isLoading {
-                        ProgressView().tint(isMe ? Color.white : Color.ink).scaleEffect(0.7)
-                            .frame(width: 24, height: 24)
+                        ProgressView()
+                            .tint(playFg)
+                            .scaleEffect(0.65)
+                    } else if vm.hasError {
+                        Image(systemName: "exclamationmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(playFg)
                     } else {
                         Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(isMe ? Color.white : Color.ink)
-                            .offset(x: vm.isPlaying ? 0 : 1.5)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(playFg)
+                            .offset(x: vm.isPlaying ? 0 : 1)
                     }
                 }
-                .frame(width: 28, height: 28)
             }
-            .disabled(vm.isLoading || vm.hasError)
+            .disabled(vm.hasError)
+            .animation(.easeInOut(duration: 0.15), value: vm.isPlaying)
+            .animation(.easeInOut(duration: 0.15), value: vm.isLoading)
 
-            // ── Waveform + duración ─────────────────────────────────
-            VStack(alignment: .leading, spacing: 4) {
-                // Waveform con punto de progreso
-                let barW: CGFloat    = 2
-                let barGap: CGFloat  = 1.5
-                let barCount         = waveHeights.count
-                let totalBarsW       = CGFloat(barCount) * barW + CGFloat(barCount - 1) * barGap
+            // ── Waveform + meta row ─────────────────────────────────
+            VStack(alignment: .leading, spacing: 5) {
 
-                ZStack(alignment: .leading) {
-                    // Barras
-                    HStack(alignment: .center, spacing: barGap) {
-                        ForEach(0..<barCount, id: \.self) { i in
-                            let passed = Double(i) / Double(barCount) < vm.progress
-                            Capsule()
-                                .fill(passed ? waveActive : waveIdle)
-                                .frame(width: barW, height: waveHeights[i])
-                                .animation(.easeOut(duration: 0.06), value: vm.progress)
+                // Waveform — fills available width via GeometryReader
+                GeometryReader { geo in
+                    let barCount   = waveHeights.count
+                    let barGap: CGFloat = 2
+                    let barW = (geo.size.width - CGFloat(barCount - 1) * barGap) / CGFloat(barCount)
+                    let totalW = geo.size.width
+
+                    ZStack(alignment: .leading) {
+                        HStack(alignment: .center, spacing: barGap) {
+                            ForEach(0..<barCount, id: \.self) { i in
+                                let passed = Double(i) / Double(barCount) < vm.progress
+                                Capsule()
+                                    .fill(passed ? waveActive : waveIdle)
+                                    .frame(width: max(barW, 1.5), height: waveHeights[i])
+                                    .animation(.easeOut(duration: 0.08), value: vm.progress)
+                            }
                         }
+                        // Scrub dot
+                        Circle()
+                            .fill(waveActive)
+                            .frame(width: 10, height: 10)
+                            .shadow(color: waveActive.opacity(0.35), radius: 2)
+                            .offset(x: max(0, min(totalW * vm.progress - 5, totalW - 10)))
+                            .animation(.easeOut(duration: 0.08), value: vm.progress)
                     }
-                    // Punto: se mueve solo dentro del rango de barras
-                    let dotX = min(max(totalBarsW * vm.progress, 0), totalBarsW - 11)
-                    Circle()
-                        .fill(dotColor)
-                        .frame(width: 11, height: 11)
-                        .shadow(color: dotColor.opacity(0.4), radius: 2)
-                        .offset(x: dotX)
-                        .animation(.easeOut(duration: 0.06), value: vm.progress)
+                    .frame(width: totalW, height: 20)
+                    .contentShape(Rectangle())
+                    // simultaneousGesture lets the parent ScrollView receive the touch in
+                    // parallel — it does NOT block vertical scroll. The directional guard
+                    // ignores gestures that are more vertical than horizontal so the user
+                    // can scroll the chat even when starting the drag over the waveform.
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                            .onChanged { v in
+                                guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                                vm.seek(to: max(0, min(1, v.location.x / totalW)))
+                            }
+                    )
                 }
-                .frame(width: totalBarsW, height: 20)
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-                    vm.seek(to: max(0, min(1, v.location.x / totalBarsW)))
-                })
+                .frame(height: 20)
 
-                // Duración
-                Text(fmt(vm.isPlaying ? vm.progress * vm.duration : vm.duration))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(timeFg)
+                // Duration (left) · message time (right)
+                HStack(spacing: 0) {
+                    Text(vm.isLoading ? "—:——" : fmt(vm.isPlaying ? vm.progress * vm.duration : vm.duration))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(metaFg)
+                    if let t = timeStr {
+                        Spacer(minLength: 8)
+                        Text(t)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(metaFg)
+                    }
+                }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
         .background(bubbleBg)
-        .clipShape(RoundedRectangle(cornerRadius: 22))
-        .task { vm.load(urlString: audioUrl) }
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .frame(minWidth: 180, maxWidth: 260)
+        // Phase 3: no .task here — AVPlayer is created lazily on first tap.
     }
 
     private func fmt(_ s: Double) -> String {
@@ -1795,17 +2772,45 @@ struct AudioPlayerBubble: View {
 }
 
 // MARK: – Keyboard Pre-warmer
-// Activa y desactiva un TextField oculto al aparecer la vista para que
-// iOS inicialice el teclado en background y no tarde la primera vez.
-private struct KeyboardPrewarmer: UIViewRepresentable {
+// Pays the iOS keyboard subsystem lazy-init cost (300–800ms on first becomeFirstResponder
+// in a process lifetime) during the chat's own appear transition — when the user is
+// already reading messages and has not yet tapped the text field.
+//
+// Design rationale (measured 2026-06-30):
+//   tap→willShow on cold process (simulator) ≈ 116ms → scales to ~400–800ms on device.
+//   Prewarming here hides that cost inside the ~1s chat-open transition, so the first
+//   tap feels instant without affecting any other screen.
+//
+// Why inputView = UIView() instead of alpha = 0:
+//   alpha = 0 hides the UITextField but NOT the system keyboard window (a separate
+//   UIWindow managed by UIKit). inputView = UIView() replaces the keyboard UI with a
+//   zero-size empty view — UIKit still initialises the text input service (paying the
+//   init cost) but shows nothing to the user.
+//
+// Why here, not InicioView:
+//   InicioView has no knowledge of whether the user will open a chat. Putting keyboard
+//   init in the Home screen breaks architectural separation of concerns. BuddyChatView
+//   knows a text field is imminent — it is the right owner of this responsibility.
+struct KeyboardPrewarmer: UIViewRepresentable {
+    // Once per process is enough — subsequent calls cost < 1ms (keyboard already ready).
+    private static var hasWarmed = false
+
     func makeUIView(context: Context) -> UITextField {
         let tf = UITextField()
-        tf.isHidden = true
-        tf.alpha = 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            tf.becomeFirstResponder()
+        tf.inputView = UIView()   // replaces keyboard window with empty UIView (0 px, invisible)
+        guard !KeyboardPrewarmer.hasWarmed else {
+            print("⌨️ [prewarmer] already warmed — skipping")
+            return tf
+        }
+        KeyboardPrewarmer.hasWarmed = true
+        // Delay 0: BuddyChatView just appeared — user is reading messages, not yet typing.
+        // No need to defer further; the text-input service init runs in the background.
+        DispatchQueue.main.async {
+            let ok = tf.becomeFirstResponder()
+            print("⌨️ [prewarmer] becomeFirstResponder → \(ok) (inputView=UIView, zero visual artifact)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 tf.resignFirstResponder()
+                print("⌨️ [prewarmer] done — keyboard subsystem ready for first tap")
             }
         }
         return tf
@@ -1990,7 +2995,7 @@ struct ReportUserSheet: View {
             .navigationTitle("Reportar usuario")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancelar") { dismiss() }
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -2188,5 +3193,105 @@ struct CloseFeedbackSheet: View {
                 .padding(.trailing, 20)
             }
         }
+    }
+}
+
+// MARK: – PLACE PICKER SHEET
+
+struct PlacePickerSheet: View {
+    var destinationId: String? = nil
+    let onSelect: (String, Double, Double) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var places: [APIPlace] = []
+    @State private var filtered: [APIPlace] = []
+    @State private var query = ""
+    @State private var isLoading = true
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Search bar
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(Color.inkMuted)
+                    TextField("Filtrar lugares...", text: $query)
+                        .autocorrectionDisabled()
+                }
+                .padding(12)
+                .background(Color.groupedBg)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, Spacing.edge)
+                .padding(.vertical, Spacing.md)
+
+                if isLoading {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                } else if filtered.isEmpty {
+                    Spacer()
+                    Text(query.isEmpty ? "Sin lugares para este destino" : "Sin resultados")
+                        .font(BT.callout)
+                        .foregroundStyle(Color.inkMuted)
+                    Spacer()
+                } else {
+                    List(filtered) { place in
+                        Button {
+                            onSelect(place.name, place.lat, place.lng)
+                        } label: {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.teal.opacity(0.10))
+                                        .frame(width: 36, height: 36)
+                                    Image(systemName: place.placeCategory?.icon ?? "mappin.fill")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(Color.teal)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(place.name)
+                                        .font(BT.footnoteBold)
+                                        .foregroundStyle(Color.ink)
+                                    if let type = place.placeCategory?.name ?? place.placeType {
+                                        Text(type)
+                                            .font(BT.caption1)
+                                            .foregroundStyle(Color.inkMuted)
+                                    }
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(Color.border)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .listRowBackground(Color.surface)
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .background(Color.canvas)
+            .navigationTitle("Locaciones del trip")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancelar") { dismiss() }
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+            .task { await load() }
+            .onChange(of: query) { _, val in
+                let q = val.trimmingCharacters(in: .whitespaces).lowercased()
+                filtered = q.isEmpty ? places : places.filter { $0.name.lowercased().contains(q) }
+            }
+        }
+    }
+
+    private func load() async {
+        guard let destId = destinationId else { isLoading = false; return }
+        let fetched = (try? await APIClient.shared.fetchPlaces(destinationId: destId)) ?? []
+        places = fetched
+        filtered = fetched
+        isLoading = false
     }
 }

@@ -1,40 +1,83 @@
 import SwiftUI
+import AuthenticationServices
+
+// MARK: – Auth Purpose
+
+enum AuthPurpose {
+    case buddy    // "Conecta con un buddy." — InicioView, ConexionesView
+    case publish  // "Publica tus lugares favoritos." — TripsView
+    case profile  // "Tu historia viaja contigo." — YoView (name-only sheet)
+
+    var titleLine1: String {
+        switch self {
+        case .buddy:   return "Conecta con"
+        case .publish: return "Publica tus"
+        case .profile: return "Tu historia"
+        }
+    }
+    var titleLine2prefix: String? {
+        switch self {
+        case .buddy:   return "un"
+        case .publish: return "lugares"
+        case .profile: return nil
+        }
+    }
+    var titleLine2accent: String {
+        switch self {
+        case .buddy:   return "buddy."
+        case .publish: return "favoritos."
+        case .profile: return "viaja contigo."
+        }
+    }
+    var subtitle: String {
+        switch self {
+        case .buddy:   return "Para conectarte con un buddy necesitamos saber quién eres."
+        case .publish: return "Para publicar necesitamos identificarte."
+        case .profile: return "Para guardar tu historia necesitamos saber quién eres."
+        }
+    }
+}
 
 // MARK: – IDENTITY SHEET
-// Registro progresivo en 2 o 3 pasos según el contexto:
-//   Nuevo usuario  → Nombre → Teléfono → OTP  (3 pasos)
-//   Ya tengo cuenta → Teléfono → OTP           (2 pasos)
-// Tras la verificación llama a `onAuthenticated` y el flujo original continúa.
+// Flujo social único: Apple o Google → backend → done.
+// Si el backend devuelve needs_profile y no hay nombre del proveedor, pide el nombre.
+// Presentado desde InicioView, TripsView y ConexionesView.
+// YoView embeds the social buttons directly; uses this sheet only for the name step.
 
 struct IdentitySheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var authState: AuthState
 
-    var contextMessage: String = "Para conectarte con un buddy necesitamos saber quién eres."
-    /// `true` → salta el paso de nombre (usuario con cuenta existente).
-    var skipName: Bool = false
-    var onAuthenticated: () -> Void = {}
+    var purpose: AuthPurpose
+    var onAuthenticated: () -> Void
 
-    private enum Step { case name, phone, code }
-    @State private var step:     Step   = .name
-    @State private var fullName: String = ""
-    @State private var phone:    String = ""
+    enum Step { case social, name }
+    @State private var step:         Step
+    @State private var suggestedName: String
+    @State private var socialLoading  = false
+    @State private var socialError:   String? = nil
 
-    private var totalSteps: Int { skipName ? 2 : 3 }
+    init(purpose: AuthPurpose = .buddy,
+         suggestedName: String = "",
+         startAtName: Bool = false,
+         onAuthenticated: @escaping () -> Void = {}) {
+        self.purpose = purpose
+        self.onAuthenticated = onAuthenticated
+        self._step = State(initialValue: startAtName ? .name : .social)
+        self._suggestedName = State(initialValue: suggestedName)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             Capsule()
                 .fill(Color.inkMuted.opacity(0.25))
                 .frame(width: 36, height: 4)
-                .padding(.top, 10)
-                .padding(.bottom, 20)
+                .padding(.top, 10).padding(.bottom, 20)
 
             ZStack {
                 switch step {
-                case .name:  nameStep
-                case .phone: phoneStep
-                case .code:  codeStep
+                case .social: socialStep
+                case .name:   nameStep
                 }
             }
             .animation(.easeInOut(duration: 0.22), value: step)
@@ -43,333 +86,283 @@ struct IdentitySheet: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.hidden)
         .preferredColorScheme(.light)
-        .onAppear { if skipName { step = .phone } }
     }
 
-    // MARK: – Pasos
+    // MARK: – Social step
+
+    private var socialStep: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(purpose.titleLine1)
+                    .font(BT.title1).foregroundStyle(Color.ink)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if let prefix = purpose.titleLine2prefix {
+                        Text(prefix)
+                            .font(BT.title1).foregroundStyle(Color.ink)
+                    }
+                    Text(purpose.titleLine2accent)
+                        .font(BT.displayLarge).foregroundStyle(Color.sand)
+                }
+            }
+            .padding(.horizontal, Spacing.edge)
+
+            Text(purpose.subtitle)
+                .font(BT.callout).foregroundStyle(Color.inkMuted)
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, Spacing.md)
+
+            Spacer()
+
+            VStack(spacing: Spacing.sm) {
+                SignInWithAppleButton(.signIn, onRequest: { req in
+                    req.requestedScopes = [.fullName, .email]
+                }, onCompletion: { result in
+                    switch result {
+                    case .failure(let err):
+                        let nsErr = err as NSError
+                        if nsErr.code != ASAuthorizationError.canceled.rawValue {
+                            socialError = "Error con Apple."
+                        }
+                    case .success(let auth):
+                        guard let cred = auth.credential as? ASAuthorizationAppleIDCredential,
+                              let tokenData = cred.identityToken,
+                              let token = String(data: tokenData, encoding: .utf8) else {
+                            socialError = "No se pudo leer el token de Apple."
+                            return
+                        }
+                        var name: String? = nil
+                        if let fn = cred.fullName {
+                            let j = [fn.givenName, fn.familyName].compactMap { $0 }
+                                .joined(separator: " ").trimmingCharacters(in: .whitespaces)
+                            if !j.isEmpty { name = j }
+                        }
+                        handleSocialSignIn(credential: IdentityCredential(
+                            provider: .apple, identityToken: token,
+                            email: cred.email, fullName: name
+                        ))
+                    }
+                })
+                .signInWithAppleButtonStyle(.black)
+                .frame(height: 50).clipShape(Capsule())
+                .padding(.horizontal, Spacing.edge)
+                .opacity(socialLoading ? 0.5 : 1).disabled(socialLoading)
+
+                Button(action: { handleSocialSignIn(provider: GoogleProvider()) }) {
+                    ZStack {
+                        if socialLoading {
+                            ProgressView().progressViewStyle(.circular).tint(Color.ink)
+                        } else {
+                            HStack(spacing: 10) {
+                                Image("google_logo").resizable().scaledToFit()
+                                    .frame(width: 20, height: 20)
+                                Text("Continuar con Google")
+                                    .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .background(Color.surface).clipShape(Capsule())
+                    .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                }
+                .buttonStyle(.pressable)
+                .padding(.horizontal, Spacing.edge)
+                .opacity(socialLoading ? 0.7 : 1).disabled(socialLoading)
+
+                if let err = socialError {
+                    Text(err).font(BT.caption1).foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, Spacing.edge)
+                }
+
+                Text("Al continuar confirmas que tienes **18+ años** y aceptas nuestros **términos, privacidad** y **código de conducta**")
+                    .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.bottom, Spacing.lg)
+            }
+        }
+    }
+
+    // MARK: – Name step (solo cuando el backend indica needs_profile y no hay nombre del proveedor)
 
     private var nameStep: some View {
-        IdentityStepShell(
-            eyebrow:    "PASO 1 DE 3",
-            title:      "¿Cómo te\nllamamos?",
-            subtitle:   contextMessage,
-            cta:        "Continuar",
-            ctaEnabled: fullName.trimmingCharacters(in: .whitespaces).count >= 2,
-            content:    { IdentityNameField(fullName: $fullName) },
-            onCTA:      { Haptic.medium(); withAnimation { step = .phone } }
-        )
-    }
-
-    private var phoneStep: some View {
-        IdentityPhoneStep(
-            phone:      $phone,
-            eyebrow:    skipName ? "PASO 1 DE 2" : "PASO 2 DE 3",
-            onContinue: { withAnimation { step = .code } },
-            onBack:     skipName ? nil : { withAnimation { step = .name } }
-        )
-    }
-
-    private var codeStep: some View {
-        IdentityCodeStep(
-            phone:       phone,
-            fullName:    fullName,
-            eyebrow:     skipName ? "PASO 2 DE 2" : "PASO 3 DE 3",
-            onBack:      { withAnimation { step = .phone } },
-            onAuthenticated: {
-                authState.didAuthenticate()
-                dismiss()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    onAuthenticated()
+        IdentityNameStep(
+            name: $suggestedName,
+            onBack: { withAnimation { step = .social } },
+            onContinue: {
+                let trimmed = suggestedName.trimmingCharacters(in: .whitespaces)
+                Task {
+                    try? await AuthService.shared.completeProfileForSocialLogin(fullName: trimmed)
+                    await MainActor.run { finishAuth() }
                 }
             }
         )
     }
+
+    // MARK: – Social sign in handlers
+
+    private func handleSocialSignIn(credential: IdentityCredential) {
+        socialLoading = true; socialError = nil
+        Task {
+            do {
+                let result      = try await AuthService.shared._postToBackend(credential)
+                let destination = AuthCoordinator.shared.handle(result)
+                await MainActor.run {
+                    socialLoading = false
+                    switch destination {
+                    case .home:
+                        finishAuth()
+                    case .needsProfileCompletion:
+                        suggestedName = result.suggestedName ?? ""
+                        if suggestedName.trimmingCharacters(in: .whitespaces).count >= 2 {
+                            // Nombre ya disponible — completar directo
+                            Task {
+                                try? await AuthService.shared.completeProfileForSocialLogin(
+                                    fullName: suggestedName.trimmingCharacters(in: .whitespaces)
+                                )
+                                await MainActor.run { finishAuth() }
+                            }
+                        } else {
+                            withAnimation { step = .name }
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    socialLoading = false
+                    socialError = "No se pudo iniciar sesión."
+                }
+            }
+        }
+    }
+
+    private func handleSocialSignIn(provider: IdentityProvider) {
+        socialLoading = true; socialError = nil
+        Task {
+            do {
+                let result      = try await AuthService.shared.signIn(with: provider)
+                let destination = AuthCoordinator.shared.handle(result)
+                await MainActor.run {
+                    socialLoading = false
+                    switch destination {
+                    case .home:
+                        finishAuth()
+                    case .needsProfileCompletion:
+                        suggestedName = result.suggestedName ?? ""
+                        if suggestedName.trimmingCharacters(in: .whitespaces).count >= 2 {
+                            Task {
+                                try? await AuthService.shared.completeProfileForSocialLogin(
+                                    fullName: suggestedName.trimmingCharacters(in: .whitespaces)
+                                )
+                                await MainActor.run { finishAuth() }
+                            }
+                        } else {
+                            withAnimation { step = .name }
+                        }
+                    }
+                }
+            } catch {
+                let nsErr = error as NSError
+                await MainActor.run {
+                    socialLoading = false
+                    let cancelCodes = [ASAuthorizationError.canceled.rawValue, 1]
+                    if !cancelCodes.contains(nsErr.code) { socialError = "No se pudo iniciar sesión." }
+                }
+            }
+        }
+    }
+
+    private func finishAuth() {
+        authState.didAuthenticate()
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { onAuthenticated() }
+    }
 }
 
-// MARK: – Shell compartido
+// MARK: – Paso nombre (privado al sheet)
 
-private struct IdentityStepShell<Content: View>: View {
-    let eyebrow:    String
-    let title:      String
-    let subtitle:   String
-    let cta:        String
-    let ctaEnabled: Bool
-    let content:    Content
-    let onCTA:      () -> Void
-    let onBack:     (() -> Void)?
+private struct IdentityNameStep: View {
+    @Binding var name: String
+    var onBack:     () -> Void
+    var onContinue: () -> Void
 
-    init(
-        eyebrow:    String,
-        title:      String,
-        subtitle:   String,
-        cta:        String,
-        ctaEnabled: Bool,
-        @ViewBuilder content: () -> Content,
-        onCTA:  @escaping () -> Void,
-        onBack: (() -> Void)? = nil
-    ) {
-        self.eyebrow    = eyebrow
-        self.title      = title
-        self.subtitle   = subtitle
-        self.cta        = cta
-        self.ctaEnabled = ctaEnabled
-        self.content    = content()
-        self.onCTA      = onCTA
-        self.onBack     = onBack
-    }
+    @FocusState private var focused: Bool
+    @State private var loading = false
+
+    private var canContinue: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                if let back = onBack {
-                    Button(action: back) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 13, weight: .semibold))
-                            .frame(width: 34, height: 34)
-                            .background(Color.surface)
-                            .clipShape(Circle())
-                            .overlay(Circle().strokeBorder(Color.border, lineWidth: 1))
-                            .foregroundStyle(Color.ink)
-                    }
-                    .buttonStyle(.plain)
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Color.surface).clipShape(Circle())
+                        .overlay(Circle().strokeBorder(Color.border, lineWidth: 1))
+                        .foregroundStyle(Color.ink)
                 }
+                .buttonStyle(.plain)
                 Spacer()
-                Text(eyebrow)
-                    .font(BT.eyebrow)
-                    .tracking(1)
-                    .foregroundStyle(Color.inkMuted)
+                Text("PASO 1 DE 1")
+                    .font(BT.eyebrow).tracking(1).foregroundStyle(Color.inkMuted)
             }
             .padding(.horizontal, Spacing.edge)
 
-            Text(title)
-                .font(BT.title1)
-                .foregroundStyle(Color.ink)
-                .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.md)
+            Text("¿Cómo te\nllamamos?")
+                .font(BT.title1).foregroundStyle(Color.ink)
+                .padding(.horizontal, Spacing.edge).padding(.top, Spacing.md)
 
-            Text(subtitle)
-                .font(BT.callout)
-                .foregroundStyle(Color.inkMuted)
+            Text("Para conectarte con un buddy necesitamos saber quién eres.")
+                .font(BT.callout).foregroundStyle(Color.inkMuted)
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.sm)
-                .padding(.bottom, Spacing.lg)
+                .padding(.top, Spacing.sm).padding(.bottom, Spacing.lg)
 
-            content
-                .padding(.horizontal, Spacing.edge)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("NOMBRE")
+                    .font(BT.eyebrow).tracking(1).foregroundStyle(Color.inkMuted)
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "person").foregroundStyle(Color.inkMuted)
+                        .font(.system(size: 14))
+                    TextField("Sarah Whitman", text: $name)
+                        .font(BT.callout)
+                        .textContentType(.givenName)
+                        .autocapitalization(.words)
+                        .focused($focused)
+                }
+                .padding(.horizontal, Spacing.md).padding(.vertical, 14)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                .overlay(RoundedRectangle(cornerRadius: Radius.md)
+                    .strokeBorder(focused ? Color.sand : Color.border,
+                                  lineWidth: focused ? 1.5 : 1))
+            }
+            .padding(.horizontal, Spacing.edge)
 
             Spacer()
 
-            Button(action: onCTA) {
-                Text(cta)
-                    .font(BT.footnoteBold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 17)
-                    .background(ctaEnabled ? Color.ink : Color.inkMuted.opacity(0.25))
-                    .foregroundStyle(ctaEnabled ? Color.inkInverse : Color.inkMuted)
-                    .clipShape(Capsule())
+            Button(action: {
+                guard canContinue, !loading else { return }
+                Haptic.medium(); loading = true; onContinue()
+            }) {
+                ZStack {
+                    if loading {
+                        ProgressView().progressViewStyle(.circular).tint(Color.inkInverse)
+                    } else {
+                        Text("Continuar").font(BT.footnoteBold)
+                    }
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 17)
+                .background(canContinue ? Color.ink : Color.inkMuted.opacity(0.25))
+                .foregroundStyle(canContinue ? Color.inkInverse : Color.inkMuted)
+                .clipShape(Capsule())
             }
             .buttonStyle(.pressable)
-            .disabled(!ctaEnabled)
-            .padding(.horizontal, Spacing.edge)
-            .padding(.bottom, 36)
-        }
-    }
-}
-
-// MARK: – Campo nombre
-
-private struct IdentityNameField: View {
-    @Binding var fullName: String
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("NOMBRE")
-                .font(BT.eyebrow).tracking(1)
-                .foregroundStyle(Color.inkMuted)
-            HStack(spacing: Spacing.sm) {
-                Image(systemName: "person")
-                    .foregroundStyle(Color.inkMuted)
-                    .font(.system(size: 14))
-                TextField("Sarah Whitman", text: $fullName)
-                    .font(BT.callout)
-                    .textContentType(.givenName)
-                    .autocapitalization(.words)
-                    .focused($focused)
-            }
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, 14)
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(
-                focused ? Color.sand : Color.border,
-                lineWidth: focused ? 1.5 : 1
-            ))
+            .disabled(!canContinue || loading)
+            .padding(.horizontal, Spacing.edge).padding(.bottom, 36)
         }
         .onAppear { focused = true }
-    }
-}
-
-// MARK: – Paso teléfono
-
-private struct IdentityPhoneStep: View {
-    @Binding var phone: String
-    var eyebrow:    String
-    var onContinue: () -> Void
-    var onBack:     (() -> Void)?
-
-    @FocusState private var focused: Bool
-    @State private var country   = Country.defaultCountry
-    @State private var isSending = false
-    @State private var errorMsg:  String? = nil
-
-    private var canContinue: Bool { phone.filter(\.isNumber).count >= 5 }
-
-    var body: some View {
-        IdentityStepShell(
-            eyebrow:    eyebrow,
-            title:      "Tu número.",
-            subtitle:   "Te enviamos un código por SMS para verificar que eres tú.",
-            cta:        isSending ? "Enviando…" : "Envíame el código",
-            ctaEnabled: canContinue && !isSending,
-            content: {
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    PhoneCountryField(phone: $phone, country: $country, focused: $focused)
-
-                    if let err = errorMsg {
-                        Text(err).font(BT.caption1).foregroundStyle(.red)
-                    }
-                }
-            },
-            onCTA:  sendOTP,
-            onBack: onBack
-        )
-        .onAppear { focused = true }
-    }
-
-    private func sendOTP() {
-        guard canContinue else { return }
-        Haptic.medium()
-        isSending = true
-        errorMsg  = nil
-        let fullPhone = country.e164(rawInput: phone)
-        Task {
-            do {
-                try await AuthService.shared.sendOTP(phone: fullPhone)
-                await MainActor.run {
-                    phone     = fullPhone
-                    isSending = false
-                    onContinue()
-                }
-            } catch {
-                await MainActor.run {
-                    isSending = false
-                    errorMsg  = "No pudimos enviar el código. Verifica tu número."
-                }
-            }
-        }
-    }
-}
-
-// MARK: – Paso OTP
-
-private struct IdentityCodeStep: View {
-    let phone:    String
-    let fullName: String
-    var eyebrow:  String = "PASO 3 DE 3"
-    var onBack:   () -> Void
-    var onAuthenticated: () -> Void
-
-    @State private var code            = ""
-    @FocusState private var focused:   Bool
-    @State private var isVerifying     = false
-    @State private var errorMsg:       String? = nil
-    @State private var resendCooldown  = 0
-    @State private var cooldownTimer:  Timer?  = nil
-
-    private var canVerify: Bool { code.count == 6 }
-
-    var body: some View {
-        IdentityStepShell(
-            eyebrow:    eyebrow,
-            title:      "Código de\nverificación.",
-            subtitle:   "Acaba de llegarte un SMS al \(formattedPhone).",
-            cta:        isVerifying ? "Verificando…" : "Verificar",
-            ctaEnabled: canVerify && !isVerifying,
-            content: {
-                VStack(alignment: .leading, spacing: Spacing.md) {
-                    OTPInput(code: $code, isFocused: $focused)
-
-                    if let err = errorMsg {
-                        Text(err).font(BT.caption1).foregroundStyle(.red)
-                    }
-
-                    Button { resendOTP() } label: {
-                        if resendCooldown > 0 {
-                            Text("Reenviar en \(resendCooldown)s")
-                                .font(BT.callout).foregroundStyle(Color.inkMuted)
-                        } else {
-                            Text("Reenviar código")
-                                .font(BT.callout).foregroundStyle(Color.sand).underline()
-                        }
-                    }
-                    .disabled(resendCooldown > 0)
-                }
-            },
-            onCTA:  verify,
-            onBack: onBack
-        )
-        .onAppear { focused = true; startCooldown(30) }
-        .onDisappear { cooldownTimer?.invalidate() }
-        .onChange(of: code) { _, v in if v.count == 6 { verify() } }
-    }
-
-    private var formattedPhone: String {
-        let d = phone.replacingOccurrences(of: "+51", with: "").filter(\.isNumber)
-        guard d.count == 9 else { return phone }
-        return "+51 \(d.prefix(3)) \(d.dropFirst(3).prefix(3)) \(d.dropFirst(6))"
-    }
-
-    private func verify() {
-        guard canVerify, !isVerifying else { return }
-        Haptic.medium()
-        isVerifying = true
-        errorMsg    = nil
-        Task {
-            do {
-                let hasProfile = try await AuthService.shared.verifyOTP(phone: phone, code: code)
-                if !hasProfile {
-                    let name = fullName.trimmingCharacters(in: .whitespaces)
-                    if !name.isEmpty {
-                        try await AuthService.shared.completeProfileMinimal(fullName: name)
-                    }
-                }
-                await MainActor.run {
-                    isVerifying = false
-                    Haptic.success()
-                    onAuthenticated()
-                }
-            } catch {
-                await MainActor.run {
-                    isVerifying = false
-                    errorMsg = "Código incorrecto o expirado. Intenta de nuevo."
-                }
-            }
-        }
-    }
-
-    private func resendOTP() {
-        guard resendCooldown == 0 else { return }
-        Haptic.light()
-        Task { try? await AuthService.shared.sendOTP(phone: phone) }
-        startCooldown(60)
-    }
-
-    private func startCooldown(_ seconds: Int) {
-        cooldownTimer?.invalidate()
-        resendCooldown = seconds
-        cooldownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-            if resendCooldown > 0 { resendCooldown -= 1 } else { t.invalidate() }
-        }
     }
 }
