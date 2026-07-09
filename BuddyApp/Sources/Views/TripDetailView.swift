@@ -365,22 +365,43 @@ struct TripDetailView: View {
     // MARK: – Navegación externa (Google Maps / Waze / Apple Maps)
 
     private func openInGoogleMaps() {
-        guard let p = navigationTarget else { return }
+        guard let p = navigationTarget else {
+            print("🧭 [ComoLlegar] googleMaps — navigationTarget=nil, no se abre nada")
+            return
+        }
         let url = URL(string: "https://www.google.com/maps/dir/?api=1&destination=\(p.latitude),\(p.longitude)&travelmode=driving")!
-        UIApplication.shared.open(url)
+        print("🧭 [ComoLlegar] googleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
+        print("🧭 [ComoLlegar] googleMaps URL: \(url.absoluteString)")
+        UIApplication.shared.open(url) { ok in
+            print(ok ? "🧭 [ComoLlegar] googleMaps ✅ abierto" : "🧭 [ComoLlegar] googleMaps ❌ open falló")
+        }
     }
 
     private func openInWaze() {
-        guard let p = navigationTarget else { return }
+        guard let p = navigationTarget else {
+            print("🧭 [ComoLlegar] waze — navigationTarget=nil, no se abre nada")
+            return
+        }
         let url = URL(string: "https://waze.com/ul?ll=\(p.latitude),\(p.longitude)&navigate=yes")!
-        UIApplication.shared.open(url)
+        print("🧭 [ComoLlegar] waze → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
+        print("🧭 [ComoLlegar] waze URL: \(url.absoluteString)")
+        UIApplication.shared.open(url) { ok in
+            print(ok ? "🧭 [ComoLlegar] waze ✅ abierto" : "🧭 [ComoLlegar] waze ❌ open falló")
+        }
     }
 
     private func openInAppleMaps() {
-        guard let p = navigationTarget else { return }
+        guard let p = navigationTarget else {
+            print("🧭 [ComoLlegar] appleMaps — navigationTarget=nil, no se abre nada")
+            return
+        }
         let name = p.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? p.name
         let url = URL(string: "https://maps.apple.com/?daddr=\(p.latitude),\(p.longitude)&q=\(name)")!
-        UIApplication.shared.open(url)
+        print("🧭 [ComoLlegar] appleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
+        print("🧭 [ComoLlegar] appleMaps URL: \(url.absoluteString)")
+        UIApplication.shared.open(url) { ok in
+            print(ok ? "🧭 [ComoLlegar] appleMaps ✅ abierto" : "🧭 [ComoLlegar] appleMaps ❌ open falló")
+        }
     }
 
     // MARK: – Bottom panel
