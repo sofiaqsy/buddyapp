@@ -13,6 +13,8 @@ struct TripDetailView: View {
 
     @State private var camera: MapCameraPosition
     @State private var selectedPlace: Place? = nil
+    /// Lugar para el que se muestra el diálogo "Cómo llegar" (Google Maps / Waze / Apple Maps)
+    @State private var navigationTarget: Place? = nil
     @State private var showChat = false
     @State private var showContactar = false
     @State private var showQRScanner = false
@@ -343,6 +345,42 @@ struct TripDetailView: View {
         } message: {
             Text("Esta acción no se puede deshacer.")
         }
+        // Cómo llegar — universal links: abren la app nativa si está instalada,
+        // o el navegador si no. Sin necesidad de LSApplicationQueriesSchemes.
+        .confirmationDialog(
+            "Cómo llegar a \(navigationTarget?.name ?? "")",
+            isPresented: Binding(
+                get: { navigationTarget != nil },
+                set: { if !$0 { navigationTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Google Maps") { openInGoogleMaps() }
+            Button("Waze") { openInWaze() }
+            Button("Apple Maps") { openInAppleMaps() }
+            Button("Cancelar", role: .cancel) { navigationTarget = nil }
+        }
+    }
+
+    // MARK: – Navegación externa (Google Maps / Waze / Apple Maps)
+
+    private func openInGoogleMaps() {
+        guard let p = navigationTarget else { return }
+        let url = URL(string: "https://www.google.com/maps/dir/?api=1&destination=\(p.latitude),\(p.longitude)&travelmode=driving")!
+        UIApplication.shared.open(url)
+    }
+
+    private func openInWaze() {
+        guard let p = navigationTarget else { return }
+        let url = URL(string: "https://waze.com/ul?ll=\(p.latitude),\(p.longitude)&navigate=yes")!
+        UIApplication.shared.open(url)
+    }
+
+    private func openInAppleMaps() {
+        guard let p = navigationTarget else { return }
+        let name = p.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? p.name
+        let url = URL(string: "https://maps.apple.com/?daddr=\(p.latitude),\(p.longitude)&q=\(name)")!
+        UIApplication.shared.open(url)
     }
 
     // MARK: – Bottom panel
@@ -549,6 +587,19 @@ struct TripDetailView: View {
                             .symbolEffect(.bounce, value: isFav(place))
                     }
                     .buttonStyle(.plain)
+                    // Cómo llegar — abre el lugar en Google Maps / Waze / Apple Maps
+                    Button {
+                        Haptic.light()
+                        navigationTarget = place
+                    } label: {
+                        Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(Color.secondary.opacity(0.12)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cómo llegar a \(place.name)")
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil }
                     } label: {
