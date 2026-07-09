@@ -463,9 +463,12 @@ struct BuddyProfileView: View {
         let placeIds = zones.map(\.id)
         print("🤝 [BuddyProfileView] saveZones coverage=\(selectedCoverage?.city ?? "nil") placeIds=\(placeIds)")
         do {
+            // SIEMPRE enviar place_ids, incluso vacío: [] significa "sin zonas"
+            // y el backend limpia la cobertura completa. Mandar nil al vaciar
+            // dejaba la última zona pegada (el PATCH llegaba sin el campo).
             let updated = try await APIClient.shared.updateBuddyMe(
                 coverage: selectedCoverage,
-                placeIds: placeIds.isEmpty ? nil : placeIds
+                placeIds: placeIds
             )
             onUpdated(updated)
         } catch {
