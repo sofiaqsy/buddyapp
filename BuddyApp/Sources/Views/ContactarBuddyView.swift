@@ -641,7 +641,11 @@ struct CategoryPickerView: View {
 
             Spacer().frame(height: Spacing.md)
 
-            // Primary CTA — dark brown pill with icon + arrow
+            // CTA pill — SOLO cuando hay un buddy asignado ("Sigue hablando
+            // con X"). Las necesidades ya disparan la búsqueda directamente,
+            // así que el botón genérico de buscar sobra; sin buddy activo se
+            // muestra la línea de disponibilidad en su lugar.
+            if activeBuddyName != nil {
             Button {
                 guard canRequest else { return }
                 Haptic.medium()
@@ -704,6 +708,22 @@ struct CategoryPickerView: View {
             .accessibilityHint(canRequest ? availabilityText : "Selecciona una categoría primero")
             .padding(.horizontal, Spacing.edge)
             .padding(.bottom, Spacing.sm)
+            } else {
+                // Sin buddy activo: línea de disponibilidad de la comunidad
+                // (la señal que antes vivía dentro del botón).
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(noBuddies ? Color.sand : Color.onlineGreen)
+                        .frame(width: 6, height: 6)
+                    Text(availabilityText)
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                .frame(maxWidth: .infinity)
+                .redacted(reason: isSkeleton ? .placeholder : [])
+                .padding(.horizontal, Spacing.edge)
+                .padding(.bottom, Spacing.sm)
+            }
         }
         .onAppear {
             if let key = preselectedCategory, selected == nil {
