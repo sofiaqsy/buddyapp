@@ -590,11 +590,17 @@ struct CategoryPickerView: View {
                     let isSelected = selected?.id == cat.id
                     let subtitle   = subtitles[cat.apiKey] ?? ""
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            selected = isSelected ? nil : cat
+                        // Tocar la necesidad DISPARA la búsqueda de inmediato —
+                        // sin paso intermedio de confirmar en el CTA. La celda
+                        // queda marcada como feedback visual mientras arranca.
+                        guard !isLoading, !isSkeleton else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) { selected = cat }
+                        Haptic.medium()
+                        let key = cat.apiKey
+                        Task {
+                            await onRequest(key, nil)
+                            await MainActor.run { selected = nil }
                         }
-                        Haptic.light()
-
                     } label: {
                         HStack(alignment: .top, spacing: 12) {
                             ZStack {
