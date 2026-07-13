@@ -579,6 +579,21 @@ struct CategoryPickerView: View {
                         return .systemAction(url)
                     })
                     .redacted(reason: isSkeleton ? .placeholder : [])
+
+                // Disponibilidad de la comunidad — junto al contexto del lugar,
+                // antes de que el usuario elija su necesidad.
+                if activeBuddyName == nil {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(noBuddies ? Color.sand : Color.onlineGreen)
+                            .frame(width: 6, height: 6)
+                        Text(availabilityText)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    .padding(.top, 2)
+                    .redacted(reason: isSkeleton ? .placeholder : [])
+                }
             }
             .padding(.horizontal, Spacing.edge)
             .padding(.top, Spacing.md)
@@ -708,21 +723,6 @@ struct CategoryPickerView: View {
             .accessibilityHint(canRequest ? availabilityText : "Selecciona una categoría primero")
             .padding(.horizontal, Spacing.edge)
             .padding(.bottom, Spacing.sm)
-            } else {
-                // Sin buddy activo: línea de disponibilidad de la comunidad
-                // (la señal que antes vivía dentro del botón).
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(noBuddies ? Color.sand : Color.onlineGreen)
-                        .frame(width: 6, height: 6)
-                    Text(availabilityText)
-                        .font(BT.caption1)
-                        .foregroundStyle(Color.inkMuted)
-                }
-                .frame(maxWidth: .infinity)
-                .redacted(reason: isSkeleton ? .placeholder : [])
-                .padding(.horizontal, Spacing.edge)
-                .padding(.bottom, Spacing.sm)
             }
         }
         .onAppear {
