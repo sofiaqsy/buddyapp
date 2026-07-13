@@ -93,7 +93,7 @@ struct ContactarBuddyView: View {
                 switch phase {
                 case .loading:        loadingView
                 case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, destinationName: resolvedDestinationName, onRequest: handleRequest)
-                case .searching:      SearchingView(buddyCount: buddyCount, isExpandingSearch: isExpandingSearch, onCancel: cancelSearch)
+                case .searching:      SearchingView(buddyCount: buddyCount, isExpandingSearch: isExpandingSearch, category: chosenCategory, onCancel: cancelSearch)
                 case .matched:        chatView
                 case .error(let m):   errorView(m)
                 }
@@ -723,8 +723,20 @@ struct CategoryPickerView: View {
 private struct SearchingView: View {
     let buddyCount: Int
     var isExpandingSearch: Bool = false
+    /// apiKey de la necesidad elegida — se muestra como chip para que el
+    /// usuario vea con qué está buscando ayuda (nil = "general", sin chip).
+    var category: String? = nil
     let onCancel: () -> Void
     @State private var appear = false
+
+    private static let categoryMeta: [String: (icon: String, label: String)] = [
+        "transport":     ("map",            "Cómo llegar"),
+        "food":          ("cup.and.saucer", "Comer"),
+        "translation":   ("bubble.left",    "Traducir"),
+        "activities":    ("sparkles",       "Qué hacer"),
+        "accommodation": ("bed.double",     "Alojamiento"),
+        "emergency":     ("shield",         "Seguridad"),
+    ]
 
     private var statusDot: Color { buddyCount > 0 ? Color.onlineGreen : Color.sand }
 
@@ -761,6 +773,23 @@ private struct SearchingView: View {
                 .padding(.top, Spacing.sm)
                 .padding(.horizontal, Spacing.edge)
                 .animation(.easeInOut(duration: 0.5), value: isExpandingSearch)
+
+            // Chip de la necesidad elegida — el usuario ve con qué busca ayuda
+            if let category, let meta = Self.categoryMeta[category] {
+                HStack(spacing: 6) {
+                    Image(systemName: meta.icon)
+                        .font(.system(size: 13, weight: .medium))
+                    Text(meta.label)
+                        .font(BT.footnoteBold)
+                }
+                .foregroundStyle(Color.brand)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.brand.opacity(0.10), in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.brand.opacity(0.25), lineWidth: 1))
+                .padding(.top, Spacing.md)
+                .accessibilityLabel("Buscando ayuda con \(meta.label)")
+            }
 
             Spacer().frame(height: 52)
 
