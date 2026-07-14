@@ -603,6 +603,12 @@ struct InicioView: View {
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.md)
 
+                // Comunidad viva — ayudas recién completadas en tu destino
+                if !recentHelp.isEmpty {
+                    communityLiveSection
+                        .padding(.top, Spacing.xl)
+                }
+
                 communitySection
                     .padding(.top, Spacing.xl)
             }
@@ -740,6 +746,9 @@ struct InicioView: View {
             if let resolution = try? await APIClient.shared.resolveLocation(lat: lat, lng: lng) {
                 print("🏠 [refreshHomeCommunityContext] ✅ resolved: \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
                 await MainActor.run { resolvedLocation = resolution }
+                // Con el destino resuelto ya se puede cargar "Comunidad viva"
+                // aunque no exista trip (loadRecentHelp usa resolvedLocation).
+                await loadRecentHelp()
 
                 // Cargar contexto de la comunidad de este destino
                 if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
@@ -1099,10 +1108,10 @@ struct InicioView: View {
     /// - Parameter force: ignora el throttle (para pull-to-refresh / eventos reales)
     private func loadRecentHelp(force: Bool = false) async {
         let journey = activeJourney ?? pendingJourney
-        guard let journey else {
-            recentHelp = []; recentHelpDestId = nil; return
-        }
-        guard let destId = journey.destination?.id ?? journey.destinationId else {
+        // Sin trip: usar el destino resuelto por GPS — la sección "Comunidad
+        // viva" muestra prueba social también antes de crear el primer trip.
+        guard let destId = journey?.destination?.id ?? journey?.destinationId
+                ?? resolvedLocation?.destinationId else {
             recentHelp = []; recentHelpDestId = nil; return
         }
 
@@ -1155,6 +1164,55 @@ struct InicioView: View {
                     recentHelpByDest[id] = r
                 }
             }
+        }
+    }
+
+    // MARK: – Comunidad viva (prueba social encima de HISTORIAS DE VIAJEROS)
+    // "Keyla ayudó a un viajero · hace 2h" — las últimas ayudas completadas
+    // en el destino actual (con trip o resuelto por GPS). Máx. 3 filas.
+    private var communityLiveSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text("COMUNIDAD VIVA")
+                .font(BT.eyebrow).tracking(1.5)
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, Spacing.edge)
+
+            VStack(spacing: 0) {
+                ForEach(Array(recentHelp.prefix(3).enumerated()), id: \.element.id) { idx, help in
+                    if idx > 0 { Divider().padding(.leading, 56) }
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(Color.sandLight)
+                            .frame(width: 32, height: 32)
+                            .overlay {
+                                if let urlStr = help.buddy?.avatarUrl, let url = URL(string: urlStr) {
+                                    AsyncImage(url: url) { img in
+                                        img.resizable().scaledToFill()
+                                    } placeholder: { Color.sandLight }
+                                    .frame(width: 32, height: 32)
+                                    .clipShape(Circle())
+                                } else {
+                                    Image(systemName: "hands.sparkles.fill")
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(Color.sand)
+                                }
+                            }
+                        (Text(help.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
+                            .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                         + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
+                         + Text(help.completedAt != nil ? " · \(timeAgo(help.completedAt))" : "")
+                            .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7)))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, 10)
+                }
+            }
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+            .padding(.horizontal, Spacing.edge)
         }
     }
 
