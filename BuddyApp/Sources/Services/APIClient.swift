@@ -771,6 +771,14 @@ final class APIClient {
     }
 
     /// Ayudas recién completadas en un destino (comunidad viva)
+    /// Pulso global de la red — fallback de "Comunidad viva" cuando el
+    /// destino del usuario no tiene actividad propia.
+    func fetchCommunityPulse() async throws -> [APIPulseItem] {
+        let resp: APIPulseResponse = try await request(path: "/community/pulse")
+        print("🌐 [APIClient] community/pulse → \(resp.items.count) items")
+        return resp.items
+    }
+
     func fetchRecentHelp(destinationId: String) async throws -> [APIRecentHelp] {
         let path = "/matching/recent-help/\(destinationId)"
         print("🌐 [APIClient] GET \(baseURL)\(path)")

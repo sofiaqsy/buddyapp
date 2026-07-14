@@ -313,6 +313,21 @@ struct APIRecentHelp: Decodable, Identifiable {
     let buddy: APIUserRef?
 }
 
+// Pulso global de la red — GET /community/pulse
+// type: "traveling" (viajeros con trip activo ahora) | "helped" (ayuda
+// completada) | "ready" (buddies disponibles). El cliente arma la frase.
+struct APIPulseItem: Decodable, Identifiable {
+    let type: String
+    let city: String
+    let count: Int?
+    let at: Date?
+    var id: String { "\(type)-\(city)-\(at?.timeIntervalSince1970 ?? 0)" }
+}
+
+struct APIPulseResponse: Decodable {
+    let items: [APIPulseItem]
+}
+
 struct APIUserRef: Decodable {
     let id: String?
     let fullName: String?

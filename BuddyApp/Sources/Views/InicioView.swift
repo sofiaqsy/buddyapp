@@ -49,6 +49,7 @@ struct InicioView: View {
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
+    @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
     @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
@@ -603,8 +604,9 @@ struct InicioView: View {
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.md)
 
-                // Comunidad viva — ayudas recién completadas en tu destino
-                if !recentHelp.isEmpty {
+                // Comunidad viva — actividad local o, en su defecto, el pulso
+                // global de la red. La sección vive siempre que haya algo real.
+                if !recentHelp.isEmpty || !communityPulse.isEmpty {
                     communityLiveSection
                         .padding(.top, Spacing.xl)
                 }
@@ -749,6 +751,7 @@ struct InicioView: View {
                 // Con el destino resuelto ya se puede cargar "Comunidad viva"
                 // aunque no exista trip (loadRecentHelp usa resolvedLocation).
                 await loadRecentHelp()
+                await loadCommunityPulseIfNeeded()
 
                 // Cargar contexto de la comunidad de este destino
                 if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
@@ -851,6 +854,7 @@ struct InicioView: View {
         }
         await loadRecentHelp()
         await loadRecentHelpPerTrip()
+        await loadCommunityPulseIfNeeded()
         await refreshHomeCommunityContext()
         // Ruta en background — activos y planning la necesitan para el mapa
         if let active, !routeStore.isReady {
@@ -1168,8 +1172,10 @@ struct InicioView: View {
     }
 
     // MARK: – Comunidad viva (prueba social encima de HISTORIAS DE VIAJEROS)
-    // "Keyla ayudó a un viajero · hace 2h" — las últimas ayudas completadas
-    // en el destino actual (con trip o resuelto por GPS). Máx. 3 filas.
+    // Con actividad local: "Keyla ayudó a un viajero · hace 2h".
+    // Sin ella, el pulso global de la red: "Un viajero está en Villa Rica",
+    // "Villa Rica · un buddy ayudó a un viajero · hace 2h",
+    // "Villa Rica · 3 buddies listos para ayudar". Máx. 3 filas.
     private var communityLiveSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             Text("COMUNIDAD VIVA")
@@ -1178,41 +1184,93 @@ struct InicioView: View {
                 .padding(.horizontal, Spacing.edge)
 
             VStack(spacing: 0) {
-                ForEach(Array(recentHelp.prefix(3).enumerated()), id: \.element.id) { idx, help in
-                    if idx > 0 { Divider().padding(.leading, 56) }
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(Color.sandLight)
-                            .frame(width: 32, height: 32)
-                            .overlay {
-                                if let urlStr = help.buddy?.avatarUrl, let url = URL(string: urlStr) {
-                                    AsyncImage(url: url) { img in
-                                        img.resizable().scaledToFill()
-                                    } placeholder: { Color.sandLight }
-                                    .frame(width: 32, height: 32)
-                                    .clipShape(Circle())
-                                } else {
-                                    Image(systemName: "person.fill")
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Color.sand)
-                                }
-                            }
-                        (Text(help.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
-                            .font(BT.footnoteBold).foregroundStyle(Color.ink)
-                         + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
-                         + Text(help.completedAt != nil ? " · \(timeAgo(help.completedAt))" : "")
-                            .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7)))
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
+                if !recentHelp.isEmpty {
+                    ForEach(Array(recentHelp.prefix(3).enumerated()), id: \.element.id) { idx, help in
+                        if idx > 0 { Divider().padding(.leading, 56) }
+                        communityRow(
+                            avatarUrl: help.buddy?.avatarUrl,
+                            icon: "person.fill",
+                            text: Text(help.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
+                                .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                             + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
+                             + Text(help.completedAt != nil ? " · \(timeAgo(help.completedAt))" : "")
+                                .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7))
+                        )
                     }
-                    .padding(.horizontal, Spacing.md)
-                    .padding(.vertical, 10)
+                } else {
+                    ForEach(Array(communityPulse.prefix(3).enumerated()), id: \.element.id) { idx, item in
+                        if idx > 0 { Divider().padding(.leading, 56) }
+                        communityRow(avatarUrl: nil, icon: pulseIcon(item.type), text: pulseText(item))
+                    }
                 }
             }
             .background(Color.surface)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
             .padding(.horizontal, Spacing.edge)
+        }
+    }
+
+    @ViewBuilder
+    private func communityRow(avatarUrl: String?, icon: String, text: Text) -> some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(Color.sandLight)
+                .frame(width: 32, height: 32)
+                .overlay {
+                    if let urlStr = avatarUrl, let url = URL(string: urlStr) {
+                        AsyncImage(url: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: { Color.sandLight }
+                        .frame(width: 32, height: 32)
+                        .clipShape(Circle())
+                    } else {
+                        Image(systemName: icon)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color.sand)
+                    }
+                }
+            text.lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, 10)
+    }
+
+    private func pulseIcon(_ type: String) -> String {
+        switch type {
+        case "traveling": return "figure.walk"
+        case "ready":     return "person.2.fill"
+        default:          return "person.fill"
+        }
+    }
+
+    private func pulseText(_ item: APIPulseItem) -> Text {
+        switch item.type {
+        case "traveling":
+            let n = item.count ?? 1
+            let prefix = n == 1 ? "Un viajero está en " : "\(n) viajeros están en "
+            return Text(prefix).font(BT.footnote).foregroundStyle(Color.inkMuted)
+                + Text(item.city).font(BT.footnoteBold).foregroundStyle(Color.ink)
+        case "ready":
+            let n = item.count ?? 1
+            return Text(item.city).font(BT.footnoteBold).foregroundStyle(Color.ink)
+                + Text(n == 1 ? " · 1 buddy listo para ayudar" : " · \(n) buddies listos para ayudar")
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
+        default: // helped
+            return Text(item.city).font(BT.footnoteBold).foregroundStyle(Color.ink)
+                + Text(" · un buddy ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
+                + Text(item.at != nil ? " · \(timeAgo(item.at))" : "")
+                    .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7))
+        }
+    }
+
+    /// Carga el pulso global solo cuando el destino actual no tiene actividad
+    /// propia — la sección nunca queda vacía mientras la red esté viva.
+    private func loadCommunityPulseIfNeeded() async {
+        guard recentHelp.isEmpty else { return }
+        if let pulse = try? await APIClient.shared.fetchCommunityPulse() {
+            await MainActor.run { communityPulse = pulse }
         }
     }
 
