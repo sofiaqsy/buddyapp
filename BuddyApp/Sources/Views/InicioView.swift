@@ -1192,8 +1192,8 @@ struct InicioView: View {
                                     .frame(width: 32, height: 32)
                                     .clipShape(Circle())
                                 } else {
-                                    Image(systemName: "hands.sparkles.fill")
-                                        .font(.system(size: 13))
+                                    Image(systemName: "person.fill")
+                                        .font(.system(size: 14))
                                         .foregroundStyle(Color.sand)
                                 }
                             }
