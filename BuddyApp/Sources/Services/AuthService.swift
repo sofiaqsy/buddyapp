@@ -144,8 +144,29 @@ final class AuthService {
             }
         }
 
-        // Apple / Google path: valida el traveler JWT localmente (sin llamada de red)
-        return socialSessionValid()
+        // Apple / Google path: si el traveler JWT sigue vivo, listo.
+        if socialSessionValid() { return true }
+
+        // JWT vencido (vive 15 min) pero la identidad persiste: renovar en
+        // silencio con el secret device-bound del Keychain — la sesión social
+        // debe sobrevivir indefinidamente, igual que un guest.
+        if TravelerService.shared.isVerified, let tid = TravelerService.shared.travelerId {
+            do {
+                _ = try await TravelerService.shared.forceRefresh(travelerId: tid)
+                print("🔄 [validateSession] social JWT renovado en silencio")
+                return true
+            } catch {
+                // Red caída ≠ sesión inválida: solo cerrar sesión si el servidor
+                // la rechazó explícitamente (sessionExpired limpia el estado).
+                if case TravelerError.sessionExpired = error {
+                    print("🔒 [validateSession] refresh social rechazado — sesión expirada")
+                    return false
+                }
+                print("⚠️ [validateSession] refresh social falló por red — mantener sesión")
+                return true
+            }
+        }
+        return false
     }
 
     private func pingMe(token: String) async throws -> Int {
@@ -312,10 +333,14 @@ final class AuthService {
         UserDefaults.standard.string(forKey: "buddy.userId")
     }
 
-    /// True si hay sesión Supabase activa (OTP) O traveler JWT verificado y no expirado (Apple/Google).
+    /// True si hay sesión Supabase activa (OTP) O identidad social verificada persistida.
+    /// OJO: NO depende de la expiración del traveler JWT (vive 15 min) — la validez
+    /// real la decide validateSession(), que renueva en silencio con el secret
+    /// device-bound. Si dependiera del JWT, cualquier relanzamiento >15 min después
+    /// del último uso mandaría al usuario al login (el bug de "la sesión murió").
     var isLoggedIn: Bool {
         if accessToken != nil { return true }
-        return socialSessionValid()
+        return TravelerService.shared.isVerified && TravelerService.shared.travelerId != nil
     }
 
     // Decodifica el traveler JWT localmente y verifica que no haya expirado.

@@ -16,6 +16,8 @@ struct YoView: View {
     @State private var tripsHasMore: Bool = false
     @State private var isLoadingMoreTrips: Bool = false
     @State private var selectedStory: APIJourney? = nil   // detalle de publicación
+    /// Long-press en un trip del grid → confirmar eliminación de la publicación.
+    @State private var deletePublicationTarget: APIJourney? = nil
     @State private var isLoading = true
     @State private var editingBio = false
     @State private var bioText = ""
@@ -135,6 +137,22 @@ struct YoView: View {
             // Detalle de la publicación — mismo visor que en Home
             .sheet(item: $selectedStory) { journey in
                 StoryViewerSheet(journey: journey)
+            }
+            .confirmationDialog(
+                "¿Eliminar esta publicación?",
+                isPresented: Binding(
+                    get: { deletePublicationTarget != nil },
+                    set: { if !$0 { deletePublicationTarget = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Eliminar publicación", role: .destructive) {
+                    if let t = deletePublicationTarget { deletePublication(t) }
+                    deletePublicationTarget = nil
+                }
+                Button("Cancelar", role: .cancel) { deletePublicationTarget = nil }
+            } message: {
+                Text("Se quitará de tu perfil y del feed de la comunidad. No se puede deshacer.")
             }
             .confirmationDialog("¿Cerrar sesión?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
                 Button("Cerrar sesión", role: .destructive) {
@@ -510,6 +528,14 @@ struct YoView: View {
                             .onTapGesture {
                                 Haptic.light()
                                 selectedStory = journey
+                            }
+                            // Long-press del dueño → eliminar la publicación
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    deletePublicationTarget = journey
+                                } label: {
+                                    Label("Eliminar publicación", systemImage: "trash")
+                                }
                             }
                     }
                     // Celdas fantasma — completan la fila e invitan al próximo trip
@@ -887,6 +913,18 @@ struct YoView: View {
         } catch {
             print("🖼️ [uploadAvatar] ❌ \(error)")
             await MainActor.run { isUploadingAvatar = false; avatarUploadFailed = true }
+        }
+    }
+
+    /// Elimina una publicación del perfil — optimista: se quita del grid al
+    /// instante y el backend la despublica (cancelled + is_public=false),
+    /// con lo que también desaparece del feed de la comunidad.
+    private func deletePublication(_ journey: APIJourney) {
+        journeys.removeAll { $0.id == journey.id }
+        Haptic.success()
+        Task {
+            do { try await APIClient.shared.cancelJourney(journeyId: journey.id) }
+            catch { print("❌ [deletePublication] \(error)") }
         }
     }
 

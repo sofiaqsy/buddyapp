@@ -811,7 +811,9 @@ struct TripFeedCard: View {
         let (label, color): (String, Color) = {
             switch tripStatus {
             case "active":
-                let days = journey.arrivalAt.map {
+                // Sin arrival_at (trips creados por matching/pioneer) el badge
+                // caía siempre en "Desde hoy" — created_at como respaldo real.
+                let days = (journey.arrivalAt ?? journey.createdAt).map {
                     Calendar.current.dateComponents([.day],
                         from: Calendar.current.startOfDay(for: $0),
                         to:   Calendar.current.startOfDay(for: Date())).day ?? 0

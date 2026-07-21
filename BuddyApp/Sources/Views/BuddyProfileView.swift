@@ -518,6 +518,7 @@ struct PlaceZonePickerSheet: View {
     let onCoverageSelected: (BuddyCoverageInput) -> Void
     let onPlaceSelected:    (ZoneEntry) -> Void
 
+    @EnvironmentObject private var locationService: LocationService
     @Environment(\.dismiss) private var dismiss
     @State private var query           = ""
     @State private var results:        [APIPlaceResult] = []
@@ -525,6 +526,11 @@ struct PlaceZonePickerSheet: View {
     @State private var isSearching     = false
     @State private var isResolving     = false
     @State private var searchTask:     Task<Void, Never>? = nil
+
+    // Sugerencia por GPS — el lugar donde el buddy está parado ahora mismo,
+    // para no obligarlo a escribir su propia ciudad al configurar cobertura.
+    @State private var suggestion:          APIPlaceResult? = nil
+    @State private var isLoadingSuggestion  = false
 
     var body: some View {
         NavigationStack {
@@ -553,16 +559,37 @@ struct PlaceZonePickerSheet: View {
 
                 Divider()
 
-                if isSearching && results.isEmpty {
+                if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    // Sin búsqueda activa: ofrecer el lugar actual como atajo.
+                    VStack(spacing: 0) {
+                        if let suggestion {
+                            Text("SUGERIDO CERCA DE TI")
+                                .font(BT.eyebrow).tracking(1.2).foregroundStyle(Color.inkMuted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, Spacing.edge).padding(.top, Spacing.md).padding(.bottom, Spacing.xs)
+                            suggestionRow(suggestion)
+                            Spacer()
+                        } else if isLoadingSuggestion {
+                            Spacer(); ProgressView().tint(Color.inkMuted); Spacer()
+                        } else {
+                            Spacer()
+                            VStack(spacing: Spacing.sm) {
+                                Image(systemName: "location.slash")
+                                    .font(.system(size: 30, weight: .light)).foregroundStyle(Color.inkMuted)
+                                Text("Escribe para buscar")
+                                    .font(BT.callout).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
+                            }
+                            Spacer()
+                        }
+                    }
+                } else if isSearching && results.isEmpty {
                     Spacer(); ProgressView().tint(Color.inkMuted); Spacer()
                 } else if results.isEmpty {
                     Spacer()
                     VStack(spacing: Spacing.sm) {
                         Image(systemName: "location.slash")
                             .font(.system(size: 30, weight: .light)).foregroundStyle(Color.inkMuted)
-                        Text(query.trimmingCharacters(in: .whitespaces).count < 2
-                             ? "Escribe para buscar"
-                             : "Sin resultados para \"\(query)\"")
+                        Text("Sin resultados para \"\(query)\"")
                             .font(BT.callout).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
                     }
                     Spacer()
@@ -601,6 +628,54 @@ struct PlaceZonePickerSheet: View {
             }
         }
         .onChange(of: query) { _, _ in triggerSearch(query: query) }
+        .task { await loadSuggestion() }
+    }
+
+    // Misma fila visual que un resultado de búsqueda, pero con ícono de
+    // ubicación actual y subtítulo fijo (en vez de país/tipo de lugar).
+    private func suggestionRow(_ place: APIPlaceResult) -> some View {
+        Button {
+            guard !isResolving else { return }
+            Task { await pick(place) }
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle().fill(Color.teal.opacity(0.1)).frame(width: 36, height: 36)
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 15)).foregroundStyle(Color.teal)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(place.title).font(BT.callout).foregroundStyle(Color.ink)
+                    Text("Tu ubicación actual").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                if isResolving { ProgressView().controlSize(.small) }
+            }
+            .padding(.vertical, 6).padding(.horizontal, Spacing.edge).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Resuelve el GPS del buddy a un lugar sugerido — SIEMPRE vía /places/resolve
+    /// (el mismo flujo pioneer que ensureActiveTripForGPS), nunca /location/resolve:
+    /// un destino curado (source "destination") solo declara cobertura de ciudad
+    /// en el servidor sin aparecer como zona visible, así que la sugerencia
+    /// "no hacía nada" al tocarla. /places/resolve siempre da un lugar real
+    /// (auto-creado si hace falta) que SÍ se agrega como card visible.
+    private func loadSuggestion() async {
+        guard let loc = locationService.userLocation else { return }
+        await MainActor.run { isLoadingSuggestion = true }
+        defer { Task { await MainActor.run { isLoadingSuggestion = false } } }
+
+        let lat = loc.coordinate.latitude, lng = loc.coordinate.longitude
+        if let place = try? await APIClient.shared.resolvePlace(lat: lat, lng: lng) {
+            await MainActor.run {
+                suggestion = APIPlaceResult(
+                    id: place.id, source: "place",
+                    title: place.name, subtitle: nil, lat: lat, lng: lng
+                )
+            }
+        }
     }
 
     private func triggerSearch(query: String) {

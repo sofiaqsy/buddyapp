@@ -38,6 +38,8 @@ struct InicioView: View {
     @State private var currentTripPage = 0
     @State private var activeMatch: APIMatch? = nil
     @State private var pioneerConfirmation: String? = nil   // banner tras auto-crear request en lugar sin buddies
+    /// Chat abierto desde la card "Tu buddy asignado" (paridad con Android).
+    @State private var homeChatTarget: ChatStore.ConnectionItem? = nil
     @State private var showPublishSuccessToast = false
     @State private var isLoadingData = true
     @State private var loadDataFailed = false
@@ -54,6 +56,10 @@ struct InicioView: View {
     @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
     @State private var recentHelpLoadedAt: Date? = nil    // throttle de refetch
+    @State private var lastRefreshTripStateAt: Date? = nil // throttle scenePhase refresh (30s)
+    @State private var lastCommunityContextLocation: CLLocation? = nil // gate GPS → resolve
+    @State private var lastCommunityContextAt: Date? = nil
+    @State private var communityPulseLoadedAt: Date? = nil
     @State private var pendingNavToDetail = false
     @State private var hasLoaded = false
     @State private var showActivateNextTripAlert = false
@@ -196,9 +202,26 @@ struct InicioView: View {
                 ContactarBuddyView(journey: journey, preselectedCategory: "transport")
             }
         }
+        // Chat desde la card "Tu buddy asignado" — mismo patrón que Conexiones
+        .sheet(item: $homeChatTarget, onDismiss: {
+            Task { await chatStore.load(); await refreshTripState() }
+        }) { item in
+            if let journey = SyntheticJourney.make(for: item.match) {
+                BuddyChatView(match: item.match, journey: journey).equatable()
+            }
+        }
         // GPS cambió y el destino detectado difiere del trip activo → prompt ligero.
         // NUNCA se crea un trip en silencio: solo si el usuario confirma.
-        .onChange(of: locationService.userLocation) { _, _ in
+        .onChange(of: locationService.userLocation) { _, loc in
+            // CLLocation es clase: cada fix del GPS es instancia nueva aunque el
+            // usuario no se haya movido, así que este onChange dispara en cada
+            // tick. Gate por distancia/tiempo para no re-resolver en cada fix.
+            guard let loc else { return }
+            let moved = lastCommunityContextLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
+            let age = Date().timeIntervalSince(lastCommunityContextAt ?? .distantPast)
+            guard moved > 100 || age > 60 else { return }
+            lastCommunityContextLocation = loc
+            lastCommunityContextAt = Date()
             evaluateLocationPrompt()
             Task { await refreshHomeCommunityContext() }
         }
@@ -403,6 +426,26 @@ struct InicioView: View {
         }
     }
 
+    /// Pioneer CON destino resuelto (0 buddies): el trip se crea automático
+    /// para ese destino + la solicitud, banner y a "Tu trip" — mismas reglas
+    /// que pioneerRegister en Android. No hay nada que "buscar" sin buddies.
+    private func pioneerHelpFlow(category: String, description: String?, destinationId: String, cityName: String?) async {
+        do {
+            let journey = try await APIClient.shared.ensureActiveTrip(destinationId: destinationId)
+            let _       = try await APIClient.shared.createHelpRequestForJourney(journeyId: journey.id, category: category, description: description)
+            let city    = cityName ?? locationService.currentCity ?? "tu zona"
+            await MainActor.run {
+                withAnimation { pioneerConfirmation = "Registramos tu solicitud en \(city). Te avisaremos cuando haya un buddy disponible." }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    router.switchTo(.trips)
+                }
+            }
+        } catch {
+            print("❌ [pioneerHelpFlow dest] error: \(error)")
+            await MainActor.run { navPath.append("register") }
+        }
+    }
+
     /// Abre el flujo de ayuda para un destino — SIN crear trip todavía.
     /// El trip se crea recién cuando un buddy acepta.
     private func openHelp(forDestinationId destId: String) async {
@@ -435,6 +478,15 @@ struct InicioView: View {
                 }
                 return
             }
+        }
+        // Pioneer con destino resuelto pero SIN buddies: no hay nada que
+        // "buscar" — el trip + solicitud se crean automáticamente y se navega
+        // a Tu trip (misma regla que Android: pioneerRegister con destino).
+        if homeCommunityContext?.totalBuddies == 0, let dest = resolvedLocation {
+            print("📍 [submitHelpFromHome] pioneer con destino \(dest.destinationName) → crear trip automático")
+            await pioneerHelpFlow(category: category, description: description,
+                                  destinationId: dest.destinationId, cityName: dest.destinationName)
+            return
         }
         // El destino del CTA es el resuelto por el backend — mismo lugar que el
         // usuario ve en "Estás en X" y en el contador de buddies.
@@ -483,6 +535,13 @@ struct InicioView: View {
                 .onAppear {
                     if hasLoaded {
                         if skipNextRefresh { skipNextRefresh = false; return }
+                        // En TabView los tabs ocultos reciben onAppear en re-renders
+                        // (p. ej. cada evento de ChatStore mientras chateas). Sin este
+                        // gate, refreshTripState escribe estado → re-render → onAppear
+                        // → refreshTripState: loop infinito contra el backend.
+                        guard router.selectedTab == .inicio else { return }
+                        let age = Date().timeIntervalSince(lastRefreshTripStateAt ?? .distantPast)
+                        guard age >= 10 else { return }
                         Task { await refreshTripState() }
                     }
                 }
@@ -512,6 +571,9 @@ struct InicioView: View {
                 }
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active, hasLoaded else { return }
+                    // Throttle: don't refresh more than once per 30 seconds
+                    let timeSinceLastRefresh = Date().timeIntervalSince(lastRefreshTripStateAt ?? Date.distantPast)
+                    guard timeSinceLastRefresh >= 30 else { return }
                     Task { await refreshTripState() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { _ in
@@ -603,6 +665,27 @@ struct InicioView: View {
                 }
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.md)
+                // Loader visible mientras se procesa la intención (flujo pioneer:
+                // crear trip + solicitud) — sin esto la pantalla parece congelada.
+                .overlay {
+                    if isFindingBuddy {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(Color.brand)
+                            Text("Registrando tu solicitud…")
+                                .font(BT.footnoteBold)
+                                .foregroundStyle(Color.ink)
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(Color.surface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+                        .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.15), value: isFindingBuddy)
 
                 // Comunidad viva — actividad local o, en su defecto, el pulso
                 // global de la red. La sección vive siempre que haya algo real.
@@ -709,9 +792,87 @@ struct InicioView: View {
             .opacity(isFindingBuddy ? 0.5 : 1)
             .disabled(isFindingBuddy)
 
-            RegisterCTACard(destinations: destinations) {
-                requireIdentity { navPath.append("register") }
+            assignedBuddyCard
+
+            // "¿Vas a viajar?" solo aplica sin trip — este composer es el del
+            // trip activo, así que la card de registro se omite aquí.
+        }
+    }
+
+    // MARK: – Assigned buddy card (paridad con AssignedBuddyCard de Android)
+
+    /// Card "Tu buddy asignado" bajo el composer: avatar + badge de no leídos,
+    /// último mensaje con prefijo "Tú:" y tap → chat directo. Mismas reglas que
+    /// Android: visible solo con match del viajero en accepted/active/pending.
+    @ViewBuilder private var assignedBuddyCard: some View {
+        if let match = activeMatch,
+           ["accepted", "active", "pending"].contains(match.status) {
+            let conn = chatStore.connections.first { $0.id == match.id }
+            let name = match.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Buddy"
+            Button {
+                if let conn { homeChatTarget = conn } else { router.switchTo(.conexiones) }
+            } label: {
+                HStack(spacing: Spacing.md) {
+                    ZStack(alignment: .topTrailing) {
+                        Circle()
+                            .fill(Color.surfaceRaised)
+                            .frame(width: 44, height: 44)
+                            .overlay {
+                                if let urlStr = match.buddy?.avatarUrl, let url = URL(string: urlStr) {
+                                    AsyncImage(url: url) { img in
+                                        img.resizable().scaledToFill()
+                                    } placeholder: { Color.surfaceRaised }
+                                    .frame(width: 44, height: 44)
+                                    .clipShape(Circle())
+                                } else {
+                                    Image(systemName: "person.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(Color.inkMuted)
+                                }
+                            }
+                        // Punto rojo = pendiente de respuesta — misma regla que
+                        // el badge del tab Conexiones (pendingReply), no read_at.
+                        if conn?.pendingReply == true {
+                            Text("1")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 20, height: 20)
+                                .background(Color.errorRed, in: Circle())
+                                .offset(x: 4, y: -4)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        (Text("Tu buddy asignado ")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.inkMuted)
+                         + Text(name)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.ink))
+                            .lineLimit(1)
+                        if let conn, conn.lastMessage != nil {
+                            Text(conn.isLastFromMe ? "Tú: \(conn.lastText)" : conn.lastText)
+                                .font(BT.caption1)
+                                .foregroundStyle(Color.inkMuted)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Color.brand)
+                }
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, 10)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.md)
+                        .strokeBorder(Color.brand.opacity(0.25), lineWidth: 1.5)
+                )
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -823,6 +984,9 @@ struct InicioView: View {
         guard !isLoadingData else { print("🔄 [refreshTripState] loadData en vuelo — skip"); return }
         guard Session.hasSession else { print("🔄 [refreshTripState] sin sesión — skip"); return }
         guard !Task.isCancelled else { return }
+
+        // Mark refresh time to throttle scenePhase changes
+        await MainActor.run { lastRefreshTripStateAt = Date() }
         guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else {
             print("❌ [refreshTripState] fetchTravelerJourneys falló")
             return
@@ -1112,10 +1276,10 @@ struct InicioView: View {
     /// - Parameter force: ignora el throttle (para pull-to-refresh / eventos reales)
     private func loadRecentHelp(force: Bool = false) async {
         let journey = activeJourney ?? pendingJourney
-        // Sin trip: usar el destino resuelto por GPS — la sección "Comunidad
-        // viva" muestra prueba social también antes de crear el primer trip.
-        guard let destId = journey?.destination?.id ?? journey?.destinationId
-                ?? resolvedLocation?.destinationId else {
+        // Regla de Comunidad viva: la actividad local SOLO aplica cuando el
+        // usuario tiene un trip creado. Sin trip → recentHelp queda vacío y la
+        // sección muestra siempre el pulso global (top viajeros por lugar).
+        guard let destId = journey?.destination?.id ?? journey?.destinationId else {
             recentHelp = []; recentHelpDestId = nil; return
         }
 
@@ -1269,8 +1433,12 @@ struct InicioView: View {
     /// propia — la sección nunca queda vacía mientras la red esté viva.
     private func loadCommunityPulseIfNeeded() async {
         guard recentHelp.isEmpty else { return }
+        // El pulso global cambia lento — no refetchar en < 60 s.
+        if let at = communityPulseLoadedAt, Date().timeIntervalSince(at) < 60, !communityPulse.isEmpty {
+            return
+        }
         if let pulse = try? await APIClient.shared.fetchCommunityPulse() {
-            await MainActor.run { communityPulse = pulse }
+            await MainActor.run { communityPulse = pulse; communityPulseLoadedAt = Date() }
         }
     }
 
