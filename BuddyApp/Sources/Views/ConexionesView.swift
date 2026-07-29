@@ -57,12 +57,14 @@ final class ChatStore: ObservableObject {
                     let key = String(content.dropFirst("category_card:".count))
                     let label: String = {
                         switch key {
-                        case "transport":     return "Cómo llegar"
+                        case "transport":     return "Transporte"
                         case "food":          return "Comer"
+                        case "shopping":      return "Compras"
                         case "translation":   return "Traducir"
-                        case "activities":    return "Qué hacer"
+                        case "activities":    return "Actividades"
                         case "accommodation": return "Alojamiento"
                         case "emergency":     return "Seguridad"
+                        case "recommendations": return "Consejos"
                         default:              return key
                         }
                     }()
@@ -827,9 +829,9 @@ struct OfferCard: View {
     @State private var isDeclining = false
 
     private static let categoryLabels: [String: String] = [
-        "transport": "Cómo llegar", "food": "Comer", "translation": "Traducir",
-        "activities": "Qué hacer", "accommodation": "Alojamiento",
-        "emergency": "Seguridad", "general": "Ayuda",
+        "transport": "Transporte", "food": "Comer", "shopping": "Compras",
+        "translation": "Traducir", "activities": "Actividades", "accommodation": "Alojamiento",
+        "emergency": "Seguridad", "general": "Ayuda", "recommendations": "Consejos",
     ]
 
     private var travelerName: String {

@@ -5,6 +5,16 @@ import UIKit
 // MARK: – INICIO
 // Calm, trustworthy dashboard. The user's home base between adventures.
 
+/// Contexto explícito elegido por el viajero para el composer de Home:
+/// desde dónde se construye el próximo Help Request. Nunca se decide solo —
+/// el usuario elige, Home nunca cambia de contexto en silencio.
+/// .trip lleva el journey.id — con más de un trip vivo (ej: San Francisco +
+/// Villa Rica) cada uno es una opción propia, no un solo "Mi viaje" genérico.
+enum HomeContext: Equatable {
+    case currentLocation
+    case trip(String)
+}
+
 struct InicioView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -22,15 +32,14 @@ struct InicioView: View {
     /// both destinationId and the optional seed so SwiftUI never renders the
     /// sheet content with a nil destination (avoids blank-screen race).
     @State private var homeHelpSheet: HomeHelpItem? = nil
-    /// Prompt ligero cuando el GPS detecta un destino distinto al trip activo.
-    @State private var locationPromptDestination: APIDestination? = nil
     /// Resolución de ubicación del backend (LocationResolver: polígono → radio).
     /// Única fuente de verdad para "Estás en X" y el destino del CTA del Home.
     /// Reemplaza al viejo nearestDestination (5 destacados + radio 50 km), que
     /// podía elegir un destino vecino equivocado (ej: La Merced estando en Villa Rica).
     @State private var resolvedLocation: APILocationResolution? = nil
-    /// Ciudad GPS para el banner cuando no hay destino curado cerca (flujo pioneer).
-    @State private var locationPromptCity: String? = nil
+    /// Selección MANUAL del contexto Home (selector Ubicación actual / Mi viaje).
+    /// nil = sin override — se aplican las reglas de default (ver effectiveHomeContext).
+    @State private var homeContextOverride: HomeContext? = nil
     @State private var destinations: [APIDestination] = []
     @State private var pendingJourney: APIJourney? = nil
     @State private var activeJourney: APIJourney? = nil
@@ -210,8 +219,7 @@ struct InicioView: View {
                 BuddyChatView(match: item.match, journey: journey).equatable()
             }
         }
-        // GPS cambió y el destino detectado difiere del trip activo → prompt ligero.
-        // NUNCA se crea un trip en silencio: solo si el usuario confirma.
+        // GPS cambió → re-resolver ubicación actual (gated por distancia/tiempo).
         .onChange(of: locationService.userLocation) { _, loc in
             // CLLocation es clase: cada fix del GPS es instancia nueva aunque el
             // usuario no se haya movido, así que este onChange dispara en cada
@@ -222,7 +230,6 @@ struct InicioView: View {
             guard moved > 100 || age > 60 else { return }
             lastCommunityContextLocation = loc
             lastCommunityContextAt = Date()
-            evaluateLocationPrompt()
             Task { await refreshHomeCommunityContext() }
         }
         .onChange(of: authState.isLoggedIn) { _, loggedIn in
@@ -266,82 +273,83 @@ struct InicioView: View {
         }
     }
 
-    /// Mantiene el banner actualizado con el destino detectado por GPS.
-    /// Se muestra si el lugar detectado NO está entre tus trips vivos (active o
-    /// planning) — así sugiere pedir ayuda donde estás aunque tu trip sea otro.
-    /// Banner "Parece que estás en X": aparece cuando el usuario tiene trips vivos
-    /// pero su ubicación FÍSICA actual no corresponde a ninguno de ellos.
-    /// El cálculo de "¿estoy en el destino?" lo hace el backend (PostGIS).
-    /// Cliente solo: consulta is_point_in_destination(lat, lng, destId) RPC.
-    private func evaluateLocationPrompt() {
-        locationPromptDestination = nil
-        locationPromptCity = nil
-        guard let loc = locationService.userLocation, !liveJourneys.isEmpty else {
-            print("📍 [LocationPrompt] → oculto — userLoc=\(locationService.userLocation != nil) liveJourneys=\(liveJourneys.count)")
-            return
+    // MARK: – Selector de contexto Home (Ubicación actual vs Mi(s) viaje(s))
+
+    /// "Ubicación actual" disponible = el backend resolvió un destino real para el GPS.
+    private var hasCurrentLocationContext: Bool { resolvedLocation != nil }
+    /// "Mi viaje" disponible = hay al menos un trip vivo (active o planning).
+    private var hasTripContext: Bool { !liveJourneys.isEmpty }
+    /// El trip vivo (si alguno) cuyo destino coincide EXACTO con el GPS (ej:
+    /// trip a San Francisco y ya estás en San Francisco). Con más de un trip
+    /// vivo, "Ubicación actual" y ese trip serían la MISMA fila repetida —
+    /// se fusionan: no se ofrece "Ubicación actual" por separado, ese trip
+    /// cubre ambas cosas. Los demás trips (ej: Villa Rica) siguen siendo
+    /// opciones propias.
+    private var matchingTripForGPS: APIJourney? {
+        guard let gpsId = resolvedLocation?.destinationId else { return nil }
+        return liveJourneys.first { ($0.destination?.id ?? $0.destinationId) == gpsId }
+    }
+    /// "Ubicación actual" solo se ofrece como fila propia cuando NO coincide
+    /// con ninguno de los trips vivos — si coincide, queda fusionada en ese trip.
+    private var shouldOfferCurrentLocationOption: Bool {
+        hasCurrentLocationContext && matchingTripForGPS == nil
+    }
+    /// Total de opciones distintas que el selector podría ofrecer.
+    private var homeContextOptionCount: Int {
+        (shouldOfferCurrentLocationOption ? 1 : 0) + liveJourneys.count
+    }
+
+    /// Contexto efectivo del composer. Respeta la selección manual del usuario
+    /// mientras siga siendo válida (el trip elegido sigue vivo, o el GPS ya no
+    /// coincide con un trip si eligió "Ubicación actual"); si dejó de serlo,
+    /// recalcula el default — nunca queda "atascado" en un contexto que ya no
+    /// existe. Reglas de default:
+    ///   GPS coincide con un trip vivo → ese trip (fusionado, ver matchingTripForGPS)
+    ///   GPS + trip(s), sin coincidir  → Ubicación actual (el usuario puede cambiar)
+    ///   sin GPS + trip(s)             → el primer trip vivo
+    ///   GPS + sin trip                → Ubicación actual (única opción)
+    ///   sin GPS + sin trip            → nil (flujo de permisos/registro existente)
+    private var effectiveHomeContext: HomeContext? {
+        let manualStillValid: Bool
+        switch homeContextOverride {
+        case .currentLocation: manualStillValid = shouldOfferCurrentLocationOption
+        case .trip(let jid):    manualStillValid = liveJourneys.contains { $0.id == jid }
+        case nil:                manualStillValid = false
         }
+        if manualStillValid { return homeContextOverride }
 
-        let lat = loc.coordinate.latitude
-        let lng = loc.coordinate.longitude
-        let currentPlace = locationService.currentDistrict ?? locationService.currentCity ?? "desconocido"
+        if let matching = matchingTripForGPS { return .trip(matching.id) }
+        if hasCurrentLocationContext && hasTripContext { return .currentLocation }
+        if let first = liveJourneys.first { return .trip(first.id) }
+        if hasCurrentLocationContext { return .currentLocation }
+        return nil
+    }
 
-        print("📍 [LocationPrompt] pos=(\(String(format: "%.4f", lat)), \(String(format: "%.4f", lng))) — lugar=\(currentPlace)")
+    /// El journey correspondiente al contexto efectivo, si es de tipo .trip.
+    private var effectiveTripJourney: APIJourney? {
+        guard case .trip(let jid) = effectiveHomeContext else { return nil }
+        return liveJourneys.first { $0.id == jid }
+    }
 
-        // Consultar backend: ¿estoy en alguno de mis trips?
-        // El backend responde true/false usando PostGIS (ST_Contains para polygons,
-        // ST_DWithin para radius). Cada destino define su escala, no el cliente.
+    /// true cuando homeComposer va a pintar algo ARRIBA de CategoryPickerView
+    /// (el selector, o locationContext en Case 4). CategoryPickerView ya trae
+    /// su propio Spacing.md antes del heading — sin esta bandera, el
+    /// contenedor exterior sumaba OTRO Spacing.md incluso cuando no hay nada
+    /// que separar (Case 3: sin selector, sin locationContext), dejando un
+    /// espacio doble e injustificado encima de "Consulta con un buddy".
+    private var homeComposerHasHeaderRow: Bool {
+        homeContextOptionCount > 1 || effectiveHomeContext == nil
+    }
+
+    /// Aplica la selección manual del selector y refresca todo lo que depende
+    /// de ella de inmediato — sin esto, "Comunidad viva" quedaba mostrando el
+    /// contexto anterior hasta el próximo ciclo de refresh en background.
+    private func selectHomeContext(_ context: HomeContext) {
+        homeContextOverride = context
         Task {
-            var nearSomeTrip = false
-            var checkedTrips: [String] = []
-
-            for journey in liveJourneys {
-                guard let destId = journey.destination?.id ?? journey.destinationId else { continue }
-                let destName = journey.destination?.name ?? "·"
-                checkedTrips.append(destName)
-
-                do {
-                    let result = try await APIClient.shared.callRPC(
-                        "is_point_in_destination",
-                        params: [
-                            "p_lat": lat,
-                            "p_lng": lng,
-                            "p_destination_id": destId
-                        ]
-                    )
-                    if let isInside = result as? Bool, isInside {
-                        print("📍 [LocationPrompt] trip=\(destName) → ✅ aquí (backend)")
-                        nearSomeTrip = true
-                        break
-                    }
-                } catch {
-                    print("📍 [LocationPrompt] RPC error para \(destName): \(error)")
-                }
-            }
-
-            await MainActor.run {
-                if nearSomeTrip {
-                    print("📍 [LocationPrompt] → oculto — ya estás en tu trip (checked: \(checkedTrips.joined(separator: ", ")))")
-                    return
-                }
-
-                // Estoy fuera de todos mis trips: sugerir ayuda AQUÍ
-                print("📍 [LocationPrompt] fuera de todos los trips (checked: \(checkedTrips.joined(separator: ", ")))")
-                if let resolved = resolvedLocation,
-                   let near = destinations.first(where: { $0.id == resolved.destinationId }) {
-                    // Solo si el destino resuelto por el backend está en catálogo local;
-                    // si no, el banner usa el nombre resuelto como ciudad GPS.
-                    locationPromptDestination = near
-                    print("📍 [LocationPrompt] → mostrar destino curado: \(near.name)")
-                } else if let resolvedName = resolvedLocation?.destinationName {
-                    locationPromptCity = resolvedName
-                    print("📍 [LocationPrompt] → mostrar destino resuelto: \(resolvedName)")
-                } else if let place = locationService.currentDistrict ?? locationService.currentCity {
-                    locationPromptCity = place
-                    print("📍 [LocationPrompt] → mostrar lugar GPS: \(place)")
-                } else {
-                    print("📍 [LocationPrompt] → oculto — sin destino curado ni ciudad GPS")
-                }
-            }
+            await refreshHomeCommunityContext()
+            await loadRecentHelp()
+            await loadCommunityPulseIfNeeded()
         }
     }
 
@@ -459,8 +467,11 @@ struct InicioView: View {
     /// El usuario eligió categoría/texto DIRECTO en la Home → abre el flujo de
     /// ayuda ya en "buscando" SIN crear trip (se crea al aceptar un buddy).
     private func submitHelpFromHome(category: String, description: String?) async {
-        // Si hay un trip activo, usarlo directamente sin importar la ubicación detectada
-        if let activeJourney = liveJourneys.first {
+        // Un trip elegido explícitamente (selector de contexto) → usar ESE trip,
+        // igual que siempre. Con "Ubicación actual" elegida cae al branch de abajo
+        // aunque haya un trip vivo — el contexto lo decide el usuario, nunca el GPS
+        // en silencio.
+        if let activeJourney = effectiveTripJourney {
             // Pioneer: no hay buddies en este lugar → redirigir al tab Tu trip
             if homeCommunityContext?.totalBuddies == 0 {
                 print("📍 [submitHelpFromHome] pioneer con trip activo → Tu trip tab")
@@ -605,26 +616,6 @@ struct InicioView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: 0).id("inicioTop")
 
-                if let dest = locationPromptDestination {
-                    LocationPromptBanner(city: dest.city) {
-                        requireIdentity {
-                            Task { await openHelp(forDestinationId: dest.id) }
-                        }
-                    }
-                    .padding(.horizontal, Spacing.edge)
-                    .padding(.top, Spacing.md)
-                } else if let city = locationPromptCity {
-                    // Sin destino curado: flujo pioneer con la ubicación GPS actual
-                    LocationPromptBanner(city: city) {
-                        requireIdentity {
-                            guard let loc = locationService.userLocation else { return }
-                            Task { await pioneerHelpFlow(category: "general", description: nil, loc: loc) }
-                        }
-                    }
-                    .padding(.horizontal, Spacing.edge)
-                    .padding(.top, Spacing.md)
-                }
-
                 if loadDataFailed && !isLoadingData {
                     Button {
                         Task { await loadData() }
@@ -657,14 +648,12 @@ struct InicioView: View {
                                 .disabled(true)
                         }
                         .skeletonPulse()
-                    } else if !liveJourneys.isEmpty {
-                        activeTripComposer
                     } else {
-                        noTripComposer
+                        homeComposer
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, Spacing.md)
+                .padding(.top, isLoadingData || homeComposerHasHeaderRow ? Spacing.md : 0)
                 // Loader visible mientras se procesa la intención (flujo pioneer:
                 // crear trip + solicitud) — sin esto la pantalla parece congelada.
                 .overlay {
@@ -691,7 +680,7 @@ struct InicioView: View {
                 // global de la red. La sección vive siempre que haya algo real.
                 if !recentHelp.isEmpty || !communityPulse.isEmpty {
                     communityLiveSection
-                        .padding(.top, Spacing.xl)
+                        .padding(.top, Spacing.md)
                 }
 
                 communitySection
@@ -701,31 +690,93 @@ struct InicioView: View {
         }
     }
 
-    @ViewBuilder private var noTripComposer: some View {
+    /// Handler compartido del CategoryPickerView — igual para ambos contextos.
+    private func handleComposerRequest(category: String, description: String?) {
+        requireIdentity {
+            guard !isFindingBuddy else { return }
+            isFindingBuddy = true
+            Task {
+                defer { isFindingBuddy = false }
+                await submitHelpFromHome(category: category, description: description)
+            }
+        }
+    }
+
+    /// Composer único de Home. El selector de contexto decide CUÁL de los dos
+    /// layouts de abajo se muestra — ya no es "hay trip" lo que manda, es la
+    /// elección explícita del usuario (effectiveHomeContext). Sin selección
+    /// posible (Case 4: sin GPS y sin trip) se mantiene el flujo de permisos/
+    /// registro existente, sin cambios.
+    @ViewBuilder private var homeComposer: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            locationContext
-            CategoryPickerView(
-                buddyCount: homeBuddyCount,
-                destinationName: resolvedLocation?.destinationName ?? locationService.currentCity,
-                communityContext: homeCommunityContext,
-                pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
-                isLoading: isFindingBuddy
-            ) { cat, desc in
-                requireIdentity {
-                    guard !isFindingBuddy else { return }
-                    isFindingBuddy = true
-                    Task {
-                        defer { isFindingBuddy = false }
-                        await submitHelpFromHome(category: cat, description: desc)
+            if let context = effectiveHomeContext, homeContextOptionCount > 1 {
+                // 2+ opciones distintas (Ubicación actual + uno o más trips):
+                // selector interactivo. "Ubicación actual" se omite si coincide
+                // con alguno de los trips (matchingTripForGPS) — esa fila ya
+                // cubre ambas cosas, no se repite.
+                HomeContextSelector(
+                    context: context,
+                    hasCurrentLocation: shouldOfferCurrentLocationOption,
+                    currentLocationCity: resolvedLocation?.destinationName ?? locationService.currentCity ?? "",
+                    trips: liveJourneys.map { HomeContextTripOption(id: $0.id, name: $0.destination?.name ?? $0.place?.name ?? "Mi viaje") },
+                    onSelect: { selectHomeContext($0) }
+                )
+                .padding(.bottom, Spacing.xs)
+                // zIndex del hijo del VStack, no solo del overlay interno —
+                // sin esto el panel desplegado quedaba PINTADO DEBAJO del
+                // CategoryPickerView (siguiente hermano) y era inclicable ahí.
+                .zIndex(1)
+            }
+
+            if let activeJrn = effectiveTripJourney {
+                let activeDest = activeJrn.destination?.name ?? activeJrn.place?.name
+                CategoryPickerView(
+                    buddyCount: homeBuddyCount,
+                    destinationName: activeDest,
+                    onDestinationTap: { navPath.append(activeJrn) },
+                    activeBuddyName: activeJrn.id == activeJourney?.id ? activeMatch.flatMap { m in
+                        ["accepted", "active", "pending"].contains(m.status)
+                            ? m.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
+                            : nil
+                    } : nil,
+                    activeBuddyAvatarUrl: activeJrn.id == activeJourney?.id ? activeMatch.flatMap { m in
+                        ["accepted", "active", "pending"].contains(m.status) ? m.buddy?.avatarUrl : nil
+                    } : nil,
+                    communityContext: homeCommunityContext,
+                    isLoading: isFindingBuddy
+                ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
+                .padding(.horizontal, -Spacing.edge)
+                .opacity(isFindingBuddy ? 0.5 : 1)
+                .disabled(isFindingBuddy)
+
+                // La card de buddy asignado es del trip ACTIVO con match — si el
+                // trip elegido en el selector es otro (ej: Villa Rica, planning,
+                // sin match), no aplica acá.
+                if activeJrn.id == activeJourney?.id {
+                    assignedBuddyCard
+                }
+                // "¿Vas a viajar?" solo aplica sin trip — se omite en este contexto.
+            } else {
+                if effectiveHomeContext == nil {
+                    // Case 4: ni GPS ni trip — flujo de permisos/registro existente.
+                    locationContext
+                }
+                CategoryPickerView(
+                    buddyCount: homeBuddyCount,
+                    destinationName: resolvedLocation?.destinationName ?? locationService.currentCity,
+                    communityContext: homeCommunityContext,
+                    pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
+                    isLoading: isFindingBuddy
+                ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
+                .padding(.horizontal, -Spacing.edge)
+                .opacity(isFindingBuddy ? 0.5 : 1)
+                .disabled(isFindingBuddy)
+
+                if !hasTripContext {
+                    RegisterCTACard(destinations: destinations) {
+                        requireIdentity { navPath.append("register") }
                     }
                 }
-            }
-            .padding(.horizontal, -Spacing.edge)
-            .opacity(isFindingBuddy ? 0.5 : 1)
-            .disabled(isFindingBuddy)
-
-            RegisterCTACard(destinations: destinations) {
-                requireIdentity { navPath.append("register") }
             }
         }
     }
@@ -755,47 +806,6 @@ struct InicioView: View {
                 unreadCount: pendingReply ? 1 : 0
             )
             .environmentObject(routeStore)
-        }
-    }
-
-    @ViewBuilder private var activeTripComposer: some View {
-        let activeDest = liveJourneys.first?.destination?.name ?? liveJourneys.first?.place?.name
-        let activeJrn  = liveJourneys.first
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            CategoryPickerView(
-                buddyCount: homeBuddyCount,
-                destinationName: activeDest,
-                onDestinationTap: {
-                    if let j = activeJrn { navPath.append(j) }
-                },
-                activeBuddyName: activeMatch.flatMap { m in
-                    ["accepted", "active", "pending"].contains(m.status)
-                        ? m.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
-                        : nil
-                },
-                activeBuddyAvatarUrl: activeMatch.flatMap { m in
-                    ["accepted", "active", "pending"].contains(m.status) ? m.buddy?.avatarUrl : nil
-                },
-                communityContext: homeCommunityContext,
-                isLoading: isFindingBuddy
-            ) { cat, desc in
-                requireIdentity {
-                    guard !isFindingBuddy else { return }
-                    isFindingBuddy = true
-                    Task {
-                        defer { isFindingBuddy = false }
-                        await submitHelpFromHome(category: cat, description: desc)
-                    }
-                }
-            }
-            .padding(.horizontal, -Spacing.edge)
-            .opacity(isFindingBuddy ? 0.5 : 1)
-            .disabled(isFindingBuddy)
-
-            assignedBuddyCard
-
-            // "¿Vas a viajar?" solo aplica sin trip — este composer es el del
-            // trip activo, así que la card de registro se omite aquí.
         }
     }
 
@@ -877,8 +887,13 @@ struct InicioView: View {
     }
 
     private func refreshHomeCommunityContext() async {
-        // Si hay un trip activo, cargar el contexto de su destino o lugar
-        if let j = liveJourneys.first {
+        // Si el contexto elegido es un trip, cargar el contexto de SU destino o
+        // lugar (no necesariamente liveJourneys.first — puede ser cualquiera de
+        // los trips vivos). Si el viajero eligió "Ubicación actual" (aunque haya
+        // trip(s) vivo(s)), cae al branch de GPS de abajo — el contexto mostrado
+        // siempre coincide con la ubicación que realmente se usará para el
+        // Help Request.
+        if let j = effectiveTripJourney {
             print("🏠 [refreshHomeCommunityContext] active trip — loading context")
             if let destId = j.destination?.id ?? j.destinationId,
                let ctx = try? await APIClient.shared.fetchPlaceContext(id: destId, source: "destination") {
@@ -1013,13 +1028,15 @@ struct InicioView: View {
             liveJourneys   = journeys
                 .filter { ["active", "planning"].contains($0.status) }
                 .sorted { ($0.status == "active" ? 0 : 1) < ($1.status == "active" ? 0 : 1) }
-            evaluateLocationPrompt()
             print("🔄 [refreshTripState] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(liveJourneys.count)")
         }
+        // refreshHomeCommunityContext PRIMERO: resuelve resolvedLocation, del que
+        // depende effectiveHomeContext — loadRecentHelp necesita ese valor fresco
+        // para decidir si mostrar actividad local o caer al pulso global.
+        await refreshHomeCommunityContext()
         await loadRecentHelp()
         await loadRecentHelpPerTrip()
         await loadCommunityPulseIfNeeded()
-        await refreshHomeCommunityContext()
         // Ruta en background — activos y planning la necesitan para el mapa
         if let active, !routeStore.isReady {
             let destId = active.destination?.id ?? active.destinationId
@@ -1103,7 +1120,6 @@ struct InicioView: View {
         await MainActor.run {
             destinations = fetchedDests
             ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
-            evaluateLocationPrompt()
         }
 
         // Sin ninguna sesión (ni guest ni verified): solo contenido público.
@@ -1159,7 +1175,6 @@ struct InicioView: View {
                 }
                 pendingJourney = planning
                 liveJourneys   = newLive
-                evaluateLocationPrompt()
                 print("🏠 [loadData] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(newLive.count)")
             }
 
@@ -1179,8 +1194,6 @@ struct InicioView: View {
                 await MainActor.run { activeMatch = found }
                 await chatStore.load()
             }
-            await loadRecentHelp(force: true)
-            await loadRecentHelpPerTrip()
         } catch {
             print("❌ [loadData] ERROR: \(error)")
             await MainActor.run { loadDataFailed = true }
@@ -1200,8 +1213,14 @@ struct InicioView: View {
         // no puede dejar la comunidad vacía en silencio
         await loadFeed()
 
-        // Buddies cerca para el composer de la Home (si no hay trip)
+        // Buddies cerca para el composer de la Home + resolvedLocation fresco.
+        // PRIMERO: loadRecentHelp depende de effectiveHomeContext, que a su vez
+        // depende de resolvedLocation — sin este orden, Comunidad Viva podía
+        // mostrar la actividad del trip aunque el selector ya mostrara
+        // "Ubicación actual" (un ciclo de refresh atrasado).
         await refreshHomeCommunityContext()
+        await loadRecentHelp(force: true)
+        await loadRecentHelpPerTrip()
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
@@ -1275,11 +1294,15 @@ struct InicioView: View {
     // MARK: Comunidad viva — ayudas recién terminadas en tu destino
     /// - Parameter force: ignora el throttle (para pull-to-refresh / eventos reales)
     private func loadRecentHelp(force: Bool = false) async {
-        let journey = activeJourney ?? pendingJourney
         // Regla de Comunidad viva: la actividad local SOLO aplica cuando el
-        // usuario tiene un trip creado. Sin trip → recentHelp queda vacío y la
-        // sección muestra siempre el pulso global (top viajeros por lugar).
-        guard let destId = journey?.destination?.id ?? journey?.destinationId else {
+        // contexto EFECTIVO es un trip — y del TRIP ELEGIDO, no necesariamente
+        // activeJourney/pendingJourney (con 2+ trips vivos puede ser cualquiera).
+        // Con "Ubicación actual" (el default cuando GPS y trip no coinciden —
+        // ver effectiveHomeContext), mostrar la actividad de un trip que ni
+        // siquiera es el que se está usando ahora mismo confunde: recentHelp
+        // queda vacío y la sección cae al pulso global (loadCommunityPulseIfNeeded).
+        guard let journey = effectiveTripJourney,
+              let destId = journey.destination?.id ?? journey.destinationId else {
             recentHelp = []; recentHelpDestId = nil; return
         }
 
@@ -1836,6 +1859,154 @@ struct FindBuddyPrimaryCTA: View {
     }
 }
 
+// Selector explícito de contexto Home: "Ubicación actual" vs "Mi viaje".
+/// Una fila seleccionable del dropdown: un trip vivo (journey.id + nombre a mostrar).
+struct HomeContextTripOption: Identifiable, Equatable {
+    let id: String
+    let name: String
+}
+
+// Interactivo solo cuando hay 2+ opciones distintas (Ubicación actual + uno o
+// más trips) — con una sola opción se muestra como fila fija, sin affordance
+// de tap. Con 2+ trips vivos, cada uno aparece como su propia fila: no hay un
+// solo "Mi viaje" genérico si el viajero tiene más de un trip.
+// No usa Menu/UIMenu: su animación de cierre es del sistema (UIKit), no de
+// SwiftUI — .transaction/.animation(nil) no la alcanzan, y el label quedaba
+// un instante en un frame intermedio (texto recortado, chevron ausente)
+// hasta que esa animación de sistema terminaba de asentar. Dropdown propio,
+// controlado 100% por @State, sin ese problema.
+struct HomeContextSelector: View {
+    let context: HomeContext
+    let hasCurrentLocation: Bool
+    let currentLocationCity: String
+    let trips: [HomeContextTripOption]
+    let onSelect: (HomeContext) -> Void
+
+    @State private var isExpanded = false
+
+    private var interactive: Bool { (hasCurrentLocation ? 1 : 0) + trips.count > 1 }
+
+    private var icon: String { context == .currentLocation ? "location.fill" : "map.fill" }
+    private var label: String {
+        switch context {
+        case .currentLocation:
+            return currentLocationCity.isEmpty ? "Ubicación actual" : currentLocationCity
+        case .trip(let jid):
+            return trips.first { $0.id == jid }?.name ?? "Mi trip"
+        }
+    }
+
+    var body: some View {
+        if interactive {
+            Button {
+                Haptic.select()
+                withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
+            } label: {
+                row(interactive: true)
+            }
+            .buttonStyle(.plain)
+            // Captador de tap-afuera: un rectángulo enorme y casi invisible,
+            // centrado en el botón, mucho más grande que cualquier pantalla —
+            // sin esto, tocar en cualquier otro lado de Home (las categorías,
+            // el heading, etc.) dejaba el panel abierto.
+            .overlay {
+                if isExpanded {
+                    Color.black.opacity(0.001)
+                        .frame(width: 3000, height: 3000)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeOut(duration: 0.15)) { isExpanded = false }
+                        }
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if isExpanded {
+                    optionsPanel
+                        .offset(y: 30)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .zIndex(1)
+                }
+            }
+        } else {
+            row(interactive: false)
+        }
+    }
+
+    private var optionsPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if hasCurrentLocation {
+                optionButton(
+                    target: .currentLocation,
+                    title: currentLocationCity.isEmpty ? "Ubicación actual" : currentLocationCity,
+                    subtitle: "Ubicación actual"
+                )
+            }
+            ForEach(Array(trips.enumerated()), id: \.element.id) { index, trip in
+                if hasCurrentLocation || index > 0 {
+                    Divider().padding(.leading, 34)
+                }
+                optionButton(target: .trip(trip.id), title: trip.name, subtitle: "Mi trip")
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(minWidth: 180, alignment: .leading)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+        .overlay(RoundedRectangle(cornerRadius: Radius.md).stroke(Color.border, lineWidth: 1))
+        .cardShadow()
+    }
+
+    /// El nombre real del lugar (trip o ubicación) va como texto principal —
+    /// "Mi viaje"/"Ubicación actual" queda de subtítulo, no al revés.
+    @ViewBuilder
+    private func optionButton(target: HomeContext, title: String, subtitle: String) -> some View {
+        Button {
+            Haptic.select()
+            withAnimation(.easeOut(duration: 0.15)) { isExpanded = false }
+            onSelect(target)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .opacity(context == target ? 1 : 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func row(interactive: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+            Text(label)
+                .font(BT.caption1.weight(.semibold))
+                .lineLimit(1)
+            if interactive {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted)
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            }
+        }
+        .foregroundStyle(Color.brand)
+    }
+}
+
 // Carries both pieces the home-help sheet needs atomically.
 // Using this as the .sheet(item:) driver eliminates the Bool/optional
 // desync that caused blank screens on first open.
@@ -2268,51 +2439,6 @@ struct CommunityPostCard: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
         .padding(.bottom, Spacing.md)
-    }
-}
-
-// MARK: – LOCATION PROMPT BANNER
-// Inline card shown above the trip card when GPS detects a different destination
-
-struct LocationPromptBanner: View {
-    let city: String
-    var onConfirm: () -> Void
-
-    var body: some View {
-        Button {
-            Haptic.light()
-            onConfirm()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "location.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.teal)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Parece que estás en \(city)")
-                        .font(BT.footnote)
-                        .foregroundStyle(Color.primary)
-                    Text("Buscar un buddy aquí")
-                        .font(BT.caption1)
-                        .foregroundStyle(Color.teal)
-                }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.secondary.opacity(0.5))
-            }
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, 12)
-            .background(Color.teal.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.md)
-                    .stroke(Color.teal.opacity(0.15), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
     }
 }
 

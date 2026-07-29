@@ -61,6 +61,12 @@ struct APIResolvedPlace: Decodable {
     let name: String
     let city: String?
     let country: String?
+    let destinationId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, city, country
+        case destinationId = "destination_id"
+    }
 }
 
 // MARK: Place Context — GET /places/:id/context

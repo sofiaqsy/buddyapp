@@ -117,10 +117,18 @@ struct ContactarBuddyView: View {
         .task { await checkStatus() }
         .task { await loadBuddyCount() }
         .onDisappear {
-            // Limpiar ambos mecanismos para evitar recursos colgados si el sheet se cierra
-            // sin pasar por cancelSearch() (p.ej. swipe-dismiss del sheet).
-            pollTask?.cancel()
-            stopSSEMatch()
+            // Cerrar el modal — de la forma que sea (swipe-dismiss, cambiar de
+            // tab, back) — cancela la búsqueda de verdad, igual que el botón
+            // explícito de cancelar. No queda nada corriendo en segundo plano
+            // sin que el usuario lo vea.
+            if phase == .searching {
+                print("🚪 [onDisappear] phase=searching requestId=\(activeRequestId ?? "nil") → CANCELANDO búsqueda")
+                cancelActiveRequestOnServer()
+            } else {
+                print("🚪 [onDisappear] phase=\(phase) → cancelando poll+SSE (nada útil que rastrear)")
+                pollTask?.cancel()
+                stopSSEMatch()
+            }
         }
         // Reconexión tras volver al primer plano: el SSE del matching cae cuando iOS
         // suspende la app. Reiniciamos el SSE y consultamos el estado de inmediato
@@ -265,25 +273,45 @@ struct ContactarBuddyView: View {
             activeRequestId = req.id
             isExpandingSearch = false
             startPolling(); startSSEMatch(requestId: req.id)
+        } catch APIError.activeRequestExists(let requestId) {
+            // Ya había una búsqueda en curso (típicamente huérfana por un
+            // dismiss anterior del modal) — RETOMARLA en vez de mostrar un
+            // error sin salida. El backend manda el request_id a propósito
+            // para esto (espejo de Android: ActiveRequestExists).
+            guard let requestId else {
+                phase = .error("Ya tienes una solicitud activa. Inténtalo en un momento.")
+                return
+            }
+            print("🔁 [handleRequest] 409 active_request_exists → retomando request \(requestId)")
+            activeRequestId = requestId
+            isExpandingSearch = false
+            phase = .searching
+            startPolling(); startSSEMatch(requestId: requestId)
         } catch { phase = .error(error.localizedDescription) }
     }
 
-    private func cancelSearch() {
+    /// Cancela la solicitud en el servidor (DELETE) y detiene el tracking.
+    /// Sin tocar navegación — la usan tanto el botón explícito de cancelar
+    /// (cancelSearch, que además navega) como .onDisappear (cerrar el modal
+    /// de la forma que sea — swipe, tab, back — también cuenta como cancelar).
+    private func cancelActiveRequestOnServer() {
         pollTask?.cancel()
         stopSSEMatch()
-        if let rid = activeRequestId {
-            let capturedRid = rid
-            activeRequestId = nil
-            Task {
-                do {
-                    try await APIClient.shared.cancelHelpRequest(requestId: capturedRid)
-                } catch {
-                    // Si el cancel falla en red, el servidor puede tener la solicitud activa.
-                    // checkStatus() al re-abrir la detectará y reanudará la búsqueda.
-                    print("⚠️ [cancelSearch] cancelHelpRequest falló — el servidor puede tener la solicitud activa: \(error)")
-                }
+        guard let rid = activeRequestId else { return }
+        let capturedRid = rid
+        activeRequestId = nil
+        Task {
+            do {
+                try await APIClient.shared.cancelHelpRequest(requestId: capturedRid)
+                print("🗑️ [cancelActiveRequestOnServer] cancelado requestId=\(capturedRid)")
+            } catch {
+                print("⚠️ [cancelActiveRequestOnServer] cancelHelpRequest falló para \(capturedRid): \(error)")
             }
         }
+    }
+
+    private func cancelSearch() {
+        cancelActiveRequestOnServer()
         // Si vino de la Home (sin pasar por el selector) → cerrar y volver al
         // inicio. Si vino del selector → volver a elegir categoría.
         if initialRequest != nil {
@@ -296,17 +324,26 @@ struct ContactarBuddyView: View {
 
     private func startPolling() {
         pollTask?.cancel()
+        print("⏱️ [startPolling] iniciado — requestId=\(activeRequestId ?? "nil")")
         pollTask = Task {
+            var tick = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else {
+                    print("⏱️ [startPolling] tick #\(tick) cancelado tras el sleep — saliendo")
+                    return
+                }
+                tick += 1
+                print("⏱️ [startPolling] tick #\(tick) — llamando pollForMatch() requestId=\(activeRequestId ?? "nil")")
                 await pollForMatch()
             }
+            print("⏱️ [startPolling] loop terminado (Task.isCancelled=true) tras \(tick) ticks")
         }
     }
 
     private func startSSEMatch(requestId: String) {
         sseMatchTask?.cancel()
+        print("📡 [startSSEMatch] iniciado — requestId=\(requestId)")
         sseMatchTask = Task {
             // Bucle de reconexión con backoff exponencial — igual que ChatStore.startEventStream.
             var attempt = 0
@@ -321,16 +358,23 @@ struct ContactarBuddyView: View {
                 req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                 req.timeoutInterval = 300
 
+                print("📡 [startSSEMatch] conectando (intento \(attempt)) requestId=\(requestId)")
                 guard let (stream, _) = try? await URLSession.shared.bytes(for: req) else {
+                    print("📡 [startSSEMatch] conexión falló (intento \(attempt)) — Task.isCancelled=\(Task.isCancelled)")
                     if Task.isCancelled { return }
                     await sseBackoff(&attempt); continue
                 }
 
+                print("📡 [startSSEMatch] conectado requestId=\(requestId)")
                 attempt = 0   // conexión exitosa
                 do {
                     for try await line in stream.lines {
-                        guard !Task.isCancelled else { return }
+                        guard !Task.isCancelled else {
+                            print("📡 [startSSEMatch] Task.isCancelled durante el stream — saliendo")
+                            return
+                        }
                         if line.hasPrefix("event: matched") {
+                            print("📡 [startSSEMatch] event: matched recibido — transicionando")
                             // El SSE es la fuente de verdad primaria: cuando confirma el match
                             // transitamos directamente, sin pasar por el guard de isPollInFlight
                             // que pertenece al camino de recuperación del timer.
@@ -342,10 +386,14 @@ struct ContactarBuddyView: View {
                             await pollForMatch()
                         }
                     }
-                } catch { }
+                } catch {
+                    print("📡 [startSSEMatch] stream terminó con error: \(error)")
+                }
 
+                print("📡 [startSSEMatch] stream cerrado (sin error explícito) requestId=\(requestId) — reconectando")
                 await sseBackoff(&attempt)
             }
+            print("📡 [startSSEMatch] loop de reconexión terminado (Task.isCancelled=true) requestId=\(requestId)")
         }
     }
 
@@ -370,19 +418,27 @@ struct ContactarBuddyView: View {
     }
 
     private func stopSSEMatch() {
+        print("📡 [stopSSEMatch] cancelando sseMatchTask (era nil=\(sseMatchTask == nil))")
         sseMatchTask?.cancel()
         sseMatchTask = nil
     }
 
     private func pollForMatch() async {
         // Un solo poll en vuelo a la vez — evita llamadas paralelas del timer y del SSE.
-        guard !isPollInFlight else { return }
-        guard let requestId = activeRequestId else { return }
+        guard !isPollInFlight else {
+            print("📶 [pollForMatch] ya hay un poll en vuelo — omitido")
+            return
+        }
+        guard let requestId = activeRequestId else {
+            print("📶 [pollForMatch] activeRequestId=nil — omitido")
+            return
+        }
         isPollInFlight = true
         defer { isPollInFlight = false }
 
         do {
             let status = try await APIClient.shared.fetchMatchingStatus(requestId: requestId)
+            print("📶 [pollForMatch] requestId=\(requestId) → status=\(status.status) position=\(status.position?.description ?? "nil")")
             switch status.status {
 
             case "matched":
@@ -470,21 +526,23 @@ struct CategoryPickerView: View {
     }
 
     private let categories: [BuddyCategory] = [
-        .init(icon: "map",              label: "Cómo llegar", apiKey: "transport"),
-        .init(icon: "cup.and.saucer",   label: "Comer",       apiKey: "food"),
-        .init(icon: "bubble.left",      label: "Traducir",    apiKey: "translation"),
-        .init(icon: "sparkles",         label: "Qué hacer",   apiKey: "activities"),
-        .init(icon: "bed.double",       label: "Alojamiento", apiKey: "accommodation"),
-        .init(icon: "shield",           label: "Seguridad",   apiKey: "emergency"),
+        .init(icon: "car.fill",       label: "Transporte",     apiKey: "transport"),
+        .init(icon: "cup.and.saucer", label: "Comer",          apiKey: "food"),
+        .init(icon: "bag.fill",       label: "Compras",        apiKey: "shopping"),
+        .init(icon: "figure.hiking",  label: "Actividades",    apiKey: "activities"),
+        .init(icon: "bed.double",     label: "Alojamiento",    apiKey: "accommodation"),
+        .init(icon: "lightbulb.fill", label: "Consejos",apiKey: "recommendations"),
     ]
 
     private let subtitles: [String: String] = [
-        "transport":     "Rutas y transporte",
-        "food":          "Comida y restaurantes",
+        "transport":     "Rutas y movilidad",
+        "food":          "Restaurantes y sabores locales",
+        "shopping":      "Productos locales",
         "translation":   "Frases, señales y más",
-        "activities":    "Tours y actividades",
-        "accommodation": "Hoteles, hostales y más",
+        "activities":    "Tours y experiencias",
+        "accommodation": "Hoteles y hospedajes",
         "emergency":     "Emergencias y consejos útiles",
+        "recommendations": "Recomendaciones",
     ]
 
     // En estado pioneer (sin buddies registrados en el lugar), el botón siempre
@@ -497,7 +555,7 @@ struct CategoryPickerView: View {
 
     private var subtitleAttributed: AttributedString {
         if let city = destinationName {
-            var prefix = AttributedString("Cuéntanos qué necesitas. Te conectaremos con un buddy de ")
+            var prefix = AttributedString("Elige el tema de tu consulta. Te conectaremos con una persona que conozca ")
             prefix.foregroundColor = UIColor(Color.inkMuted)
 
             var cityStr = AttributedString(city)
@@ -513,7 +571,7 @@ struct CategoryPickerView: View {
 
             return prefix + cityStr + dot
         } else {
-            var str = AttributedString("Cuéntanos qué necesitas. Te conectaremos con un buddy.")
+            var str = AttributedString("Elige el tema de tu consulta. Te conectaremos con una persona que conozca el lugar.")
             str.foregroundColor = UIColor(Color.inkMuted)
             return str
         }
@@ -681,12 +739,14 @@ private struct SearchingView: View {
     @State private var appear = false
 
     private static let categoryMeta: [String: (icon: String, label: String)] = [
-        "transport":     ("map",            "Cómo llegar"),
+        "transport":     ("car",            "Transporte"),
         "food":          ("cup.and.saucer", "Comer"),
+        "shopping":      ("bag",            "Compras"),
         "translation":   ("bubble.left",    "Traducir"),
-        "activities":    ("sparkles",       "Qué hacer"),
+        "activities":    ("figure.hiking",  "Actividades"),
         "accommodation": ("bed.double",     "Alojamiento"),
         "emergency":     ("shield",         "Seguridad"),
+        "recommendations": ("lightbulb",    "Consejos"),
     ]
 
     private var statusDot: Color { buddyCount > 0 ? Color.onlineGreen : Color.sand }
@@ -705,7 +765,11 @@ private struct SearchingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Spacer()
+            // minLength garantiza aire arriba de "UN MOMENTO" aunque el
+            // contenido sea alto — antes era un Spacer() sin piso, así que
+            // en pantallas donde el contenido ocupaba casi todo el alto,
+            // "UN MOMENTO" quedaba pegado al borde superior.
+            Spacer(minLength: Spacing.xxl)
 
             Text("UN MOMENTO")
                 .font(BT.eyebrow).tracking(3).foregroundStyle(Color.inkMuted)
@@ -784,7 +848,10 @@ private struct SearchingView: View {
             Button("Cancelar", action: onCancel)
                 .font(BT.subhead).foregroundStyle(Color.inkMuted)
 
-            Spacer().frame(height: 40)
+            // minLength en vez de altura fija — antes TODO el espacio extra
+            // se lo llevaba el Spacer de arriba (el de abajo era rígido),
+            // empujando "UN MOMENTO" contra el borde. Ahora se reparte.
+            Spacer(minLength: 40)
         }
     }
 }
@@ -2215,12 +2282,14 @@ struct BuddyMessageBubble: View {
         let key = String(content.dropFirst("category_card:".count))
         let info: (icon: String, label: String, subtitle: String) = {
             switch key {
-            case "transport":     return ("map.fill",            "Cómo llegar",   "Rutas y transporte")
-            case "food":          return ("cup.and.saucer.fill", "Comer",          "Comida y restaurantes")
+            case "transport":     return ("car.fill",            "Transporte",     "Rutas y movilidad")
+            case "food":          return ("cup.and.saucer.fill", "Comer",          "Restaurantes y sabores locales")
+            case "shopping":      return ("bag.fill",            "Compras",        "Productos locales")
             case "translation":   return ("bubble.left.fill",    "Traducir",       "Frases, señales y más")
-            case "activities":    return ("sparkles",            "Qué hacer",      "Tours y actividades")
-            case "accommodation": return ("bed.double.fill",     "Alojamiento",    "Hoteles, hostales y más")
+            case "activities":    return ("figure.hiking",       "Actividades",    "Tours y experiencias")
+            case "accommodation": return ("bed.double.fill",     "Alojamiento",    "Hoteles y hospedajes")
             case "emergency":     return ("shield.fill",         "Seguridad",      "Emergencias y consejos")
+            case "recommendations": return ("lightbulb.fill",    "Consejos","Recomendaciones y ayuda")
             default:              return ("questionmark",        key,              "Solicitud de ayuda")
             }
         }()

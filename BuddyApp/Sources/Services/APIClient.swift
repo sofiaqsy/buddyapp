@@ -116,9 +116,12 @@ final class APIClient {
         }
 
         guard (200..<300).contains(http.statusCode) else {
-            let msg = (try? JSONDecoder().decode(APIErrorResponse.self, from: data))?.error
-            print("❌ [APIClient] \(method) \(path) → \(http.statusCode) reqId=\(reqId.prefix(8)) error=\(msg ?? "nil")")
-            throw APIError.server(http.statusCode, msg ?? "Unknown error")
+            let errResp = try? JSONDecoder().decode(APIErrorResponse.self, from: data)
+            print("❌ [APIClient] \(method) \(path) → \(http.statusCode) reqId=\(reqId.prefix(8)) error=\(errResp?.error ?? "nil")")
+            if http.statusCode == 409, errResp?.error == "active_request_exists" {
+                throw APIError.activeRequestExists(requestId: errResp?.request_id)
+            }
+            throw APIError.server(http.statusCode, errResp?.error ?? "Unknown error")
         }
 
         do {
@@ -794,6 +797,15 @@ final class APIClient {
         return resp.count
     }
 
+    /// Solicitudes sin buddy en los últimos 30 días para un destino — señal de
+    /// demanda sin cubrir, usada para invitar a viajeros a ser buddy en su zona.
+    func fetchUnattendedCount(destinationId: String) async throws -> Int {
+        struct CountResponse: Decodable { let count: Int }
+        let resp: CountResponse = try await request(path: "/matching/unattended/\(destinationId)")
+        print("🤝 [fetchUnattendedCount] destId=\(destinationId.prefix(8)) → count=\(resp.count)")
+        return resp.count
+    }
+
     func resolveLocation(lat: Double, lng: Double) async throws -> APILocationResolution? {
         do {
             let result: APILocationResolution = try await request(
@@ -931,17 +943,23 @@ enum APIError: LocalizedError {
     case invalidURL
     case server(Int, String)
     case unknown
+    /// 409 de POST /matching/request — el traveler ya tiene una solicitud
+    /// activa. El backend manda el request_id a propósito para que el
+    /// cliente pueda RETOMAR esa búsqueda en vez de mostrar un error sin
+    /// salida (espejo de ActiveRequestExists en Android).
+    case activeRequestExists(requestId: String?)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL:         return "URL inválida."
         case .server(let c, let m): return "Error \(c): \(m)"
         case .unknown:            return "Error desconocido."
+        case .activeRequestExists: return "Ya tienes una solicitud activa."
         }
     }
 }
 
-private struct APIErrorResponse: Decodable { let error: String }
+private struct APIErrorResponse: Decodable { let error: String; let request_id: String? }
 private struct EmptyResponse: Decodable {}
 
 // MARK: – Multipart form-data helper

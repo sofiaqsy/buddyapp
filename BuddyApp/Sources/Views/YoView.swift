@@ -9,6 +9,7 @@ struct YoView: View {
     @EnvironmentObject var authState: AuthState
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var router: AppRouter
+    @EnvironmentObject var locationService: LocationService
     @State private var user: APIUser? = nil
     @State private var stickers: [APIUserSticker] = []
     @State private var journeys: [APIJourney] = []
@@ -44,6 +45,9 @@ struct YoView: View {
     // Previene llamadas concurrentes y rapid-retries (Task restarts por cambios de layout)
     @State private var isLoadingProfile = false
     @State private var lastFetchAttemptedAt: Date? = nil
+    // Demanda sin cubrir en la zona actual — invita a postular como buddy ahí.
+    @State private var unattendedCount = 0
+    @State private var unattendedPlaceName = ""
 
     var body: some View {
         NavigationStack {
@@ -114,9 +118,15 @@ struct YoView: View {
                                 .padding(.top, Spacing.xl)
 
                             if buddyMe?.isBuddy != true {
-                                becomeBuddyCTA
-                                    .padding(.horizontal, Spacing.edge)
-                                    .padding(.top, Spacing.md)
+                                if unattendedCount > 0 {
+                                    unattendedDemandCTA
+                                        .padding(.horizontal, Spacing.edge)
+                                        .padding(.top, Spacing.md)
+                                } else {
+                                    becomeBuddyCTA
+                                        .padding(.horizontal, Spacing.edge)
+                                        .padding(.top, Spacing.md)
+                                }
                             }
 
                             // 4 — Colección (historia del viajero)
@@ -215,6 +225,7 @@ struct YoView: View {
             }
         }
         .task { await loadProfile() }
+        .task { await loadUnattendedDemand() }
         .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
             Task { await loadProfile(forceRefresh: true) }
         }
@@ -407,6 +418,46 @@ struct YoView: View {
         .overlay(alignment: .top) {
             Divider()
         }
+    }
+
+    // MARK: – CTA con demanda real — reemplaza a becomeBuddyCTA cuando hay
+    // solicitudes recientes sin buddy en la zona actual del usuario.
+
+    private var unattendedDemandCTA: some View {
+        Button {
+            showBecomeBuddyConfirm = true
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.15))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "hand.wave.fill")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(unattendedCount == 1
+                         ? "1 persona buscó un buddy en \(unattendedPlaceName)"
+                         : "\(unattendedCount) personas buscaron un buddy en \(unattendedPlaceName)")
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(.white)
+                    Text("Sé el primer buddy aquí")
+                        .font(BT.caption1)
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.brand)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+        }
+        .buttonStyle(.plain)
+        .disabled(isBecomingBuddy)
     }
 
     // MARK: – Sticker Section (colección con slots de progresión)
@@ -928,6 +979,28 @@ struct YoView: View {
         }
     }
 
+    /// Si el usuario no es buddy y tiene ubicación disponible, busca cuántas
+    /// solicitudes recientes en su zona actual se quedaron sin buddy — para
+    /// invitarlo a postular ahí mismo (unattendedDemandCTA).
+    private func loadUnattendedDemand() async {
+        guard buddyMe?.isBuddy != true else { return }
+        guard let loc = locationService.userLocation else { return }
+        do {
+            let place = try await APIClient.shared.resolvePlace(
+                lat: loc.coordinate.latitude, lng: loc.coordinate.longitude
+            )
+            guard let destinationId = place.destinationId else { return }
+            let count = try await APIClient.shared.fetchUnattendedCount(destinationId: destinationId)
+            guard count > 0 else { return }
+            await MainActor.run {
+                unattendedCount = count
+                unattendedPlaceName = place.name
+            }
+        } catch {
+            print("👤 [YoView] loadUnattendedDemand falló:", error.localizedDescription)
+        }
+    }
+
     private func loadProfile(forceRefresh: Bool = false) async {
         // Prevent concurrent calls and rapid-fire retries (SwiftUI may restart .task on layout changes)
         if !forceRefresh {
@@ -1286,9 +1359,9 @@ private struct BuddyStatusCard: View {
     }
 
     private static let specialtyOptions: [(key: String, label: String)] = [
-        ("transport", "Cómo llegar"), ("food", "Comer"),
-        ("translation", "Traducir"), ("activities", "Qué hacer"),
-        ("accommodation", "Alojamiento"), ("emergency", "Seguridad"),
+        ("transport", "Transporte"), ("food", "Comer"),
+        ("shopping", "Compras"), ("activities", "Actividades"),
+        ("accommodation", "Alojamiento"), ("recommendations", "Consejos"),
     ]
 
     private var verificationColor: Color {

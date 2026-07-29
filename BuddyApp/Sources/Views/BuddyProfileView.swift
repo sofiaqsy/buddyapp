@@ -49,12 +49,12 @@ struct BuddyProfileView: View {
     // MARK: – Options
 
     private static let categoryOptions: [(key: String, label: String)] = [
-        ("transport",     "Cómo llegar"),
+        ("transport",     "Transporte"),
         ("food",          "Comer"),
-        ("translation",   "Traducir"),
-        ("activities",    "Qué hacer"),
+        ("shopping",      "Compras"),
+        ("activities",    "Actividades"),
         ("accommodation", "Alojamiento"),
-        ("emergency",     "Seguridad"),
+        ("recommendations", "Consejos"),
     ]
 
     // MARK: – Preview contextual por zona
