@@ -93,6 +93,13 @@ final class ChatStore: ObservableObject {
 
     @Published var connections: [ConnectionItem] = []
     @Published var offers: [APIBuddyOffer] = []
+    /// "Ayuda disponible" — respaldo comunitario: solicitudes en la cobertura
+    /// del buddy que NO son su oferta oficial (esas ya están en `offers`).
+    /// Máximo 3, priorizando las ya liberadas y luego las más próximas a liberarse.
+    @Published var availableHelp: [APIHelpRequest] = []
+    /// Momento de la última carga de `availableHelp` — ancla para que las
+    /// tarjetas calculen su cuenta regresiva en vivo sin volver a pedir al servidor.
+    @Published var availableHelpFetchedAt: Date = .distantPast
     @Published var totalUnread: Int = 0
     @Published var isLoading = false
     /// Match cerrado por el buddy cuya encuesta el viajero aún no respondió.
@@ -236,6 +243,8 @@ final class ChatStore: ObservableObject {
     func clearAfterLogout() {
         connections         = []
         offers              = []
+        availableHelp       = []
+        availableHelpFetchedAt = .distantPast
         totalUnread         = 0
         pendingFeedbackMatch = nil
         hasLoadedOnce       = false
@@ -281,10 +290,12 @@ final class ChatStore: ObservableObject {
             items = Self.sorted(items)
             // Load buddy offers in parallel with matches
             let fetchedOffers = (try? await APIClient.shared.fetchMyOffers()) ?? []
+            let fetchedAvailable = (try? await APIClient.shared.fetchAvailableHelp()) ?? []
 
             await MainActor.run {
                 connections = items
                 offers = fetchedOffers
+                applyAvailableHelp(fetchedAvailable)
                 recomputeBadge()
                 isLoading = false
                 hasLoadedOnce = true
@@ -306,6 +317,32 @@ final class ChatStore: ObservableObject {
                 print("❌ ChatStore.load: \(error)")
             }
         }
+    }
+
+    /// Filtra la oferta oficial (ya vive en `offers`), ordena las liberadas
+    /// primero y luego por cercanía a liberarse, y topa a 3 — igual que
+    /// "no quiero abrumar al buddy con una lista larga" del diseño original.
+    @MainActor
+    private func applyAvailableHelp(_ fetched: [APIHelpRequest]) {
+        let candidates = fetched
+            .filter { $0.isActive && $0.isPriorityForMe != true }
+            .sorted { a, b in
+                let aUnlocked = a.isCommunityUnlocked ?? true
+                let bUnlocked = b.isCommunityUnlocked ?? true
+                if aUnlocked != bUnlocked { return aUnlocked && !bUnlocked }
+                return (a.communityUnlocksIn ?? 0) < (b.communityUnlocksIn ?? 0)
+            }
+        availableHelp = Array(candidates.prefix(3))
+        availableHelpFetchedAt = Date()
+    }
+
+    /// Recarga ligera de "Ayuda disponible" — solo esta lista, no matches/mensajes.
+    /// Usada por el polling periódico del tab Conexiones (no hay canal push
+    /// para candidatos que aún no son la oferta oficial de nadie en particular).
+    func refreshAvailableHelp() async {
+        guard Session.hasSession else { return }
+        let fetched = (try? await APIClient.shared.fetchAvailableHelp()) ?? []
+        await MainActor.run { applyAvailableHelp(fetched) }
     }
 
     /// Refresca SOLO una conexión (1 llamada) en vez de recargar toda la lista.
@@ -418,7 +455,7 @@ struct ConexionesView: View {
                     // significa empty state y las recargas son silenciosas
                     } else if !chatStore.hasLoadedOnce && chatStore.connections.isEmpty {
                         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if chatStore.connections.isEmpty && chatStore.offers.isEmpty {
+                    } else if chatStore.connections.isEmpty && chatStore.offers.isEmpty && chatStore.availableHelp.isEmpty {
                         emptyState
                     } else {
                         connectionList
@@ -429,6 +466,16 @@ struct ConexionesView: View {
             .background(Color.canvas)
         }
         .task { if authState.isLoggedIn { await chatStore.load() } }
+        // "Ayuda disponible" no tiene canal push propio (a diferencia de las
+        // ofertas oficiales, que llegan por notificación) — se refresca sola
+        // cada 20s mientras el tab está en pantalla. Se cancela solo al salir.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard !Task.isCancelled, authState.isLoggedIn else { continue }
+                await chatStore.refreshAvailableHelp()
+            }
+        }
         .onChange(of: authState.isLoggedIn) { _, loggedIn in
             if !loggedIn {
                 chatTarget = nil
@@ -716,6 +763,30 @@ struct ConexionesView: View {
                     .padding(.horizontal, Spacing.edge)
                 }
 
+                // AYUDA DISPONIBLE — respaldo comunitario: solicitudes de otros
+                // buddies que, si no responden a tiempo, cualquiera puede tomar.
+                if !chatStore.availableHelp.isEmpty {
+                    listHeader("AYUDA DISPONIBLE", count: chatStore.availableHelp.count, color: Color.accent)
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
+
+                    VStack(spacing: Spacing.sm) {
+                        ForEach(chatStore.availableHelp) { item in
+                            AvailableHelpCard(
+                                item: item,
+                                fetchedAt: chatStore.availableHelpFetchedAt,
+                                onAccepted: { match in
+                                    let item = ChatStore.ConnectionItem(match: match, lastMessage: nil, unreadCount: 0)
+                                    chatTarget = item
+                                },
+                                onHandled: { Task { await chatStore.load() } }
+                            )
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .padding(.horizontal, Spacing.edge)
+                }
+
                 // ACOMPAÑAMIENTO ABIERTO — viajeros a los que YO ayudo ahora
                 if !activeAsBuddy.isEmpty {
                     activeSection("ACOMPAÑAMIENTO ABIERTO", items: activeAsBuddy, color: Color.accent)
@@ -980,6 +1051,161 @@ struct OfferCard: View {
         case 0:  return "Llega hoy"
         case 1:  return "Llega mañana"
         default: return "En \(days) días"
+        }
+    }
+}
+
+// MARK: – Available Help Card ("Ayuda disponible" — respaldo comunitario)
+//
+// Muestra una solicitud que NO es la oferta oficial de este buddy. Durante
+// los primeros communityUnlockSeconds (30s) desde que se creó la cola, el
+// candidato oficial tiene prioridad exclusiva: la tarjeta se ve pero el
+// botón está deshabilitado con una cuenta regresiva. Pasada la ventana,
+// cualquier buddy elegible puede tomarla — el servidor vuelve a validar
+// esto en POST /matching/match, así que esta tarjeta es solo UX, no la
+// única barrera.
+
+struct AvailableHelpCard: View {
+    let item: APIHelpRequest
+    /// Ancla de tiempo capturada cuando se cargó la lista — junto con los
+    /// segundos que mandó el servidor, permite calcular la cuenta regresiva
+    /// en vivo sin volver a pedir al backend cada segundo.
+    let fetchedAt: Date
+    var onAccepted: (APIMatch) -> Void = { _ in }
+    let onHandled: () -> Void
+
+    @State private var isAccepting = false
+    @State private var errorMessage: String?
+
+    private static let categoryLabels: [String: String] = [
+        "transport": "Transporte", "food": "Comer", "shopping": "Compras",
+        "translation": "Traducir", "activities": "Actividades", "accommodation": "Alojamiento",
+        "emergency": "Seguridad", "general": "Ayuda", "recommendations": "Consejos",
+    ]
+
+    private var travelerName: String {
+        item.users?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Viajero"
+    }
+    private var categoryLabel: String {
+        Self.categoryLabels[item.category] ?? item.category.capitalized
+    }
+    private var destinationName: String { item.destination?.name ?? "" }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let elapsed = context.date.timeIntervalSince(fetchedAt)
+            let unlocksIn = max(0, (item.communityUnlocksIn ?? 0) - Int(elapsed))
+            let isUnlocked = (item.isCommunityUnlocked ?? true) && unlocksIn <= 0
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(Color.groupedBg)
+                        .frame(width: 44, height: 44)
+                        .overlay(
+                            Text(String(travelerName.prefix(1)))
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundStyle(Color.accent)
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(travelerName)
+                            .font(BT.headline).foregroundStyle(Color.ink)
+                        HStack(spacing: 4) {
+                            if !destinationName.isEmpty {
+                                Text(destinationName)
+                                    .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                                Text("·")
+                                    .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                            }
+                            Text(categoryLabel)
+                                .font(BT.caption1).foregroundStyle(Color.accent)
+                        }
+                    }
+
+                    Spacer()
+
+                    if let count = item.candidateCount, count > 1 {
+                        Text("\(count) buddies pueden atender")
+                            .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 90)
+                    }
+                }
+                .padding(Spacing.md)
+
+                Divider().padding(.horizontal, Spacing.md)
+
+                HStack(spacing: 10) {
+                    if isUnlocked {
+                        Label("Disponible ahora", systemImage: "circle.fill")
+                            .font(BT.caption1).foregroundStyle(Color.green)
+                    } else {
+                        Label("Otro buddy tiene prioridad · \(unlocksIn)s", systemImage: "clock.fill")
+                            .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    }
+
+                    Spacer()
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(BT.caption1).foregroundStyle(Color.errorRed)
+                    }
+
+                    Button {
+                        guard !isAccepting, isUnlocked else { return }
+                        isAccepting = true
+                        errorMessage = nil
+                        Task {
+                            defer { isAccepting = false }
+                            await accept()
+                        }
+                    } label: {
+                        Group {
+                            if isAccepting {
+                                ProgressView().tint(.white).controlSize(.small)
+                            } else {
+                                Text("Ayudar")
+                                    .font(BT.footnoteBold).foregroundStyle(.white)
+                            }
+                        }
+                        .frame(width: 88, height: 36)
+                        .background(isUnlocked ? Color.accent : Color.inkMuted.opacity(0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isUnlocked || isAccepting)
+                }
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, 12)
+            }
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.lg)
+                    .stroke(Color.accent.opacity(0.2), lineWidth: 1)
+            )
+            .cardShadow()
+        }
+    }
+
+    private func accept() async {
+        do {
+            let match = try await APIClient.shared.acceptRequest(requestId: item.id)
+            Haptic.success()
+            onAccepted(match)
+            onHandled()
+        } catch APIError.alreadyTaken {
+            Haptic.error()
+            errorMessage = "Ya fue tomada"
+            onHandled()
+        } catch APIError.priorityWindowActive {
+            // El reloj local iba adelantado respecto al servidor — refresca
+            // la lista para recalcular la ventana real en vez de insistir.
+            Haptic.error()
+            onHandled()
+        } catch {
+            Haptic.error()
         }
     }
 }

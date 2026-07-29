@@ -121,6 +121,12 @@ final class APIClient {
             if http.statusCode == 409, errResp?.error == "active_request_exists" {
                 throw APIError.activeRequestExists(requestId: errResp?.request_id)
             }
+            if http.statusCode == 403, errResp?.error == "priority_window_active" {
+                throw APIError.priorityWindowActive(secondsRemaining: errResp?.seconds_remaining ?? 0)
+            }
+            if http.statusCode == 409, errResp?.error == "already_taken" {
+                throw APIError.alreadyTaken
+            }
             throw APIError.server(http.statusCode, errResp?.error ?? "Unknown error")
         }
 
@@ -762,6 +768,13 @@ final class APIClient {
         try await request(path: "/matching/requests/\(destinationId)")
     }
 
+    /// "Ayuda disponible" — solicitudes dentro de la cobertura del buddy,
+    /// incluida su propia oferta oficial (isPriorityForMe=true) y las que
+    /// aún están en ventana de exclusividad de otro buddy (isCommunityUnlocked=false).
+    func fetchAvailableHelp() async throws -> [APIHelpRequest] {
+        try await request(path: "/matching/requests/for-buddy")
+    }
+
     /// Cancela la solicitud de ayuda (is_active=false) → deja de mostrarse a buddies
     func cancelHelpRequest(requestId: String) async throws {
         try await requestVoid(path: "/matching/request/\(requestId)", method: "DELETE")
@@ -948,6 +961,12 @@ enum APIError: LocalizedError {
     /// cliente pueda RETOMAR esa búsqueda en vez de mostrar un error sin
     /// salida (espejo de ActiveRequestExists en Android).
     case activeRequestExists(requestId: String?)
+    /// 403 de POST /matching/match — "Ayuda disponible": el candidato oficial
+    /// todavía tiene su ventana de exclusividad, otro buddy no puede aceptar aún.
+    case priorityWindowActive(secondsRemaining: Int)
+    /// 409 de POST /matching/match — otro buddy ganó la carrera (dos buddies
+    /// aceptaron casi al mismo tiempo tras liberarse la solicitud).
+    case alreadyTaken
 
     var errorDescription: String? {
         switch self {
@@ -955,11 +974,13 @@ enum APIError: LocalizedError {
         case .server(let c, let m): return "Error \(c): \(m)"
         case .unknown:            return "Error desconocido."
         case .activeRequestExists: return "Ya tienes una solicitud activa."
+        case .priorityWindowActive: return "Otro buddy tiene prioridad por unos segundos más."
+        case .alreadyTaken:        return "Esta solicitud ya fue tomada por otro buddy."
         }
     }
 }
 
-private struct APIErrorResponse: Decodable { let error: String; let request_id: String? }
+private struct APIErrorResponse: Decodable { let error: String; let request_id: String?; let seconds_remaining: Int? }
 private struct EmptyResponse: Decodable {}
 
 // MARK: – Multipart form-data helper
