@@ -820,7 +820,12 @@ struct InicioView: View {
             let conn = chatStore.connections.first { $0.id == match.id }
             let name = match.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Buddy"
             Button {
-                if let conn { homeChatTarget = conn } else { router.switchTo(.conexiones) }
+                // El chat abre SIEMPRE, directo — ConnectionItem solo necesita
+                // el match, así que no hace falta esperar a que chatStore ya
+                // lo tenga cargado. Antes, si chatStore aún no había sincronizado
+                // este match (ventana común justo después de aceptar), el tap
+                // solo cambiaba al tab Conexiones sin abrir el chat.
+                homeChatTarget = conn ?? ChatStore.ConnectionItem(match: match, lastMessage: nil, unreadCount: 0)
             } label: {
                 HStack(spacing: Spacing.md) {
                     ZStack(alignment: .topTrailing) {
