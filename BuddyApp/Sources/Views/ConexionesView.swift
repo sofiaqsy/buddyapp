@@ -1,6 +1,16 @@
 import SwiftUI
 import AuthenticationServices
 
+/// Etiquetas de categoría en un solo sitio — antes vivían duplicadas en cada
+/// tarjeta y en el preview del último mensaje, y se desincronizaban al añadir
+/// categorías nuevas.
+let categoryLabels: [String: String] = [
+    "transport": "Transporte", "food": "Comer", "shopping": "Compras",
+    "translation": "Traducir", "activities": "Actividades",
+    "accommodation": "Alojamiento", "emergency": "Seguridad",
+    "general": "Ayuda", "recommendations": "Consejos",
+]
+
 // MARK: – CHAT STORE
 // Shared observable — loads matches+messages, exposes unread count for tab badge.
 
@@ -32,6 +42,16 @@ final class ChatStore: ObservableObject {
             isBuddyRole ? match.traveler?.avatarUrl : match.buddy?.avatarUrl
         }
 
+        /// Desde dónde piden ayuda, con la categoría: "Lima · Transporte".
+        /// Un buddy puede estar atendiendo varias ciudades a la vez, así que
+        /// sin esto dos conversaciones abiertas se ven iguales.
+        var contextLine: String? {
+            let place = match.helpRequest?.destination?.name
+            let category = match.helpRequest?.category.map { categoryLabels[$0] ?? $0 }
+            let parts = [place, category].compactMap { $0 }.filter { !$0.isEmpty }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+
         /// El buddy respondió y el viajero aún no ha contestado
         var pendingReply: Bool {
             guard let last = lastMessage, let travelerId = Session.travelerId else { return false }
@@ -57,19 +77,7 @@ final class ChatStore: ObservableObject {
                 }
                 if content.hasPrefix("category_card:") {
                     let key = String(content.dropFirst("category_card:".count))
-                    let label: String = {
-                        switch key {
-                        case "transport":     return "Transporte"
-                        case "food":          return "Comer"
-                        case "shopping":      return "Compras"
-                        case "translation":   return "Traducir"
-                        case "activities":    return "Actividades"
-                        case "accommodation": return "Alojamiento"
-                        case "emergency":     return "Seguridad"
-                        case "recommendations": return "Consejos"
-                        default:              return key
-                        }
-                    }()
+                    let label = categoryLabels[key] ?? key
                     let verb = isBuddyRole ? "Necesita" : "Necesito"
                     return "\(verb) ayuda con \(label)"
                 }
@@ -780,7 +788,7 @@ struct ConexionesView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // ALGUIEN LLEGA — ofertas pendientes para buddies
                 if !chatStore.offers.isEmpty {
-                    listHeader("ALGUIEN LLEGA", count: chatStore.offers.count, color: Color.brand)
+                    listHeader("ASIGNADAS PARA TI", count: chatStore.offers.count, color: Color.brand)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
 
@@ -804,7 +812,7 @@ struct ConexionesView: View {
                 // tomar. Nunca incluye la oferta oficial propia: esa ya está
                 // arriba, en "ALGUIEN LLEGA".
                 if !chatStore.availableHelp.isEmpty {
-                    listHeader("SOLICITUDES DE AYUDA", count: chatStore.availableHelp.count, color: Color.accent)
+                    listHeader("OPORTUNIDADES PARA AYUDAR", count: chatStore.availableHelp.count, color: Color.accent)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
 
@@ -937,12 +945,6 @@ struct OfferCard: View {
     @State private var isAccepting = false
     @State private var isDeclining = false
 
-    private static let categoryLabels: [String: String] = [
-        "transport": "Transporte", "food": "Comer", "shopping": "Compras",
-        "translation": "Traducir", "activities": "Actividades", "accommodation": "Alojamiento",
-        "emergency": "Seguridad", "general": "Ayuda", "recommendations": "Consejos",
-    ]
-
     private var travelerName: String {
         TravelerAlias.shortDisplayName(realName: offer.helpRequest?.users?.fullName,
                                        id: offer.helpRequest?.users?.id)
@@ -953,7 +955,7 @@ struct OfferCard: View {
     }
     private var categoryLabel: String {
         let key = offer.helpRequest?.category ?? ""
-        return Self.categoryLabels[key] ?? key.capitalized
+        return categoryLabels[key] ?? key.capitalized
     }
     private var destinationName: String { offer.helpRequest?.destination?.name ?? "" }
 
@@ -1120,12 +1122,6 @@ struct AvailableHelpCard: View {
     @State private var isAccepting = false
     @State private var errorMessage: String?
 
-    private static let categoryLabels: [String: String] = [
-        "transport": "Transporte", "food": "Comer", "shopping": "Compras",
-        "translation": "Traducir", "activities": "Actividades", "accommodation": "Alojamiento",
-        "emergency": "Seguridad", "general": "Ayuda", "recommendations": "Consejos",
-    ]
-
     private var travelerName: String {
         TravelerAlias.shortDisplayName(realName: item.users?.fullName,
                                        id: item.users?.id ?? item.travelerId)
@@ -1135,7 +1131,7 @@ struct AvailableHelpCard: View {
                                id: item.users?.id ?? item.travelerId)
     }
     private var categoryLabel: String {
-        Self.categoryLabels[item.category] ?? item.category.capitalized
+        categoryLabels[item.category] ?? item.category.capitalized
     }
     private var destinationName: String { item.destination?.name ?? "" }
 
@@ -1299,6 +1295,16 @@ struct ConnectionRow: View {
                     Text(item.lastTime)
                         .font(BT.caption1)
                         .foregroundStyle(Color.inkMuted)
+                }
+
+                // Desde dónde piden ayuda — mismo dato que ya muestran las
+                // tarjetas de oportunidades. Sin esto, con dos ciudades
+                // abiertas a la vez las conversaciones son indistinguibles.
+                if let context = item.contextLine {
+                    Text(context)
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
                 }
 
                 HStack(alignment: .center, spacing: 4) {

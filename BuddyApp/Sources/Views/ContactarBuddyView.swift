@@ -967,6 +967,11 @@ struct BuddyChatView: View {
     private var buddyAvatarUrl: String? {
         isCurrentUserBuddy ? match.traveler?.avatarUrl : match.buddy?.avatarUrl
     }
+    /// Ciudad desde la que se pidió esta ayuda.
+    private var helpPlace: String? {
+        let name = match.helpRequest?.destination?.name
+        return (name?.isEmpty ?? true) ? nil : name
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1018,6 +1023,16 @@ struct BuddyChatView: View {
                         Text(buddyIsOnline ? "en línea" : (isCurrentUserBuddy ? "Tu viajero" : "Tu buddy"))
                             .font(BT.caption1)
                             .foregroundStyle(buddyIsOnline ? Color.onlineGreen : Color.inkMuted)
+                        // Desde dónde piden ayuda. Va aquí arriba porque un
+                        // buddy puede tener varias ciudades abiertas a la vez
+                        // y necesita saberlo sin salir de la conversación.
+                        if let place = helpPlace {
+                            Text("·").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                            Text(place)
+                                .font(BT.caption1)
+                                .foregroundStyle(Color.inkMuted)
+                                .lineLimit(1)
+                        }
                     }
                 }
 

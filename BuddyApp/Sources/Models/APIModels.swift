@@ -437,6 +437,17 @@ struct APIMatch: Decodable, Identifiable {
     let buddy: APIUserRef?
     /// Anotado por el backend: ¿ya existe encuesta de cierre para este match?
     let feedbackSubmitted: Bool?
+    /// El backend siempre lo manda en /matching/matches. Trae el destino, que
+    /// es lo que deja saber DESDE DÓNDE piden ayuda — un buddy puede estar
+    /// atendiendo varios lugares a la vez y sin esto las conversaciones son
+    /// indistinguibles.
+    let helpRequest: MatchHelpRequest?
+
+    struct MatchHelpRequest: Decodable {
+        let category: String?
+        let description: String?
+        let destination: APIDestinationRef?
+    }
 }
 
 // MARK: Buddy Offer (matching_queue entry directed at this buddy)
