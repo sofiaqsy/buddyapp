@@ -1473,7 +1473,10 @@ struct BuddyChatView: View {
                 Task { await closeAsHelper() }
             }
         } message: {
-            Text("\(buddyName) quedará libre para acompañar a otro viajero.")
+            // Este alert lo ve el buddy, así que `buddyName` es el viajero:
+            // el texto va en segunda persona, sobre lo que deja de hacer QUIEN
+            // cierra. Con la redacción del viajero quedaba al revés.
+            Text("Dejarás de acompañar a \(buddyName). Podrás recibir nuevas solicitudes.")
         }
         // Keyboard pre-warmer: pays the iOS keyboard subsystem init cost (~400–800ms on
         // real device) during the chat's appear transition — the right moment because:
@@ -2911,7 +2914,7 @@ struct CloseCycleCard: View {
                  : "¿pudimos cerrar tu duda?"
     }
     private var subtitle: String {
-        isHelper ? "Si ya resolviste su duda, cierra el apoyo para quedar libre y acompañar a otro viajero."
+        isHelper ? "Si ya resolviste su duda, cierra el apoyo. Podrás recibir nuevas solicitudes."
                  : "Si todo está resuelto, cierra la ayuda para que \(buddyName) pueda apoyar a otro viajero."
     }
     private var closeLabel: String { isHelper ? "Sí, resuelto" : "Sí, gracias" }

@@ -20,7 +20,6 @@
 		633BE3C2902AC0BAE8E53E9F /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 911DD4B95D8E0D47599B312C /* LocationService.swift */; };
 		6D8D399EF5406F2E1CE52948 /* CanvasViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70667ADBB4611F842AC0CB15 /* CanvasViewModel.swift */; };
 		7017D95996AAD51175F585C3 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0EB252C314CCE2E4E806F6C /* ImageCache.swift */; };
-		A1B2C3D40001TRAVELERALIAS /* TravelerAlias.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */; };
 		73A61490AADEBA96068CB68A /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A9C67F4EF4667A52E7D1795 /* AuthService.swift */; };
 		79964DB7B77D18DE34C68907 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D98971ED94DF90F50A76D2 /* AppDelegate.swift */; };
 		7D5AC180719A4AE8D8D60408 /* CGFloat+Clamped.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDD3DE0B4B76E6A6B2351A47 /* CGFloat+Clamped.swift */; };
@@ -30,6 +29,7 @@
 		8BB04F916CB3FA0622651384 /* TripsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7237947F0CFF86BB760D14 /* TripsView.swift */; };
 		8E59C55F4ED4D6802B646444 /* UIImage+Trim.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAFBE299D69767E57D35F51A /* UIImage+Trim.swift */; };
 		90CB03866B252B760F8EEC25 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FAB1FFBA5D8CD53C619B5E7 /* DesignSystem.swift */; };
+		A1B2C3D40001TRAVELERALIAS /* TravelerAlias.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* IdentitySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5C /* IdentitySheet.swift */; };
 		A2867083F46638B7985DFEC5 /* InicioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0114A77091C2B311FCEC98 /* InicioView.swift */; };
 		AA11223344556677AABBCCDD /* NotificationType.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABBCC00 /* NotificationType.swift */; };
@@ -96,6 +96,7 @@
 		911DD4B95D8E0D47599B312C /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		98D98971ED94DF90F50A76D2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A14D08D2068CA373725398FF /* RouteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteStore.swift; sourceTree = "<group>"; };
+		A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelerAlias.swift; sourceTree = "<group>"; };
 		AA11223344556677AABBCC00 /* NotificationType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationType.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF67 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		AD6AE5A52F5BCEE6709FB9A8 /* CameraPickerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraPickerView.swift; sourceTree = "<group>"; };
@@ -115,7 +116,6 @@
 		E52DF08CFC799C87146A0FA3 /* BuddyAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuddyAppApp.swift; sourceTree = "<group>"; };
 		EAFBE299D69767E57D35F51A /* UIImage+Trim.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "UIImage+Trim.swift"; sourceTree = "<group>"; };
 		F0EB252C314CCE2E4E806F6C /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
-		A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelerAlias.swift; sourceTree = "<group>"; };
 		F2D003577BED1B1E0C70DF53 /* ContactarBuddyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactarBuddyView.swift; sourceTree = "<group>"; };
 		F628F0672FDB6B0000912F14 /* BuddyApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = BuddyApp.entitlements; path = BuddyApp/BuddyApp.entitlements; sourceTree = "<group>"; };
 		F645EC932FF6EEA50089C6F7 /* BuddyApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BuddyApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
