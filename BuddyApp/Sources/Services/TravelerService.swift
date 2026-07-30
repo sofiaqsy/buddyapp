@@ -210,6 +210,35 @@ final class TravelerService {
 
     // MARK: – Clear (logout / reset)
 
+    /// Avisa al servidor que este dispositivo cerró sesión: revoca la sesión
+    /// device-bound, borra su push token y saca al buddy del pool de
+    /// disponibles. Sin esto el logout era solo local y la cuenta seguía con
+    /// `is_available = true`, así que el waterfall la seguía eligiendo como
+    /// buddy aunque no hubiera nadie dentro de la app.
+    ///
+    /// El JWT llega por parámetro a propósito: `signOut()` borra el
+    /// almacenamiento local de inmediato, así que ya no se puede leer de ahí.
+    func logoutRemote(token: String, deviceId: String, pushToken: String?) async {
+        guard let url = URL(string: "\(coreURL)/logout") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod      = "POST"
+        req.timeoutInterval = 8   // el logout local no debe quedar colgado de la red
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)",  forHTTPHeaderField: "Authorization")
+
+        var body: [String: Any] = ["device_id": deviceId]
+        if let pushToken { body["push_token"] = pushToken }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            print("🚪 [TravelerService.logoutRemote] → \(code)")
+        } catch {
+            print("🚪 [TravelerService.logoutRemote] ⚠️ \(error.localizedDescription)")
+        }
+    }
+
     func clearSession() {
         let hadId = travelerId?.prefix(8) ?? "NIL"
         UserDefaults.standard.removeObject(forKey: "buddy.traveler.id")

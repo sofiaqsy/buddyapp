@@ -372,7 +372,23 @@ final class AuthService {
     /// Cierra la sesión intencionalmente: elimina tokens y notifica a la app.
     /// Distinto de `.sessionExpired` (que es un error de token, no una acción del usuario).
     func signOut() {
+        // Primero avisamos al servidor —y capturamos las credenciales antes de
+        // borrarlas—: si no, la cuenta queda con is_available = true y el
+        // waterfall la sigue eligiendo como buddy sin nadie dentro de la app.
+        // Va en un Task aparte para que la limpieza local sea inmediata aunque
+        // no haya red.
+        if let travelerToken = TravelerService.shared.token {
+            let deviceId  = TravelerService.shared.currentDeviceId
+            let pushToken = UserDefaults.standard.string(forKey: "apns_device_token")
+            Task.detached {
+                await TravelerService.shared.logoutRemote(
+                    token: travelerToken, deviceId: deviceId, pushToken: pushToken
+                )
+            }
+        }
+
         print("🚪 [AuthService.signOut] limpiando sesión OTP…")
+        UserDefaults.standard.removeObject(forKey: "apns_device_token")
         UserDefaults.standard.removeObject(forKey: "buddy.accessToken")
         UserDefaults.standard.removeObject(forKey: "buddy.userId")
         UserDefaults.standard.removeObject(forKey: "buddy.refreshToken")
