@@ -958,14 +958,11 @@ struct BuddyChatView: View {
         if let real = person?.fullName?.trimmingCharacters(in: .whitespacesAndNewlines), !real.isEmpty {
             return real.components(separatedBy: " ").first?.lowercased() ?? real
         }
-        return TravelerAlias.alias(for: otherPersonId).label
+        return TravelerAlias.alias(for: otherPersonId)
     }
     private var buddyInitials: String {
         let person = isCurrentUserBuddy ? match.traveler : match.buddy
-        if let real = person?.fullName?.trimmingCharacters(in: .whitespacesAndNewlines), !real.isEmpty {
-            return real.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined()
-        }
-        return TravelerAlias.alias(for: otherPersonId).emoji
+        return TravelerAlias.initials(realName: person?.fullName, id: otherPersonId)
     }
     private var buddyAvatarUrl: String? {
         isCurrentUserBuddy ? match.traveler?.avatarUrl : match.buddy?.avatarUrl

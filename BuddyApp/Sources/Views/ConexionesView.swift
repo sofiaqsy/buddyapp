@@ -947,6 +947,10 @@ struct OfferCard: View {
         TravelerAlias.shortDisplayName(realName: offer.helpRequest?.users?.fullName,
                                        id: offer.helpRequest?.users?.id)
     }
+    private var travelerInitials: String {
+        TravelerAlias.initials(realName: offer.helpRequest?.users?.fullName,
+                               id: offer.helpRequest?.users?.id)
+    }
     private var categoryLabel: String {
         let key = offer.helpRequest?.category ?? ""
         return Self.categoryLabels[key] ?? key.capitalized
@@ -961,8 +965,8 @@ struct OfferCard: View {
                     .fill(Color.groupedBg)
                     .frame(width: 44, height: 44)
                     .overlay(
-                        Text(String(travelerName.prefix(1)))
-                            .font(.system(size: 17, weight: .bold))
+                        Text(travelerInitials)
+                            .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(Color.brand)
                     )
 
@@ -1126,6 +1130,10 @@ struct AvailableHelpCard: View {
         TravelerAlias.shortDisplayName(realName: item.users?.fullName,
                                        id: item.users?.id ?? item.travelerId)
     }
+    private var travelerInitials: String {
+        TravelerAlias.initials(realName: item.users?.fullName,
+                               id: item.users?.id ?? item.travelerId)
+    }
     private var categoryLabel: String {
         Self.categoryLabels[item.category] ?? item.category.capitalized
     }
@@ -1143,8 +1151,8 @@ struct AvailableHelpCard: View {
                         .fill(Color.groupedBg)
                         .frame(width: 44, height: 44)
                         .overlay(
-                            Text(String(travelerName.prefix(1)))
-                                .font(.system(size: 17, weight: .bold))
+                            Text(travelerInitials)
+                                .font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(Color.accent)
                         )
 

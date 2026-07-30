@@ -23,17 +23,10 @@ import CryptoKit
 
 enum TravelerAlias {
 
-    struct Alias {
-        let name: String
-        let emoji: String
-        var label: String { "\(emoji) \(name)" }
-    }
-
     // feminine = género gramatical, para que el color concuerde
     // ("Vicuña Dorada", no "Vicuña Dorado")
     private struct Noun {
         let word: String
-        let emoji: String
         let feminine: Bool
     }
 
@@ -51,47 +44,47 @@ enum TravelerAlias {
 
     private static let nouns: [Noun] = [
         // Fauna peruana — identidad local, fácil de recordar
-        Noun(word: "Cóndor",     emoji: "🦅", feminine: false),
-        Noun(word: "Llama",      emoji: "🦙", feminine: true),
-        Noun(word: "Puma",       emoji: "🐆", feminine: false),
-        Noun(word: "Vicuña",     emoji: "🦌", feminine: true),
-        Noun(word: "Colibrí",    emoji: "🐦", feminine: false),
-        Noun(word: "Alpaca",     emoji: "🦙", feminine: true),
-        Noun(word: "Jaguar",     emoji: "🐅", feminine: false),
-        Noun(word: "Delfín",     emoji: "🐬", feminine: false),
-        Noun(word: "Tucán",      emoji: "🦜", feminine: false),
-        Noun(word: "Zorro",      emoji: "🦊", feminine: false),
-        Noun(word: "Nutria",     emoji: "🦦", feminine: true),
-        Noun(word: "Búho",       emoji: "🦉", feminine: false),
-        Noun(word: "Garza",      emoji: "🕊️", feminine: true),
-        Noun(word: "Flamenco",   emoji: "🦩", feminine: false),
-        Noun(word: "Tortuga",    emoji: "🐢", feminine: true),
-        Noun(word: "Ballena",    emoji: "🐋", feminine: true),
-        Noun(word: "Guanaco",    emoji: "🦙", feminine: false),
-        Noun(word: "Pelícano",   emoji: "🦆", feminine: false),
-        Noun(word: "Chinchilla", emoji: "🐹", feminine: true),
-        Noun(word: "Anaconda",   emoji: "🐍", feminine: true),
+        Noun(word: "Cóndor",        feminine: false),
+        Noun(word: "Llama",         feminine: true),
+        Noun(word: "Puma",          feminine: false),
+        Noun(word: "Vicuña",        feminine: true),
+        Noun(word: "Colibrí",       feminine: false),
+        Noun(word: "Alpaca",        feminine: true),
+        Noun(word: "Jaguar",        feminine: false),
+        Noun(word: "Delfín",        feminine: false),
+        Noun(word: "Tucán",         feminine: false),
+        Noun(word: "Zorro",         feminine: false),
+        Noun(word: "Nutria",        feminine: true),
+        Noun(word: "Búho",          feminine: false),
+        Noun(word: "Garza",         feminine: true),
+        Noun(word: "Flamenco",      feminine: false),
+        Noun(word: "Tortuga",       feminine: true),
+        Noun(word: "Ballena",       feminine: true),
+        Noun(word: "Guanaco",       feminine: false),
+        Noun(word: "Pelícano",      feminine: false),
+        Noun(word: "Chinchilla",    feminine: true),
+        Noun(word: "Anaconda",      feminine: true),
         // Naturaleza — más neutro, para quien no conecta con la fauna
-        Noun(word: "Río",        emoji: "🏞️", feminine: false),
-        Noun(word: "Bosque",     emoji: "🌲", feminine: false),
-        Noun(word: "Nevado",     emoji: "🏔️", feminine: false),
-        Noun(word: "Brisa",      emoji: "🍃", feminine: true),
-        Noun(word: "Océano",     emoji: "🌊", feminine: false),
-        Noun(word: "Aurora",     emoji: "🌅", feminine: true),
-        Noun(word: "Duna",       emoji: "🏜️", feminine: true),
-        Noun(word: "Volcán",     emoji: "🌋", feminine: false),
-        Noun(word: "Cascada",    emoji: "💧", feminine: true),
-        Noun(word: "Selva",      emoji: "🌴", feminine: true),
-        Noun(word: "Valle",      emoji: "⛰️", feminine: false),
-        Noun(word: "Glaciar",    emoji: "🧊", feminine: false),
-        Noun(word: "Arrecife",   emoji: "🪸", feminine: false),
-        Noun(word: "Páramo",     emoji: "🌾", feminine: false),
-        Noun(word: "Laguna",     emoji: "🪷", feminine: true),
-        Noun(word: "Sendero",    emoji: "🧭", feminine: false),
-        Noun(word: "Manglar",    emoji: "🌿", feminine: false),
-        Noun(word: "Cráter",     emoji: "🌑", feminine: false),
-        Noun(word: "Estepa",     emoji: "🏕️", feminine: true),
-        Noun(word: "Cumbre",     emoji: "🗻", feminine: true),
+        Noun(word: "Río",           feminine: false),
+        Noun(word: "Bosque",        feminine: false),
+        Noun(word: "Nevado",        feminine: false),
+        Noun(word: "Brisa",         feminine: true),
+        Noun(word: "Océano",        feminine: false),
+        Noun(word: "Aurora",        feminine: true),
+        Noun(word: "Duna",          feminine: true),
+        Noun(word: "Volcán",        feminine: false),
+        Noun(word: "Cascada",       feminine: true),
+        Noun(word: "Selva",         feminine: true),
+        Noun(word: "Valle",         feminine: false),
+        Noun(word: "Glaciar",       feminine: false),
+        Noun(word: "Arrecife",      feminine: false),
+        Noun(word: "Páramo",        feminine: false),
+        Noun(word: "Laguna",        feminine: true),
+        Noun(word: "Sendero",       feminine: false),
+        Noun(word: "Manglar",       feminine: false),
+        Noun(word: "Cráter",        feminine: false),
+        Noun(word: "Estepa",        feminine: true),
+        Noun(word: "Cumbre",        feminine: true),
     ]
 
     private static let colors: [ColorWord] = [
@@ -110,10 +103,10 @@ enum TravelerAlias {
 
     /// Alias determinístico para un traveler_id. El mismo id da siempre el
     /// mismo alias, en este dispositivo, en otro, y en el servidor.
-    static func alias(for travelerId: String?) -> Alias {
-        guard let id = travelerId, !id.isEmpty else {
-            return Alias(name: "Viajero", emoji: "🧭")
-        }
+    /// Solo texto — nada de emojis: tiene que leerse como el nombre de una
+    /// persona, y aparece en sitios (títulos de push) donde un icono desentona.
+    static func alias(for travelerId: String?) -> String {
+        guard let id = travelerId, !id.isEmpty else { return "Viajero" }
 
         let digest = Array(SHA256.hash(data: Data(id.utf8)))
         // Dos tramos independientes del hash para que sustantivo y color no se
@@ -122,15 +115,14 @@ enum TravelerAlias {
         let noun  = nouns[Int(be32(digest, 0) % UInt32(nouns.count))]
         let color = colors[Int(be32(digest, 4) % UInt32(colors.count))]
 
-        return Alias(name: "\(noun.word) \(color.form(feminine: noun.feminine))",
-                     emoji: noun.emoji)
+        return "\(noun.word) \(color.form(feminine: noun.feminine))"
     }
 
     /// Cómo mostrar a una persona: su nombre real si lo dio, y si no su alias.
     static func displayName(realName: String?, id: String?) -> String {
         let real = realName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !real.isEmpty { return real }
-        return alias(for: id).label
+        return alias(for: id)
     }
 
     /// Igual que `displayName` pero solo el primer nombre — para encabezados de
@@ -141,7 +133,15 @@ enum TravelerAlias {
         if !real.isEmpty {
             return real.components(separatedBy: " ").first?.capitalized ?? real
         }
-        return alias(for: id).label
+        return alias(for: id)
+    }
+
+    /// Iniciales para el avatar sin foto. Con alias salen dos letras
+    /// ("Tortuga Azul" → "TA"), que distinguen mejor que una sola.
+    static func initials(realName: String?, id: String?) -> String {
+        let name = displayName(realName: realName, id: id)
+        let letters = name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }
+        return letters.isEmpty ? "?" : letters.joined().uppercased()
     }
 
     private static func be32(_ bytes: [UInt8], _ offset: Int) -> UInt32 {
