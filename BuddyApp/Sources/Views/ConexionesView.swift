@@ -110,6 +110,10 @@ final class ChatStore: ObservableObject {
     /// Momento de la última carga de `availableHelpPool` — ancla para que las
     /// tarjetas calculen su cuenta regresiva en vivo sin volver a pedir al servidor.
     @Published var availableHelpFetchedAt: Date = .distantPast
+    /// ¿Este usuario es buddy aprobado? Lo dice el propio endpoint de
+    /// oportunidades — responde 403 a quien no lo es —, así que no hace falta
+    /// una petición extra a /buddy/me solo para decidir si mostrar la sección.
+    @Published var isApprovedBuddy = false
 
     /// Respaldo comunitario: lo que se muestra en "Solicitudes de ayuda".
     /// Se deriva en vez de almacenarse para que una solicitud NUNCA pueda
@@ -319,12 +323,12 @@ final class ChatStore: ObservableObject {
             items = Self.sorted(items)
             // Load buddy offers in parallel with matches
             let fetchedOffers = (try? await APIClient.shared.fetchMyOffers()) ?? []
-            let fetchedAvailable = (try? await APIClient.shared.fetchAvailableHelp()) ?? []
+            let availableResult = await fetchAvailableHelpResult()
 
             await MainActor.run {
                 connections = items
                 offers = fetchedOffers
-                applyAvailableHelp(fetchedAvailable)
+                if let fetchedAvailable = availableResult { applyAvailableHelp(fetchedAvailable) }
                 recomputeBadge()
                 isLoading = false
                 hasLoadedOnce = true
@@ -380,8 +384,24 @@ final class ChatStore: ObservableObject {
     /// para candidatos que aún no son la oferta oficial de nadie en particular).
     func refreshAvailableHelp() async {
         guard Session.hasSession else { return }
-        let fetched = (try? await APIClient.shared.fetchAvailableHelp()) ?? []
+        guard let fetched = await fetchAvailableHelpResult() else { return }
         await MainActor.run { applyAvailableHelp(fetched) }
+    }
+
+    /// Pide las oportunidades y, de paso, actualiza `isApprovedBuddy`.
+    /// Devuelve nil cuando falló la red: en ese caso no se toca ni la lista ni
+    /// la bandera, para no esconder la sección por un corte pasajero.
+    private func fetchAvailableHelpResult() async -> [APIHelpRequest]? {
+        do {
+            let fetched = try await APIClient.shared.fetchAvailableHelp()
+            await MainActor.run { isApprovedBuddy = true }
+            return fetched
+        } catch APIError.server(403, _) {
+            await MainActor.run { isApprovedBuddy = false }
+            return []
+        } catch {
+            return nil
+        }
     }
 
     /// Refresca SOLO una conexión (1 llamada) en vez de recargar toda la lista.
@@ -488,7 +508,10 @@ struct ConexionesView: View {
                     // significa empty state y las recargas son silenciosas
                     } else if !chatStore.hasLoadedOnce && chatStore.connections.isEmpty {
                         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if chatStore.connections.isEmpty && chatStore.offers.isEmpty && chatStore.availableHelp.isEmpty {
+                    // Un buddy aprobado nunca ve el empty state: su sección de
+                    // oportunidades es fija y tiene que estar ahí aunque hoy no
+                    // haya a quién ayudar.
+                    } else if !chatStore.isApprovedBuddy && chatStore.connections.isEmpty && chatStore.offers.isEmpty {
                         emptyState
                     } else {
                         connectionList
@@ -780,9 +803,8 @@ struct ConexionesView: View {
     private var connectionList: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                // Secciones fijas — se muestran siempre, con su contador en 0
-                // cuando están vacías, para que el buddy sepa que existen.
-                Group {
+                // A demanda: solo aparece cuando el matching te eligió.
+                if !chatStore.offers.isEmpty {
                     listHeader("ASIGNADAS PARA TI", count: chatStore.offers.count, color: Color.brand)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
@@ -806,7 +828,11 @@ struct ConexionesView: View {
                 // de otros buddies que, si no responden a tiempo, cualquiera
                 // puede tomar. Nunca incluye la oferta oficial propia: esa ya
                 // está arriba, en "ASIGNADAS PARA TI".
-                Group {
+                // Fija para buddies aprobados: es la puerta al respaldo
+                // comunitario, y si solo apareciera cuando hay algo, nadie
+                // sabría que existe. A un viajero que no es buddy no le dice
+                // nada, así que a ese no se le muestra.
+                if chatStore.isApprovedBuddy {
                     listHeader("OPORTUNIDADES PARA AYUDAR", count: chatStore.availableHelp.count, color: Color.accent)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
@@ -830,7 +856,9 @@ struct ConexionesView: View {
 
                 // ACOMPAÑAMIENTO ABIERTO — toda conversación viva, ayude yo
                 // o me ayuden. La fila ya dice con quién y desde dónde.
-                activeSection("ACOMPAÑAMIENTO ABIERTO", items: active, color: Color.accent)
+                if !active.isEmpty {
+                    activeSection("ACOMPAÑAMIENTO ABIERTO", items: active, color: Color.accent)
+                }
 
                 // ENCUENTROS ANTERIORES — recuerdos: filas planas, quietas, sin cajas
                 Group {
