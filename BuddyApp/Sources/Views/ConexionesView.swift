@@ -786,8 +786,9 @@ struct ConexionesView: View {
     private var connectionList: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                // ALGUIEN LLEGA — ofertas pendientes para buddies
-                if !chatStore.offers.isEmpty {
+                // Secciones fijas — se muestran siempre, con su contador en 0
+                // cuando están vacías, para que el buddy sepa que existen.
+                Group {
                     listHeader("ASIGNADAS PARA TI", count: chatStore.offers.count, color: Color.brand)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
@@ -807,11 +808,11 @@ struct ConexionesView: View {
                     .padding(.horizontal, Spacing.edge)
                 }
 
-                // SOLICITUDES DE AYUDA — respaldo comunitario: solicitudes de
-                // otros buddies que, si no responden a tiempo, cualquiera puede
-                // tomar. Nunca incluye la oferta oficial propia: esa ya está
-                // arriba, en "ALGUIEN LLEGA".
-                if !chatStore.availableHelp.isEmpty {
+                // OPORTUNIDADES PARA AYUDAR — respaldo comunitario: solicitudes
+                // de otros buddies que, si no responden a tiempo, cualquiera
+                // puede tomar. Nunca incluye la oferta oficial propia: esa ya
+                // está arriba, en "ASIGNADAS PARA TI".
+                Group {
                     listHeader("OPORTUNIDADES PARA AYUDAR", count: chatStore.availableHelp.count, color: Color.accent)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
@@ -834,20 +835,18 @@ struct ConexionesView: View {
                 }
 
                 // ACOMPAÑAMIENTO ABIERTO — viajeros a los que YO ayudo ahora
-                if !activeAsBuddy.isEmpty {
-                    activeSection("ACOMPAÑAMIENTO ABIERTO", items: activeAsBuddy, color: Color.accent)
-                }
+                activeSection("ACOMPAÑAMIENTO ABIERTO", items: activeAsBuddy, color: Color.accent)
 
                 // VÍNCULO ABIERTO — la persona que ME ayuda ahora
-                if !activeAsTraveler.isEmpty {
-                    activeSection("VÍNCULO ABIERTO", items: activeAsTraveler, color: Color.teal)
-                }
+                activeSection("VÍNCULO ABIERTO", items: activeAsTraveler, color: Color.teal)
 
                 // ENCUENTROS ANTERIORES — recuerdos: filas planas, quietas, sin cajas
-                if !past.isEmpty {
+                Group {
                     listHeader("ENCUENTROS ANTERIORES", count: past.count, color: Color.inkMuted)
                         .padding(.horizontal, Spacing.edge)
-                        .padding(.top, active.isEmpty ? Spacing.lg : Spacing.xl)
+                        // Mismo respiro que las demás: con las secciones fijas
+                        // el ritmo vertical tiene que ser uniforme.
+                        .padding(.top, Spacing.lg)
                         .padding(.bottom, Spacing.sm)
 
                     VStack(spacing: 0) {
@@ -873,7 +872,7 @@ struct ConexionesView: View {
 
     @ViewBuilder
     private func activeSection(_ title: String, items: [ChatStore.ConnectionItem], color: Color) -> some View {
-        listHeader(title, count: items.count > 1 ? items.count : 0, color: color)
+        listHeader(title, count: items.count, color: color)
             .padding(.horizontal, Spacing.edge)
             .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
 
@@ -896,9 +895,9 @@ struct ConexionesView: View {
     private func listHeader(_ title: String, count: Int, color: Color) -> some View {
         HStack(spacing: 6) {
             Text(title).font(BT.eyebrow).tracking(1.5).foregroundStyle(color)
-            if count > 0 {
-                Text("· \(count)").font(BT.eyebrow).foregroundStyle(Color.inkMuted.opacity(0.7))
-            }
+            // Siempre visible, también en 0: las secciones son fijas, así que
+            // el número es lo que dice si hay algo o no.
+            Text("· \(count)").font(BT.eyebrow).foregroundStyle(Color.inkMuted.opacity(0.7))
         }
     }
 
