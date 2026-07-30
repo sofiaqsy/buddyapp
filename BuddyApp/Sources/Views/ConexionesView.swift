@@ -22,9 +22,11 @@ final class ChatStore: ObservableObject {
 
         var buddyName: String {
             if isBuddyRole {
-                return match.traveler?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Viajero"
+                return TravelerAlias.shortDisplayName(realName: match.traveler?.fullName,
+                                                      id: match.traveler?.id ?? match.travelerId)
             }
-            return match.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Buddy"
+            return TravelerAlias.shortDisplayName(realName: match.buddy?.fullName,
+                                                  id: match.buddy?.id ?? match.buddyId)
         }
         var buddyAvatarUrl: String? {
             isBuddyRole ? match.traveler?.avatarUrl : match.buddy?.avatarUrl
@@ -942,7 +944,8 @@ struct OfferCard: View {
     ]
 
     private var travelerName: String {
-        offer.helpRequest?.users?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Viajero"
+        TravelerAlias.shortDisplayName(realName: offer.helpRequest?.users?.fullName,
+                                       id: offer.helpRequest?.users?.id)
     }
     private var categoryLabel: String {
         let key = offer.helpRequest?.category ?? ""
@@ -1120,7 +1123,8 @@ struct AvailableHelpCard: View {
     ]
 
     private var travelerName: String {
-        item.users?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Viajero"
+        TravelerAlias.shortDisplayName(realName: item.users?.fullName,
+                                       id: item.users?.id ?? item.travelerId)
     }
     private var categoryLabel: String {
         Self.categoryLabels[item.category] ?? item.category.capitalized

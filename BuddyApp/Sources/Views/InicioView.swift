@@ -818,7 +818,8 @@ struct InicioView: View {
         if let match = activeMatch,
            ["accepted", "active", "pending"].contains(match.status) {
             let conn = chatStore.connections.first { $0.id == match.id }
-            let name = match.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Buddy"
+            let name = TravelerAlias.shortDisplayName(realName: match.buddy?.fullName,
+                                                      id: match.buddy?.id ?? match.buddyId)
             Button {
                 // El chat abre SIEMPRE, directo — ConnectionItem solo necesita
                 // el match, así que no hace falta esperar a que chatStore ya
@@ -2529,7 +2530,8 @@ struct ActiveTripCard: View {
         journey.destination?.name ?? journey.title ?? "Tu trip"
     }
     private var buddyName: String {
-        match?.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Buddy"
+        TravelerAlias.shortDisplayName(realName: match?.buddy?.fullName,
+                                       id: match?.buddy?.id ?? match?.buddyId)
     }
     private var buddyAvatarURL: URL? {
         guard let s = match?.buddy?.avatarUrl else { return nil }

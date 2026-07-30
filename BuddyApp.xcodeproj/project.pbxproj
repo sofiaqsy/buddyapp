@@ -20,6 +20,7 @@
 		633BE3C2902AC0BAE8E53E9F /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 911DD4B95D8E0D47599B312C /* LocationService.swift */; };
 		6D8D399EF5406F2E1CE52948 /* CanvasViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70667ADBB4611F842AC0CB15 /* CanvasViewModel.swift */; };
 		7017D95996AAD51175F585C3 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0EB252C314CCE2E4E806F6C /* ImageCache.swift */; };
+		A1B2C3D40001TRAVELERALIAS /* TravelerAlias.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */; };
 		73A61490AADEBA96068CB68A /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A9C67F4EF4667A52E7D1795 /* AuthService.swift */; };
 		79964DB7B77D18DE34C68907 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D98971ED94DF90F50A76D2 /* AppDelegate.swift */; };
 		7D5AC180719A4AE8D8D60408 /* CGFloat+Clamped.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDD3DE0B4B76E6A6B2351A47 /* CGFloat+Clamped.swift */; };
@@ -114,6 +115,7 @@
 		E52DF08CFC799C87146A0FA3 /* BuddyAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuddyAppApp.swift; sourceTree = "<group>"; };
 		EAFBE299D69767E57D35F51A /* UIImage+Trim.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "UIImage+Trim.swift"; sourceTree = "<group>"; };
 		F0EB252C314CCE2E4E806F6C /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
+		A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelerAlias.swift; sourceTree = "<group>"; };
 		F2D003577BED1B1E0C70DF53 /* ContactarBuddyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactarBuddyView.swift; sourceTree = "<group>"; };
 		F628F0672FDB6B0000912F14 /* BuddyApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = BuddyApp.entitlements; path = BuddyApp/BuddyApp.entitlements; sourceTree = "<group>"; };
 		F645EC932FF6EEA50089C6F7 /* BuddyApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BuddyApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -159,6 +161,7 @@
 				2A9C67F4EF4667A52E7D1795 /* AuthService.swift */,
 				D4E5F6A7B8C90819304A5B6C /* TravelerService.swift */,
 				F0EB252C314CCE2E4E806F6C /* ImageCache.swift */,
+				A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */,
 				911DD4B95D8E0D47599B312C /* LocationService.swift */,
 				DB5C072C41D7E0167F465CD6 /* PushService.swift */,
 			);
@@ -399,6 +402,7 @@
 				20E6BC763C6F7E5F7F449B50 /* Extensions.swift in Sources */,
 				FF2360DB68BACBA792C40FCC /* HostProfile.swift in Sources */,
 				7017D95996AAD51175F585C3 /* ImageCache.swift in Sources */,
+				A1B2C3D40001TRAVELERALIAS /* TravelerAlias.swift in Sources */,
 				A2867083F46638B7985DFEC5 /* InicioView.swift in Sources */,
 				633BE3C2902AC0BAE8E53E9F /* LocationService.swift in Sources */,
 				24A2DF8977CA902672B95DAE /* Memory.swift in Sources */,

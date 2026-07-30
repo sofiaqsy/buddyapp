@@ -946,14 +946,26 @@ struct BuddyChatView: View {
     private var isCurrentUserBuddy: Bool {
         effectiveUserId == match.buddyId
     }
+    private var otherPersonId: String? {
+        (isCurrentUserBuddy ? match.traveler?.id : match.buddy?.id)
+            ?? (isCurrentUserBuddy ? match.travelerId : match.buddyId)
+    }
     private var buddyName: String {
         let person = isCurrentUserBuddy ? match.traveler : match.buddy
-        return person?.fullName?.components(separatedBy: " ").first?.lowercased() ?? (isCurrentUserBuddy ? "viajero" : "buddy")
+        // El nombre real va en minúscula, como el resto del encabezado. El alias
+        // no: "Tortuga Azul" funciona como nombre propio y en minúscula se lee
+        // como una cosa, no como alguien.
+        if let real = person?.fullName?.trimmingCharacters(in: .whitespacesAndNewlines), !real.isEmpty {
+            return real.components(separatedBy: " ").first?.lowercased() ?? real
+        }
+        return TravelerAlias.alias(for: otherPersonId).label
     }
     private var buddyInitials: String {
         let person = isCurrentUserBuddy ? match.traveler : match.buddy
-        let name = person?.fullName ?? "?"
-        return name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined()
+        if let real = person?.fullName?.trimmingCharacters(in: .whitespacesAndNewlines), !real.isEmpty {
+            return real.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined()
+        }
+        return TravelerAlias.alias(for: otherPersonId).emoji
     }
     private var buddyAvatarUrl: String? {
         isCurrentUserBuddy ? match.traveler?.avatarUrl : match.buddy?.avatarUrl
