@@ -446,16 +446,10 @@ struct ConexionesView: View {
     @State private var conexSocialLoading = false
     @State private var conexSocialError: String? = nil
 
+    /// Toda conexión viva, sin separar por rol: da igual si YO ayudo o me
+    /// ayudan, es una conversación abierta que sigue su curso.
     private var active: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { ["pending","accepted","active"].contains($0.match.status) }
-    }
-    /// Activos donde YO soy el buddy (estoy ayudando) → Acompañamiento abierto
-    private var activeAsBuddy: [ChatStore.ConnectionItem] {
-        active.filter { $0.isBuddyRole }
-    }
-    /// Activos donde YO soy el viajero (me ayudan) → Vínculo abierto
-    private var activeAsTraveler: [ChatStore.ConnectionItem] {
-        active.filter { !$0.isBuddyRole }
     }
     private var past: [ChatStore.ConnectionItem] {
         chatStore.connections.filter { $0.match.status == "completed" }
@@ -834,11 +828,9 @@ struct ConexionesView: View {
                     .padding(.horizontal, Spacing.edge)
                 }
 
-                // ACOMPAÑAMIENTO ABIERTO — viajeros a los que YO ayudo ahora
-                activeSection("ACOMPAÑAMIENTO ABIERTO", items: activeAsBuddy, color: Color.accent)
-
-                // VÍNCULO ABIERTO — la persona que ME ayuda ahora
-                activeSection("VÍNCULO ABIERTO", items: activeAsTraveler, color: Color.teal)
+                // ACOMPAÑAMIENTO ABIERTO — toda conversación viva, ayude yo
+                // o me ayuden. La fila ya dice con quién y desde dónde.
+                activeSection("ACOMPAÑAMIENTO ABIERTO", items: active, color: Color.accent)
 
                 // ENCUENTROS ANTERIORES — recuerdos: filas planas, quietas, sin cajas
                 Group {
