@@ -416,7 +416,7 @@ struct APIHelpRequest: Decodable, Identifiable {
     let destination: APIDestinationRef?
 
     // Solo presentes en GET /matching/requests/for-buddy — metadata de
-    // "Ayuda disponible" (respaldo comunitario con ventana de exclusividad).
+    // "Solicitudes de ayuda" (respaldo comunitario con ventana de exclusividad).
     let candidateCount: Int?
     let isPriorityForMe: Bool?
     let isCommunityUnlocked: Bool?

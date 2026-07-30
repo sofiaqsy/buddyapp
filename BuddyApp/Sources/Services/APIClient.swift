@@ -768,7 +768,7 @@ final class APIClient {
         try await request(path: "/matching/requests/\(destinationId)")
     }
 
-    /// "Ayuda disponible" — solicitudes dentro de la cobertura del buddy,
+    /// "Solicitudes de ayuda" — solicitudes dentro de la cobertura del buddy,
     /// incluida su propia oferta oficial (isPriorityForMe=true) y las que
     /// aún están en ventana de exclusividad de otro buddy (isCommunityUnlocked=false).
     func fetchAvailableHelp() async throws -> [APIHelpRequest] {
@@ -961,7 +961,7 @@ enum APIError: LocalizedError {
     /// cliente pueda RETOMAR esa búsqueda en vez de mostrar un error sin
     /// salida (espejo de ActiveRequestExists en Android).
     case activeRequestExists(requestId: String?)
-    /// 403 de POST /matching/match — "Ayuda disponible": el candidato oficial
+    /// 403 de POST /matching/match — "Solicitudes de ayuda": el candidato oficial
     /// todavía tiene su ventana de exclusividad, otro buddy no puede aceptar aún.
     case priorityWindowActive(secondsRemaining: Int)
     /// 409 de POST /matching/match — otro buddy ganó la carrera (dos buddies

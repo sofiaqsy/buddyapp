@@ -93,13 +93,24 @@ final class ChatStore: ObservableObject {
 
     @Published var connections: [ConnectionItem] = []
     @Published var offers: [APIBuddyOffer] = []
-    /// "Ayuda disponible" — respaldo comunitario: solicitudes en la cobertura
-    /// del buddy que NO son su oferta oficial (esas ya están en `offers`).
-    /// Máximo 3, priorizando las ya liberadas y luego las más próximas a liberarse.
-    @Published var availableHelp: [APIHelpRequest] = []
-    /// Momento de la última carga de `availableHelp` — ancla para que las
+    /// Solicitudes en la cobertura del buddy que no eran su oferta oficial
+    /// cuando se consultó al servidor. Sin topar — el tope se aplica en
+    /// `availableHelp`, después de descartar las que ya subieron a `offers`.
+    @Published var availableHelpPool: [APIHelpRequest] = []
+    /// Momento de la última carga de `availableHelpPool` — ancla para que las
     /// tarjetas calculen su cuenta regresiva en vivo sin volver a pedir al servidor.
     @Published var availableHelpFetchedAt: Date = .distantPast
+
+    /// Respaldo comunitario: lo que se muestra en "Solicitudes de ayuda".
+    /// Se deriva en vez de almacenarse para que una solicitud NUNCA pueda
+    /// salir en las dos secciones a la vez: si el matching escaló hacia este
+    /// buddy y la solicitud ya es su oferta oficial (`offers`), desaparece de
+    /// aquí en el mismo instante, sin depender de que ambas listas se hayan
+    /// refrescado en el mismo ciclo.
+    var availableHelp: [APIHelpRequest] {
+        let mine = Set(offers.flatMap { [$0.requestId, $0.helpRequest?.id].compactMap { $0 } })
+        return Array(availableHelpPool.filter { !mine.contains($0.id) }.prefix(3))
+    }
     @Published var totalUnread: Int = 0
     @Published var isLoading = false
     /// Match cerrado por el buddy cuya encuesta el viajero aún no respondió.
@@ -243,7 +254,7 @@ final class ChatStore: ObservableObject {
     func clearAfterLogout() {
         connections         = []
         offers              = []
-        availableHelp       = []
+        availableHelpPool   = []
         availableHelpFetchedAt = .distantPast
         totalUnread         = 0
         pendingFeedbackMatch = nil
@@ -319,12 +330,12 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// Filtra la oferta oficial (ya vive en `offers`), ordena las liberadas
-    /// primero y luego por cercanía a liberarse, y topa a 3 — igual que
-    /// "no quiero abrumar al buddy con una lista larga" del diseño original.
+    /// Descarta la oferta oficial propia (ya vive en `offers`) y ordena las
+    /// liberadas primero, luego por cercanía a liberarse. No topa a 3 aquí:
+    /// eso lo hace `availableHelp` tras excluir lo que ya subió a `offers`.
     @MainActor
     private func applyAvailableHelp(_ fetched: [APIHelpRequest]) {
-        let candidates = fetched
+        availableHelpPool = fetched
             .filter { $0.isActive && $0.isPriorityForMe != true }
             .sorted { a, b in
                 let aUnlocked = a.isCommunityUnlocked ?? true
@@ -332,11 +343,10 @@ final class ChatStore: ObservableObject {
                 if aUnlocked != bUnlocked { return aUnlocked && !bUnlocked }
                 return (a.communityUnlocksIn ?? 0) < (b.communityUnlocksIn ?? 0)
             }
-        availableHelp = Array(candidates.prefix(3))
         availableHelpFetchedAt = Date()
     }
 
-    /// Recarga ligera de "Ayuda disponible" — solo esta lista, no matches/mensajes.
+    /// Recarga ligera de "Solicitudes de ayuda" — solo esta lista, no matches/mensajes.
     /// Usada por el polling periódico del tab Conexiones (no hay canal push
     /// para candidatos que aún no son la oferta oficial de nadie en particular).
     func refreshAvailableHelp() async {
@@ -466,7 +476,7 @@ struct ConexionesView: View {
             .background(Color.canvas)
         }
         .task { if authState.isLoggedIn { await chatStore.load() } }
-        // "Ayuda disponible" no tiene canal push propio (a diferencia de las
+        // "Solicitudes de ayuda" no tiene canal push propio (a diferencia de las
         // ofertas oficiales, que llegan por notificación) — se refresca sola
         // cada 20s mientras el tab está en pantalla. Se cancela solo al salir.
         .task {
@@ -507,6 +517,11 @@ struct ConexionesView: View {
                             .count + fresh.count
                     }
                 }
+                // La solicitud que acaba de escalar hacia este buddy sale de la
+                // lista comunitaria en cuanto entra a `offers` (lo garantiza el
+                // filtro derivado), pero el resto de la lista quedó vieja: sus
+                // contadores y su estado de bloqueo avanzaron mientras tanto.
+                await chatStore.refreshAvailableHelp()
             }
         }
         .sheet(item: $chatTarget, onDismiss: { Task { await chatStore.load() } }) { item in
@@ -763,10 +778,12 @@ struct ConexionesView: View {
                     .padding(.horizontal, Spacing.edge)
                 }
 
-                // AYUDA DISPONIBLE — respaldo comunitario: solicitudes de otros
-                // buddies que, si no responden a tiempo, cualquiera puede tomar.
+                // SOLICITUDES DE AYUDA — respaldo comunitario: solicitudes de
+                // otros buddies que, si no responden a tiempo, cualquiera puede
+                // tomar. Nunca incluye la oferta oficial propia: esa ya está
+                // arriba, en "ALGUIEN LLEGA".
                 if !chatStore.availableHelp.isEmpty {
-                    listHeader("AYUDA DISPONIBLE", count: chatStore.availableHelp.count, color: Color.accent)
+                    listHeader("SOLICITUDES DE AYUDA", count: chatStore.availableHelp.count, color: Color.accent)
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
 
@@ -1055,7 +1072,7 @@ struct OfferCard: View {
     }
 }
 
-// MARK: – Available Help Card ("Ayuda disponible" — respaldo comunitario)
+// MARK: – Available Help Card ("Solicitudes de ayuda" — respaldo comunitario)
 //
 // Muestra una solicitud que NO es la oferta oficial de este buddy. Durante
 // los primeros communityUnlockSeconds (30s) desde que se creó la cola, el
