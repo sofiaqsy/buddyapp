@@ -221,6 +221,14 @@ final class ChatStore: ObservableObject {
                             case "match", "offer":
                                 // Nueva conexión / cambio de oferta → recarga completa
                                 await load()
+                            case "request_closed":
+                                // El viajero canceló, o ya lo tomó otro buddy. La
+                                // tarjeta se retira al instante y sin red: seguir
+                                // ofreciendo ayuda que ya no existe es peor que
+                                // esperar, porque el buddy toca y se lleva un error.
+                                if let requestId = obj?["request_id"] as? String {
+                                    await MainActor.run { removeAvailableHelp(requestId: requestId) }
+                                }
                             default:
                                 break
                             }
@@ -344,6 +352,17 @@ final class ChatStore: ObservableObject {
                 return (a.communityUnlocksIn ?? 0) < (b.communityUnlocksIn ?? 0)
             }
         availableHelpFetchedAt = Date()
+    }
+
+    /// Retira una solicitud de la lista comunitaria sin ir a la red — la usa el
+    /// evento `request_closed` del stream para que la tarjeta desaparezca en el
+    /// momento en que el viajero cancela o alguien más la toma.
+    @MainActor
+    func removeAvailableHelp(requestId: String) {
+        guard availableHelpPool.contains(where: { $0.id == requestId }) else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            availableHelpPool.removeAll { $0.id == requestId }
+        }
     }
 
     /// Recarga ligera de "Solicitudes de ayuda" — solo esta lista, no matches/mensajes.
