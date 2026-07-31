@@ -364,7 +364,9 @@ struct APINearbySpot: Decodable, Identifiable {
     let lng: Double?
     let coverUrl: String?
     let destinationId: String?
-    let distanceMeters: Int
+    /// nil solo en /places/search sin coordenadas — /places/nearby siempre lo trae.
+    let distanceMeters: Int?
+    let destination: APIDestinationRef?
     /// "approved" | "pending". Las pendientes aparecen a propósito: son
     /// lugares que otro buddy ya propuso, y elegirlas evita duplicarlos.
     let status: String?
@@ -372,17 +374,18 @@ struct APINearbySpot: Decodable, Identifiable {
     var isPendingApproval: Bool { status == "pending" }
 
     /// "a 40 m" / "a 1,2 km" — la pista que necesita el buddy para saber cuál
-    /// de los locales cercanos es en el que está parado.
+    /// de los locales cercanos es en el que está parado. Sin distancia cae al
+    /// nombre del destino, que al menos ubica el resultado.
     var distanceLabel: String {
-        distanceMeters < 1000
-            ? "a \(distanceMeters) m"
-            : String(format: "a %.1f km", Double(distanceMeters) / 1000)
+        guard let d = distanceMeters else { return destination?.name ?? "" }
+        return d < 1000 ? "a \(d) m" : String(format: "a %.1f km", Double(d) / 1000)
     }
 }
 
 struct APINearbySpotsResponse: Decodable {
     let spots: [APINearbySpot]
-    let radius: Int
+    /// Solo lo manda /places/nearby; /places/search devuelve únicamente `spots`.
+    let radius: Int?
 }
 
 // Página del feed "Historias de viajeros" (cursor pagination)

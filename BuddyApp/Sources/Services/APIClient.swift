@@ -386,6 +386,17 @@ final class APIClient {
         return res.spots
     }
 
+    /// Busca en el CATÁLOGO CURADO, acotado a los destinos donde el traveler es
+    /// buddy. Con coords, el backend ordena por cercanía — el local donde está
+    /// parado sale primero. Distinto de searchPlaces, que consulta OpenStreetMap.
+    func searchCuratedSpots(query q: String, lat: Double? = nil, lng: Double? = nil) async throws -> [APINearbySpot] {
+        var path = "/places/search?q=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)"
+        if let lat, let lng { path += "&lat=\(lat)&lng=\(lng)" }
+        let res: APINearbySpotsResponse = try await request(path: path)
+        print("🔍 [APIClient] searchCuratedSpots q=\"\(q)\" → \(res.spots.count)")
+        return res.spots
+    }
+
     /// Categorías del catálogo, para clasificar un lugar al proponerlo.
     func fetchSpotCategories() async throws -> [APISpotCategory] {
         let res: APISpotCategoriesResponse = try await request(path: "/places/categories")

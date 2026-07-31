@@ -68,7 +68,7 @@ struct CompartirLugarSheet: View {
 
     // Búsqueda (paso "Buscar otro lugar")
     @State private var searchText = ""
-    @State private var searchResults: [APIPlaceResult] = []
+    @State private var searchResults: [APINearbySpot] = []
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
 
@@ -390,7 +390,7 @@ struct CompartirLugarSheet: View {
                         .foregroundStyle(Color.inkMuted)
                         .font(.system(size: 15))
                 }
-                TextField("Buscar un lugar", text: $searchText)
+                TextField("Buscar en tus lugares", text: $searchText)
                     .font(BT.callout)
                     .onChange(of: searchText) { _, newValue in triggerSearch(query: newValue) }
             }
@@ -410,12 +410,34 @@ struct CompartirLugarSheet: View {
                     .padding(.top, Spacing.sm)
             }
 
-            List(searchResults) { result in
-                Button { submitSearchResult(result) } label: {
+            if !isSearching && searchText.trimmingCharacters(in: .whitespaces).count >= 2 && searchResults.isEmpty {
+                VStack(spacing: Spacing.sm) {
+                    Text("Ningún lugar del catálogo coincide")
+                        .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                    Button { step = .propose } label: {
+                        Text("Registrarlo como nuevo")
+                            .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, Spacing.xl)
+            }
+
+            List(searchResults) { spot in
+                Button { Haptic.medium(); errorMessage = nil; submit(spotId: spot.id) } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(result.title).font(BT.body).foregroundStyle(Color.ink)
-                        if let subtitle = result.subtitle {
-                            Text(subtitle).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                        Text(spot.name).font(BT.body).foregroundStyle(Color.ink)
+                        HStack(spacing: 6) {
+                            Text(spot.distanceLabel).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                            if spot.isPendingApproval {
+                                Text("por revisar")
+                                    .font(BT.caption2)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.inkMuted.opacity(0.12))
+                                    .foregroundStyle(Color.inkMuted)
+                                    .clipShape(Capsule())
+                            }
                         }
                     }
                 }
@@ -439,29 +461,14 @@ struct CompartirLugarSheet: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run { isSearching = true }
-            let results = (try? await APIClient.shared.searchPlaces(query: trimmed)) ?? []
+            // Catálogo curado, no OpenStreetMap: aquí se elige un lugar que el
+            // buddy puede documentar, y con las coords el backend pone primero
+            // los de donde está parado.
+            let results = (try? await APIClient.shared.searchCuratedSpots(
+                query: trimmed, lat: currentCoords?.lat, lng: currentCoords?.lng
+            )) ?? []
             guard !Task.isCancelled else { return }
             await MainActor.run { searchResults = results; isSearching = false }
-        }
-    }
-
-    private func submitSearchResult(_ result: APIPlaceResult) {
-        Haptic.medium()
-        errorMessage = nil
-        switch result.source {
-        case "place":
-            submit(placeId: result.id)
-        case "destination":
-            submit(destinationId: result.id)
-        default:
-            // "nominatim" — resultado crudo sin fila en `place` todavía;
-            // createJourney lo resuelve con findOrCreatePlace vía lat/lng,
-            // mismo camino que el flujo normal de registrar un trip.
-            guard let lat = result.lat, let lng = result.lng else {
-                errorMessage = "Ese resultado no tiene coordenadas — prueba con otra búsqueda."
-                return
-            }
-            submit(lat: lat, lng: lng)
         }
     }
 
