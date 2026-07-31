@@ -55,6 +55,7 @@
 		EB885BCD790BE8F8588C7161 /* ContactarBuddyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D003577BED1B1E0C70DF53 /* ContactarBuddyView.swift */; };
 		ECFDF38E9DE6F2FF708A8E25 /* PushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB5C072C41D7E0167F465CD6 /* PushService.swift */; };
 		F3EEECD5011BA7E4A28BE3FA /* ConexionesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B30BD2B47B8F5E9ECB38C88 /* ConexionesView.swift */; };
+		1672104098651A71831ACF8C /* CompartirLugarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCF03F7AC0F1468B7F75E31 /* CompartirLugarView.swift */; };
 		F47B6C814587AC55947EA053 /* TripListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14058650597585CE747ECECB /* TripListView.swift */; };
 		F54F0D6BE451B311AD40C151 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84154B0F926E18D1C654A29F /* OnboardingView.swift */; };
 		F63B1229581DC121E84CE61A /* YoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B836978B401B0B9D6162E18 /* YoView.swift */; };
@@ -83,6 +84,7 @@
 		54CD87BE2DCFF144A757CB35 /* Place.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Place.swift; sourceTree = "<group>"; };
 		5AEE86DBD37FC015433C97B6 /* CollagePage.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CollagePage.swift; sourceTree = "<group>"; };
 		5B30BD2B47B8F5E9ECB38C88 /* ConexionesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConexionesView.swift; sourceTree = "<group>"; };
+		6DCF03F7AC0F1468B7F75E31 /* CompartirLugarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompartirLugarView.swift; sourceTree = "<group>"; };
 		60CE9A02C876FE7781D90EF0 /* UIImage+StickerBorder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "UIImage+StickerBorder.swift"; sourceTree = "<group>"; };
 		615406876C9A70F1BC6163BC /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		670E157765E203EABD5FBA3A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -224,6 +226,7 @@
 			isa = PBXGroup;
 			children = (
 				5B30BD2B47B8F5E9ECB38C88 /* ConexionesView.swift */,
+				6DCF03F7AC0F1468B7F75E31 /* CompartirLugarView.swift */,
 				F2D003577BED1B1E0C70DF53 /* ContactarBuddyView.swift */,
 				865375DE2EB61A0476DD78D6 /* ContentView.swift */,
 				C40DBD43402EEE4C2BD84DFF /* DescubrirView.swift */,
@@ -394,6 +397,7 @@
 				C3D4E5F6A7B80819304A5B6C /* TravelerService.swift in Sources */,
 				E80965B430145F158456F8E5 /* BuddyAppApp.swift in Sources */,
 				F3EEECD5011BA7E4A28BE3FA /* ConexionesView.swift in Sources */,
+				1672104098651A71831ACF8C /* CompartirLugarView.swift in Sources */,
 				EB885BCD790BE8F8588C7161 /* ContactarBuddyView.swift in Sources */,
 				16806C841F19F77869CC6BD0 /* ContentView.swift in Sources */,
 				BD836F8868951DD7A728FBCE /* DescubrirView.swift in Sources */,

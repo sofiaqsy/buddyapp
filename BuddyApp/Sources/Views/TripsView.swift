@@ -29,6 +29,10 @@ struct TripsView: View {
     @State private var deleteTarget: APIJourney? = nil
     @State private var activeMatch: APIMatch? = nil
     @State private var showPublishConfirmFromParent = false   // disparado tras auth
+    // Fase 2 "Buddy Community Places" — mismo singleton y flag que ya usa
+    // ConexionesView para gatear "Oportunidades para ayudar".
+    @StateObject private var chatStore = ChatStore.shared
+    @State private var showCompartirLugar = false
 
     struct EditTarget: Identifiable {
         let id = UUID()
@@ -126,6 +130,18 @@ struct TripsView: View {
                         emptyState
                     }
 
+                    // Fase 2 de "Buddy Community Places" — discreta a propósito,
+                    // solo para buddies aprobados. Ver ConexionesView.isApprovedBuddy
+                    // para el mismo criterio ya usado en "Oportunidades para ayudar".
+                    if Session.hasSession && chatStore.isApprovedBuddy {
+                        CompartirLugarCard {
+                            Haptic.medium()
+                            showCompartirLugar = true
+                        }
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.top, Spacing.md)
+                    }
+
                     Spacer().frame(height: 100)
                 }
             }
@@ -194,6 +210,14 @@ struct TripsView: View {
         .fullScreenCover(item: $editTarget) { target in
             TripEditorSheet(journey: target.journey, initialPage: target.pageIndex) {
                 Task { await loadJourneys() }
+            }
+        }
+        .sheet(isPresented: $showCompartirLugar) {
+            CompartirLugarSheet { journey in
+                // Mismo editor Memoir del flujo normal — el journey ya nació con
+                // trip_id=null (attachToTrip:false), así que publicarlo (en
+                // TripCanvasEditorView → publishJourney) nunca toca ningún trip.
+                editTarget = EditTarget(journey: journey, pageIndex: -1)
             }
         }
         .sheet(isPresented: $showIdentitySheet, onDismiss: {
