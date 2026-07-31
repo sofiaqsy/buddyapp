@@ -348,10 +348,16 @@ final class APIClient {
         title: String? = nil,
         arrivalAt: Date? = nil,
         knowsHowToGet: Bool? = nil,
-        hasLodging: Bool? = nil
+        hasLodging: Bool? = nil,
+        // Explícito a propósito, aunque true ya sea el default del backend:
+        // dentro de unos meses, alguien viendo un POST /journeys sin este
+        // campo no sabría que existe un segundo comportamiento
+        // (attachToTrip: false — "Compartir un lugar"). El contrato queda
+        // siempre visible en el sitio de la llamada.
+        attachToTrip: Bool = true
     ) async throws -> APIJourney {
         // Backend derives owner from the Traveler JWT — no identity param in body.
-        var body: [String: Any] = [:]
+        var body: [String: Any] = ["attach_to_trip": attachToTrip]
         if let destinationId   { body["destination_id"]   = destinationId }
         if let placeId         { body["place_id"]         = placeId }
         if let osmId           { body["osm_id"]           = osmId }
@@ -361,7 +367,7 @@ final class APIClient {
         if let arrivalAt       { body["arrival_at"]        = ISO8601DateFormatter().string(from: arrivalAt) }
         if let knowsHowToGet   { body["knows_how_to_get"] = knowsHowToGet }
         if let hasLodging      { body["has_lodging"]       = hasLodging }
-        print("🧳 [APIClient] createJourney destination_id=\(destinationId ?? "nil") place_id=\(placeId ?? "nil") osm_id=\(osmId ?? "nil") lat=\(lat.map { "\($0)" } ?? "nil") lng=\(lng.map { "\($0)" } ?? "nil")")
+        print("🧳 [APIClient] createJourney destination_id=\(destinationId ?? "nil") place_id=\(placeId ?? "nil") osm_id=\(osmId ?? "nil") lat=\(lat.map { "\($0)" } ?? "nil") lng=\(lng.map { "\($0)" } ?? "nil") attach_to_trip=\(attachToTrip)")
         return try await request(path: "/journeys", method: "POST", body: body)
     }
 
