@@ -1139,6 +1139,10 @@ struct TripEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var didStart = false
     @State private var isPublishingShare = false
+    /// Salir del editor de UNA página (el checkmark del canvas) solo guarda esa
+    /// página — no es "terminé de compartir". Este confirm es el único lugar
+    /// donde esa decisión se toma explícitamente.
+    @State private var showShareConfirm = false
 
     init(journey: APIJourney, initialPage: Int, isStandaloneShare: Bool = false, onDismiss: @escaping () -> Void) {
         self.journey = journey
@@ -1175,23 +1179,27 @@ struct TripEditorSheet: View {
             .onChange(of: bookVM.isEditing) { _, editing in
                 guard !editing else { return }
                 if isStandaloneShare {
-                    publishShareAndDismiss()
+                    let hasContent = bookVM.pages.contains { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+                    if hasContent {
+                        showShareConfirm = true   // guardaste la foto — ¿ya terminaste?
+                    } else {
+                        // Sin fotos — nada que compartir. El journey queda sin
+                        // publicar (is_public sigue false, nunca visible) y se descarta.
+                        dismiss()
+                    }
                 } else {
                     dismiss()
                 }
+            }
+            .confirmationDialog("¿Listo para compartir?", isPresented: $showShareConfirm, titleVisibility: .visible) {
+                Button("Agregar otra foto") { bookVM.addPage() }
+                Button("Compartir") { publishShareAndDismiss() }
+                Button("Cancelar", role: .cancel) { dismiss() }
             }
     }
 
     private func publishShareAndDismiss() {
         guard !isPublishingShare else { return }
-        let hasContent = bookVM.pages.contains { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
-        guard hasContent else {
-            // Sin fotos — nada que compartir. El journey queda sin publicar
-            // (nunca visible para nadie, is_public sigue false) y se descarta.
-            print("📤 [publishShareAndDismiss] sin contenido — journeyId=\(journey.id) se descarta sin publicar")
-            dismiss()
-            return
-        }
         isPublishingShare = true
         let jId = journey.id
         let pages = bookVM.pages
