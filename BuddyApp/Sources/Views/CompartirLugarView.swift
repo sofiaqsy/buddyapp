@@ -79,6 +79,10 @@ struct CompartirLugarSheet: View {
     @State private var proposedName = ""
     @State private var categories: [APISpotCategory] = []
     @State private var selectedCategoryId: String?
+    /// Nombre del local más cercano, para titular el botón antes de tocarlo.
+    @State private var closestSpotName: String?
+    @State private var isPrefetching = false
+    @State private var didPrefetch = false
 
     enum Step { case choose, search, nearby }
 
@@ -93,6 +97,7 @@ struct CompartirLugarSheet: View {
             }
             .navigationTitle("Compartir un lugar")
             .navigationBarTitleDisplayMode(.inline)
+            .task { await prefetchNearby() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancelar") { dismiss() }
@@ -114,11 +119,14 @@ struct CompartirLugarSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, Spacing.lg)
 
+            // Con el local ya detectado se nombra en el botón ("El encanto
+            // (Lugar actual)"): el buddy confirma de un vistazo que apuntamos
+            // al sitio correcto antes de tocar nada.
             Button { useCurrentLocation() } label: {
                 optionRow(
                     icon: "location.fill",
-                    title: "Lugar actual",
-                    subtitle: "recomendado",
+                    title: closestSpotName.map { "\($0) (Lugar actual)" } ?? "Lugar actual",
+                    subtitle: isPrefetching ? "buscando…" : "recomendado",
                     isLoading: isSubmitting
                 )
             }
@@ -170,10 +178,35 @@ struct CompartirLugarSheet: View {
         .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
     }
 
-    /// No crea el journey todavía: primero pregunta al catálogo qué locales hay
-    /// cerca. El GPS sabe DÓNDE estás, pero solo el buddy sabe EN QUÉ local —
-    /// dos negocios pueden estar a 20 m uno del otro, dentro del margen de error
-    /// del propio GPS, así que elegir por él se equivocaría seguido.
+    /// Consulta el catálogo al abrir el sheet, no al tocar el botón, para poder
+    /// nombrar el local en la propia opción ("El encanto (Lugar actual)").
+    /// En paralelo trae las categorías: si no hay spots cerca, el formulario de
+    /// propuesta ya las tiene y no aparecen a destiempo.
+    private func prefetchNearby() async {
+        guard !didPrefetch, let loc = LocationService.current?.userLocation else { return }
+        didPrefetch = true
+        let lat = loc.coordinate.latitude
+        let lng = loc.coordinate.longitude
+        await MainActor.run {
+            currentCoords = (lat, lng)
+            isPrefetching = true
+        }
+        async let spotsTask = try? await APIClient.shared.fetchNearbySpots(lat: lat, lng: lng)
+        async let catsTask  = try? await APIClient.shared.fetchSpotCategories()
+        let (spots, cats) = await (spotsTask, catsTask)
+        await MainActor.run {
+            nearbySpots = spots ?? []
+            if let cats { categories = cats }
+            // El más cercano ya viene primero desde el backend.
+            closestSpotName = nearbySpots.first?.name
+            isPrefetching = false
+        }
+    }
+
+    /// No crea el journey todavía: el GPS sabe DÓNDE estás, pero solo el buddy
+    /// sabe EN QUÉ local — dos negocios pueden estar a 20 m uno del otro, dentro
+    /// del margen de error del propio GPS, así que elegir por él se equivocaría
+    /// seguido. Por eso lleva a la lista aunque el botón ya nombre uno.
     private func useCurrentLocation() {
         guard let loc = LocationService.current?.userLocation else {
             errorMessage = "No pudimos obtener tu ubicación. Activa el GPS o busca el lugar manualmente."
@@ -187,16 +220,18 @@ struct CompartirLugarSheet: View {
         let lng = loc.coordinate.longitude
         currentCoords = (lat, lng)
         step = .nearby
+
+        // Si la precarga ya trajo la lista, se muestra al instante.
+        guard !didPrefetch else { return }
         isLoadingNearby = true
         Task {
-            // En paralelo: si no hay spots cerca, el formulario de propuesta ya
-            // tiene sus categorías listas y no aparecen "a destiempo".
-            async let spotsTask   = try? await APIClient.shared.fetchNearbySpots(lat: lat, lng: lng)
-            async let catsTask    = try? await APIClient.shared.fetchSpotCategories()
+            async let spotsTask = try? await APIClient.shared.fetchNearbySpots(lat: lat, lng: lng)
+            async let catsTask  = try? await APIClient.shared.fetchSpotCategories()
             let (spots, cats) = await (spotsTask, catsTask)
             await MainActor.run {
                 nearbySpots = spots ?? []
                 if let cats { categories = cats }
+                closestSpotName = nearbySpots.first?.name
                 isLoadingNearby = false
             }
         }
