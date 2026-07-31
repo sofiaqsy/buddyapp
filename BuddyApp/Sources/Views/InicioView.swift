@@ -1008,14 +1008,10 @@ struct InicioView: View {
 
         // Mark refresh time to throttle scenePhase changes
         await MainActor.run { lastRefreshTripStateAt = Date() }
-        guard let fetchedJourneys = try? await APIClient.shared.fetchTravelerJourneys() else {
+        guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else {
             print("❌ [refreshTripState] fetchTravelerJourneys falló")
             return
         }
-        // tripId == nil excluye los journeys de "Compartir un lugar" (Fase 2):
-        // uno de esos, con status="active" y sin trip, se colaba como si fuera
-        // TU viaje en curso en el Home — confirmado en logs de dispositivo.
-        let journeys = fetchedJourneys.filter { $0.tripId != nil }
         print("🔄 [refreshTripState] \(journeys.count) journey(s): \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
         let active   = journeys.first(where: { $0.status == "active" })
         let planning = journeys.first(where: { $0.status == "planning" })
@@ -1060,9 +1056,7 @@ struct InicioView: View {
     /// Fetch ligero para navegar al detalle rápido tras "Ya llegué"
     private func quickLoadForDetail() async {
         guard Session.hasSession else { return }
-        guard let fetchedJourneys = try? await APIClient.shared.fetchTravelerJourneys() else { return }
-        // Ver comentario en refreshTripState — excluye "Compartir un lugar".
-        let journeys = fetchedJourneys.filter { $0.tripId != nil }
+        guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else { return }
         let active = journeys.first(where: { $0.status == "active" })
 
         // Asegura que routeStore tenga la ruta
@@ -1150,10 +1144,8 @@ struct InicioView: View {
             // fetchTravelerJourneys usa el JWT (traveler o Supabase) — válido para ambos.
             let snapshotId = Session.travelerId   // capturar ANTES del await
             print("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
-            let fetchedJourneys = try await APIClient.shared.fetchTravelerJourneys()
+            let journeys = try await APIClient.shared.fetchTravelerJourneys()
             guard !Task.isCancelled else { return }
-            // Ver comentario en refreshTripState — excluye "Compartir un lugar".
-            let journeys = fetchedJourneys.filter { $0.tripId != nil }
             print("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
             // Anti cross-account guard: if identity was hydrated mid-flight (cold launch
             // where validate() forces a refresh after loadData already started with nil),

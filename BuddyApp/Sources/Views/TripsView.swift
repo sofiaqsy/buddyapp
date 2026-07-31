@@ -38,40 +38,32 @@ struct TripsView: View {
         let id = UUID()
         let journey: APIJourney
         let pageIndex: Int
-        /// true → "Compartir un lugar": publica solo al salir del editor, sin
-        /// pasar por el botón "Publicar" de la tarjeta de trip (que ni
-        /// siquiera se muestra para estos journeys — ver tripJourneys).
-        var isStandaloneShare: Bool = false
     }
 
     // El tab es el taller del trip EN CURSO. Los publicados viven en el perfil.
     //
-    // tripId == nil excluye a propósito los journeys de "Compartir un lugar"
-    // (Fase 2): sin este filtro, uno de esos journeys (status="active", sin
-    // trip) se colaba como si fuera TU viaje en curso — mostraba su tarjeta,
-    // su botón de cancelar, etc., cuando en realidad no es un trip. No
-    // pertenecen a esta pantalla en absoluto — se publican solos al salir
-    // del editor (ver TripEditorSheet.isStandaloneShare) y de ahí en más
-    // solo viven en la galería del lugar.
-    private var tripJourneys: [APIJourney] { journeys.filter { $0.tripId != nil } }
-
+    // Los journeys de "Compartir un lugar" (trip_id=null) usan exactamente
+    // este mismo flujo — misma tarjeta, mismo editor, mismo botón "Publicar".
+    // No hay ninguna rama especial para ellos: la única diferencia real vive
+    // en el backend (trip_id null → nunca participan del PATCH /trips/:id en
+    // cascada), no en esta pantalla.
     private var activeJourney: APIJourney? {
         // Override local primero (trip recién activado, aunque el server diga planning)
         if let id = locallyActivatedId, !dismissedJourneyIds.contains(id),
-           let j = tripJourneys.first(where: { $0.id == id }) {
+           let j = journeys.first(where: { $0.id == id }) {
             return j.withStatus("active")
         }
-        return tripJourneys.first { $0.status == "active" && !dismissedJourneyIds.contains($0.id) }
+        return journeys.first { $0.status == "active" && !dismissedJourneyIds.contains($0.id) }
     }
     private var planningJourney: APIJourney? {
-        tripJourneys.first { $0.status == "planning" && $0.id != locallyActivatedId && !dismissedJourneyIds.contains($0.id) }
+        journeys.first { $0.status == "planning" && $0.id != locallyActivatedId && !dismissedJourneyIds.contains($0.id) }
     }
 
     /// Trips vivos del usuario: en curso (active) y por llegar (planning).
     /// Los completados/publicados salen del tab (viven en el perfil/comunidad).
     private var visibleTrips: [APIJourney] {
         let rank: (String) -> Int = { s in s == "active" ? 0 : 1 }
-        return tripJourneys
+        return journeys
             .filter {
                 !dismissedJourneyIds.contains($0.id)
                 && $0.tripId != dismissedTripId
@@ -222,20 +214,18 @@ struct TripsView: View {
             Task { await loadJourneys() }
         }
         .fullScreenCover(item: $editTarget) { target in
-            TripEditorSheet(journey: target.journey, initialPage: target.pageIndex, isStandaloneShare: target.isStandaloneShare) {
+            TripEditorSheet(journey: target.journey, initialPage: target.pageIndex) {
                 Task { await loadJourneys() }
             }
         }
         .sheet(isPresented: $showCompartirLugar) {
             CompartirLugarSheet { journey in
-                // Mismo editor Memoir del flujo normal — el journey ya nació con
-                // trip_id=null (attachToTrip:false), así que publicarlo (en
-                // TripCanvasEditorView → publishJourney) nunca toca ningún trip.
-                // isStandaloneShare: publica solo al salir del editor — no hay
-                // tarjeta de trip ni botón "Publicar" visible para este journey
-                // (tripJourneys lo excluye a propósito), así que "Compartir un
-                // lugar" tiene que completarse solo, sin un segundo paso manual.
-                editTarget = EditTarget(journey: journey, pageIndex: -1, isStandaloneShare: true)
+                // Mismo editor Memoir, misma tarjeta, mismo botón "Publicar" que
+                // un trip normal — el journey ya nació con trip_id=null
+                // (attachToTrip:false), así que publicarlo nunca toca ningún
+                // trip. Esa es la única diferencia real; en la UI se comporta
+                // idéntico a cualquier otro journey.
+                editTarget = EditTarget(journey: journey, pageIndex: -1)
             }
         }
         .sheet(isPresented: $showIdentitySheet, onDismiss: {
@@ -477,7 +467,7 @@ struct TripsView: View {
             print("🧳 [TripsView] selectedTrip id=\(t.id.prefix(8)) dest=\(t.destination?.name ?? "nil") place=\(t.place?.name ?? "nil") title=\(t.title ?? "nil")")
         }
         // Cargar match activo para mostrar avatar del buddy
-        let hasActive = tripJourneys.contains { $0.status == "active" }
+        let hasActive = journeys.contains { $0.status == "active" }
         if hasActive, let matches = try? await APIClient.shared.fetchMatches() {
             let myTravelerId = Session.travelerId
             activeMatch = matches.first { ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myTravelerId }
@@ -1129,25 +1119,14 @@ struct TripEditorSheet: View {
     let journey: APIJourney
     let initialPage: Int
     let onDismiss: () -> Void
-    /// "Compartir un lugar" (Fase 2): sin tarjeta de trip ni botón "Publicar"
-    /// visible para este journey (tripJourneys lo excluye a propósito), así
-    /// que salir del editor con contenido ES el acto de publicar — no hay
-    /// segundo paso manual.
-    var isStandaloneShare: Bool = false
 
     @StateObject private var bookVM: TripBookViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var didStart = false
-    @State private var isPublishingShare = false
-    /// Salir del editor de UNA página (el checkmark del canvas) solo guarda esa
-    /// página — no es "terminé de compartir". Este confirm es el único lugar
-    /// donde esa decisión se toma explícitamente.
-    @State private var showShareConfirm = false
 
-    init(journey: APIJourney, initialPage: Int, isStandaloneShare: Bool = false, onDismiss: @escaping () -> Void) {
+    init(journey: APIJourney, initialPage: Int, onDismiss: @escaping () -> Void) {
         self.journey = journey
         self.initialPage = initialPage
-        self.isStandaloneShare = isStandaloneShare
         self.onDismiss = onDismiss
         _bookVM = StateObject(wrappedValue: TripBookViewModel(journeyId: journey.id))
     }
@@ -1177,42 +1156,8 @@ struct TripEditorSheet: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .onChange(of: bookVM.isEditing) { _, editing in
-                guard !editing else { return }
-                if isStandaloneShare {
-                    let hasContent = bookVM.pages.contains { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
-                    if hasContent {
-                        showShareConfirm = true   // guardaste la foto — ¿ya terminaste?
-                    } else {
-                        // Sin fotos — nada que compartir. El journey queda sin
-                        // publicar (is_public sigue false, nunca visible) y se descarta.
-                        dismiss()
-                    }
-                } else {
-                    dismiss()
-                }
+                if !editing { dismiss() }
             }
-            .confirmationDialog("¿Listo para compartir?", isPresented: $showShareConfirm, titleVisibility: .visible) {
-                Button("Agregar otra foto") { bookVM.addPage() }
-                Button("Compartir") { publishShareAndDismiss() }
-                Button("Cancelar", role: .cancel) { dismiss() }
-            }
-    }
-
-    private func publishShareAndDismiss() {
-        guard !isPublishingShare else { return }
-        isPublishingShare = true
-        let jId = journey.id
-        let pages = bookVM.pages
-        Task {
-            do {
-                try await APIClient.shared.publishJourney(journeyId: jId, tripId: nil, pages: pages)
-                print("📤 [publishShareAndDismiss] ✅ lugar compartido — journeyId=\(jId)")
-                await MainActor.run { Haptic.success(); dismiss(); onDismiss() }
-            } catch {
-                print("📤 [publishShareAndDismiss] ❌ falló — journeyId=\(jId) error=\(error)")
-                await MainActor.run { isPublishingShare = false; dismiss(); onDismiss() }
-            }
-        }
     }
 }
 
