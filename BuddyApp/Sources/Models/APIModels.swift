@@ -344,6 +344,18 @@ struct APISpotRef: Decodable {
     var isPendingApproval: Bool { status == "pending" }
 }
 
+/// Categoría del catálogo de lugares (tabla `spot_category`). `icon` ya viene
+/// como nombre de SF Symbol desde el backend, así que se pinta directo.
+struct APISpotCategory: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let icon: String?
+}
+
+struct APISpotCategoriesResponse: Decodable {
+    let categories: [APISpotCategory]
+}
+
 /// Resultado de GET /places/nearby — spot curado con su distancia al GPS.
 struct APINearbySpot: Decodable, Identifiable {
     let id: String

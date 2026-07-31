@@ -77,6 +77,8 @@ struct CompartirLugarSheet: View {
     @State private var isLoadingNearby = false
     @State private var currentCoords: (lat: Double, lng: Double)?
     @State private var proposedName = ""
+    @State private var categories: [APISpotCategory] = []
+    @State private var selectedCategoryId: String?
 
     enum Step { case choose, search, nearby }
 
@@ -187,9 +189,14 @@ struct CompartirLugarSheet: View {
         step = .nearby
         isLoadingNearby = true
         Task {
-            let spots = (try? await APIClient.shared.fetchNearbySpots(lat: lat, lng: lng)) ?? []
+            // En paralelo: si no hay spots cerca, el formulario de propuesta ya
+            // tiene sus categorías listas y no aparecen "a destiempo".
+            async let spotsTask   = try? await APIClient.shared.fetchNearbySpots(lat: lat, lng: lng)
+            async let catsTask    = try? await APIClient.shared.fetchSpotCategories()
+            let (spots, cats) = await (spotsTask, catsTask)
             await MainActor.run {
-                nearbySpots = spots
+                nearbySpots = spots ?? []
+                if let cats { categories = cats }
                 isLoadingNearby = false
             }
         }
@@ -294,6 +301,46 @@ struct CompartirLugarSheet: View {
                 .submitLabel(.done)
                 .onSubmit { submitProposal() }
 
+            // Categoría: la elige quien está viendo el local, así la propuesta
+            // llega clasificada al admin en vez de tener que adivinarla.
+            if !categories.isEmpty {
+                Text("¿QUÉ TIPO DE LUGAR ES?")
+                    .font(BT.eyebrow)
+                    .tracking(2)
+                    .foregroundStyle(Color.inkMuted)
+                    .padding(.top, Spacing.xs)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Spacing.sm) {
+                        ForEach(categories) { category in
+                            let isSelected = selectedCategoryId == category.id
+                            Button {
+                                Haptic.select()
+                                // Volver a tocar la misma categoría la deselecciona.
+                                selectedCategoryId = isSelected ? nil : category.id
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if let icon = category.icon {
+                                        Image(systemName: icon).font(.system(size: 12))
+                                    }
+                                    Text(category.name).font(BT.footnote)
+                                }
+                                .padding(.horizontal, Spacing.md)
+                                .padding(.vertical, 9)
+                                .background(isSelected ? Color.ink : Color.surface)
+                                .foregroundStyle(isSelected ? Color.inkInverse : Color.ink)
+                                .clipShape(Capsule())
+                                .overlay(
+                                    Capsule().strokeBorder(isSelected ? Color.clear : Color.border, lineWidth: 1)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 1)   // el borde del primer/último chip no se recorta
+                }
+            }
+
             if let errorMessage {
                 Text(errorMessage)
                     .font(BT.caption1)
@@ -341,7 +388,9 @@ struct CompartirLugarSheet: View {
         isSubmitting = true
         Task {
             do {
-                let spot = try await APIClient.shared.proposeSpot(name: name, lat: coords.lat, lng: coords.lng)
+                let spot = try await APIClient.shared.proposeSpot(
+                    name: name, lat: coords.lat, lng: coords.lng, categoryId: selectedCategoryId
+                )
                 let journey = try await APIClient.shared.createJourney(spotId: spot.id, attachToTrip: false)
                 await MainActor.run {
                     isSubmitting = false

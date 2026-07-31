@@ -386,16 +386,20 @@ final class APIClient {
         return res.spots
     }
 
+    /// Categorías del catálogo, para clasificar un lugar al proponerlo.
+    func fetchSpotCategories() async throws -> [APISpotCategory] {
+        let res: APISpotCategoriesResponse = try await request(path: "/places/categories")
+        return res.categories
+    }
+
     /// Propone un lugar que aún no está en el catálogo. Nace como `pending`:
     /// el buddy ya puede documentarlo, pero no sale en mapa/guía hasta que se
     /// apruebe en el admin.
-    func proposeSpot(name: String, lat: Double, lng: Double) async throws -> APISpotRef {
-        let spot: APISpotRef = try await request(
-            path: "/places/propose",
-            method: "POST",
-            body: ["name": name, "lat": lat, "lng": lng]
-        )
-        print("📍 [APIClient] proposeSpot name=\"\(name)\" → id=\(spot.id) status=\(spot.status ?? "nil")")
+    func proposeSpot(name: String, lat: Double, lng: Double, categoryId: String? = nil) async throws -> APISpotRef {
+        var body: [String: Any] = ["name": name, "lat": lat, "lng": lng]
+        if let categoryId { body["category_id"] = categoryId }
+        let spot: APISpotRef = try await request(path: "/places/propose", method: "POST", body: body)
+        print("📍 [APIClient] proposeSpot name=\"\(name)\" categoria=\(categoryId ?? "ninguna") → id=\(spot.id) status=\(spot.status ?? "nil")")
         return spot
     }
 
