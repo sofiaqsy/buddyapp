@@ -74,25 +74,22 @@ struct CompartirLugarSheet: View {
 
     // Spots curados cercanos (paso "Lugar actual")
     @State private var nearbySpots: [APINearbySpot] = []
-    @State private var isLoadingNearby = false
     @State private var currentCoords: (lat: Double, lng: Double)?
     @State private var proposedName = ""
     @State private var categories: [APISpotCategory] = []
     @State private var selectedCategoryId: String?
-    /// Nombre del local más cercano, para titular el botón antes de tocarlo.
-    @State private var closestSpotName: String?
     @State private var isPrefetching = false
     @State private var didPrefetch = false
 
-    enum Step { case choose, search, nearby }
+    enum Step { case choose, search, propose }
 
     var body: some View {
         NavigationStack {
             Group {
                 switch step {
-                case .choose: chooseStep
-                case .search: searchStep
-                case .nearby: nearbyStep
+                case .choose:  chooseStep
+                case .search:  searchStep
+                case .propose: proposePlaceStep
                 }
             }
             .navigationTitle("Compartir un lugar")
@@ -119,19 +116,48 @@ struct CompartirLugarSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, Spacing.lg)
 
-            // Con el local ya detectado se nombra en el botón ("El encanto
-            // (Lugar actual)"): el buddy confirma de un vistazo que apuntamos
-            // al sitio correcto antes de tocar nada.
-            Button { useCurrentLocation() } label: {
-                optionRow(
-                    icon: "location.fill",
-                    title: closestSpotName.map { "\($0) (Lugar actual)" } ?? "Lugar actual",
-                    subtitle: isPrefetching ? "buscando…" : "recomendado",
-                    isLoading: isSubmitting
-                )
+            // Los locales cercanos se listan aquí mismo. Si el botón ya dice el
+            // nombre, tocarlo ES la elección — una segunda pantalla preguntando
+            // "¿en cuál estás?" repetiría la pregunta que este botón responde.
+            if let current = nearbySpots.first {
+                Button { Haptic.medium(); submit(spotId: current.id) } label: {
+                    optionRow(
+                        icon: "location.fill",
+                        title: "\(current.name) (Lugar actual)",
+                        subtitle: current.isPendingApproval ? "\(current.distanceLabel) · por revisar" : current.distanceLabel,
+                        isLoading: isSubmitting
+                    )
+                }
+                .buttonStyle(.pressable)
+                .disabled(isSubmitting)
+
+                // Los demás dentro del radio: el GPS puede errar por unos metros
+                // y dos locales caben en ese margen.
+                ForEach(nearbySpots.dropFirst().prefix(4)) { spot in
+                    Button { Haptic.medium(); submit(spotId: spot.id) } label: {
+                        optionRow(
+                            icon: "mappin.circle.fill",
+                            title: spot.name,
+                            subtitle: spot.isPendingApproval ? "\(spot.distanceLabel) · por revisar" : spot.distanceLabel,
+                            isLoading: false
+                        )
+                    }
+                    .buttonStyle(.pressable)
+                    .disabled(isSubmitting)
+                }
+            } else {
+                // Sin catálogo cerca: nombrarlo es la única vía.
+                Button { useCurrentLocation() } label: {
+                    optionRow(
+                        icon: "location.fill",
+                        title: "Lugar actual",
+                        subtitle: isPrefetching ? "buscando…" : "nombra dónde estás",
+                        isLoading: isSubmitting
+                    )
+                }
+                .buttonStyle(.pressable)
+                .disabled(isSubmitting || isPrefetching)
             }
-            .buttonStyle(.pressable)
-            .disabled(isSubmitting)
 
             Button { step = .search } label: {
                 optionRow(icon: "magnifyingglass", title: "Buscar otro lugar", subtitle: nil, isLoading: false)
@@ -178,10 +204,10 @@ struct CompartirLugarSheet: View {
         .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
     }
 
-    /// Consulta el catálogo al abrir el sheet, no al tocar el botón, para poder
-    /// nombrar el local en la propia opción ("El encanto (Lugar actual)").
-    /// En paralelo trae las categorías: si no hay spots cerca, el formulario de
-    /// propuesta ya las tiene y no aparecen a destiempo.
+    /// Consulta el catálogo al abrir el sheet, no al tocar un botón: los locales
+    /// cercanos SON las opciones de la primera pantalla, así que tienen que
+    /// estar antes de pintarla. En paralelo trae las categorías, que hacen falta
+    /// en el único camino que sigue: nombrar un lugar que no existe.
     private func prefetchNearby() async {
         guard !didPrefetch, let loc = LocationService.current?.userLocation else { return }
         didPrefetch = true
@@ -195,18 +221,14 @@ struct CompartirLugarSheet: View {
         async let catsTask  = try? await APIClient.shared.fetchSpotCategories()
         let (spots, cats) = await (spotsTask, catsTask)
         await MainActor.run {
-            nearbySpots = spots ?? []
+            nearbySpots = spots ?? []   // el más cercano viene primero del backend
             if let cats { categories = cats }
-            // El más cercano ya viene primero desde el backend.
-            closestSpotName = nearbySpots.first?.name
             isPrefetching = false
         }
     }
 
-    /// No crea el journey todavía: el GPS sabe DÓNDE estás, pero solo el buddy
-    /// sabe EN QUÉ local — dos negocios pueden estar a 20 m uno del otro, dentro
-    /// del margen de error del propio GPS, así que elegir por él se equivocaría
-    /// seguido. Por eso lleva a la lista aunque el botón ya nombre uno.
+    /// Solo se llega aquí cuando el catálogo no tiene nada cerca: no hay qué
+    /// elegir, así que va directo al formulario para nombrar el lugar.
     private func useCurrentLocation() {
         guard let loc = LocationService.current?.userLocation else {
             errorMessage = "No pudimos obtener tu ubicación. Activa el GPS o busca el lugar manualmente."
@@ -216,109 +238,10 @@ struct CompartirLugarSheet: View {
         }
         Haptic.medium()
         errorMessage = nil
-        let lat = loc.coordinate.latitude
-        let lng = loc.coordinate.longitude
-        currentCoords = (lat, lng)
-        step = .nearby
-
-        // Si la precarga ya trajo la lista, se muestra al instante.
-        guard !didPrefetch else { return }
-        isLoadingNearby = true
-        Task {
-            async let spotsTask = try? await APIClient.shared.fetchNearbySpots(lat: lat, lng: lng)
-            async let catsTask  = try? await APIClient.shared.fetchSpotCategories()
-            let (spots, cats) = await (spotsTask, catsTask)
-            await MainActor.run {
-                nearbySpots = spots ?? []
-                if let cats { categories = cats }
-                closestSpotName = nearbySpots.first?.name
-                isLoadingNearby = false
-            }
-        }
+        currentCoords = (loc.coordinate.latitude, loc.coordinate.longitude)
+        step = .propose
     }
 
-    // MARK: – Paso "Lugar actual": elegir entre los locales cercanos
-
-    @ViewBuilder
-    private var nearbyStep: some View {
-        if isLoadingNearby {
-            VStack(spacing: Spacing.md) {
-                ProgressView()
-                Text("Buscando lugares cerca de ti…")
-                    .font(BT.footnote)
-                    .foregroundStyle(Color.inkMuted)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if nearbySpots.isEmpty {
-            proposePlaceStep
-        } else {
-            VStack(spacing: 0) {
-                Text("¿EN CUÁL ESTÁS?")
-                    .font(BT.eyebrow)
-                    .tracking(2)
-                    .foregroundStyle(Color.inkMuted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Spacing.edge)
-                    .padding(.top, Spacing.lg)
-                    .padding(.bottom, Spacing.sm)
-
-                List {
-                    ForEach(nearbySpots) { spot in
-                        Button { submitSpot(spot) } label: {
-                            HStack(spacing: Spacing.md) {
-                                CachedImage(urlString: spot.coverUrl) { img in
-                                    img.resizable().scaledToFill()
-                                } placeholder: {
-                                    Image(systemName: "mappin.circle.fill")
-                                        .font(.system(size: 20))
-                                        .foregroundStyle(Color.brand)
-                                }
-                                .frame(width: 40, height: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(spot.name).font(BT.body).foregroundStyle(Color.ink)
-                                    HStack(spacing: 6) {
-                                        Text(spot.distanceLabel)
-                                            .font(BT.caption1).foregroundStyle(Color.inkMuted)
-                                        // Propuesto por alguien y aún sin revisar. Se muestra
-                                        // para que se reutilice en vez de proponerlo de nuevo.
-                                        if spot.isPendingApproval {
-                                            Text("por revisar")
-                                                .font(BT.caption2)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.inkMuted.opacity(0.12))
-                                                .foregroundStyle(Color.inkMuted)
-                                                .clipShape(Capsule())
-                                        }
-                                    }
-                                }
-                                Spacer()
-                            }
-                        }
-                        .disabled(isSubmitting)
-                    }
-
-                    // Escape hatch: el buddy está en un local que aún no existe
-                    // en el catálogo aunque haya otros cerca.
-                    Button { step = .search } label: {
-                        Label("Ninguno de estos", systemImage: "magnifyingglass")
-                            .font(BT.footnote)
-                            .foregroundStyle(Color.inkMuted)
-                    }
-                    .disabled(isSubmitting)
-                }
-                .listStyle(.plain)
-                .overlay {
-                    if isSubmitting {
-                        Color.black.opacity(0.05).ignoresSafeArea()
-                        ProgressView()
-                    }
-                }
-            }
-        }
-    }
 
     /// Sin spots cerca: el buddy nombra el lugar. Queda pendiente de aprobación
     /// en el admin, pero puede documentarlo desde ya.
@@ -421,12 +344,6 @@ struct CompartirLugarSheet: View {
             Spacer()
         }
         .padding(.horizontal, Spacing.edge)
-    }
-
-    private func submitSpot(_ spot: APINearbySpot) {
-        Haptic.medium()
-        errorMessage = nil
-        submit(spotId: spot.id)
     }
 
     private func submitProposal() {
