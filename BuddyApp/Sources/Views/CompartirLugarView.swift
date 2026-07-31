@@ -145,19 +145,23 @@ struct CompartirLugarSheet: View {
                     .buttonStyle(.pressable)
                     .disabled(isSubmitting)
                 }
-            } else {
-                // Sin catálogo cerca: nombrarlo es la única vía.
-                Button { useCurrentLocation() } label: {
-                    optionRow(
-                        icon: "location.fill",
-                        title: "Lugar actual",
-                        subtitle: isPrefetching ? "buscando…" : "nombra dónde estás",
-                        isLoading: isSubmitting
-                    )
-                }
-                .buttonStyle(.pressable)
-                .disabled(isSubmitting || isPrefetching)
             }
+
+            // Siempre presente, haya o no lista: el buddy puede estar en un
+            // local que el catálogo todavía no conoce, y buscarlo por texto no
+            // sirve — si no está aquí, tampoco está en OpenStreetMap.
+            Button { useCurrentLocation() } label: {
+                optionRow(
+                    icon: "plus.circle.fill",
+                    title: "Registrar nuevo lugar",
+                    subtitle: nearbySpots.isEmpty
+                        ? (isPrefetching ? "buscando…" : "nombra dónde estás")
+                        : "ninguno de estos es",
+                    isLoading: false
+                )
+            }
+            .buttonStyle(.pressable)
+            .disabled(isSubmitting || isPrefetching)
 
             Button { step = .search } label: {
                 optionRow(icon: "magnifyingglass", title: "Buscar otro lugar", subtitle: nil, isLoading: false)
