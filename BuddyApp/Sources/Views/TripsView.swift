@@ -222,19 +222,21 @@ struct TripsView: View {
             }
         }
         .sheet(isPresented: $showCompartirLugar, onDismiss: {
-            // Recién AQUÍ, cuando el sheet terminó de cerrarse de verdad, se
-            // abre el editor — no dentro de CompartirLugarSheet.onCreated.
-            // Presentar el fullScreenCover en el mismo tick en que se cierra
-            // el sheet es una carrera clásica de SwiftUI: el editor no
-            // aparecía porque ambas transiciones competían.
+            // Igual que crear un trip normal: NO se salta directo al editor de
+            // pantalla completa. Se recarga y se selecciona el journey nuevo,
+            // que aparece como tarjeta con "Tu historia empieza aquí" — el
+            // usuario la abre tocándola, como cualquier trip recién creado.
             if let journey = pendingShareJourney {
                 pendingShareJourney = nil
-                editTarget = EditTarget(journey: journey, pageIndex: -1)
+                Task {
+                    await loadJourneys()
+                    selectedTripId = journey.id
+                }
             }
         }) {
             CompartirLugarSheet { journey in
-                // Mismo editor Memoir, misma tarjeta, mismo botón "Publicar" que
-                // un trip normal — el journey ya nació con trip_id=null
+                // Misma tarjeta, mismo editor, mismo botón "Publicar" que un
+                // trip normal — el journey ya nació con trip_id=null
                 // (attachToTrip:false), así que publicarlo nunca toca ningún
                 // trip. Esa es la única diferencia real; en la UI se comporta
                 // idéntico a cualquier otro journey. CompartirLugarSheet ya se
