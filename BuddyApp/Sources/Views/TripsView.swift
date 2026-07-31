@@ -33,6 +33,9 @@ struct TripsView: View {
     // ConexionesView para gatear "Oportunidades para ayudar".
     @StateObject private var chatStore = ChatStore.shared
     @State private var showCompartirLugar = false
+    /// Journey creado en CompartirLugarSheet, en espera de que el sheet
+    /// termine de cerrarse antes de abrir el editor (ver .sheet onDismiss).
+    @State private var pendingShareJourney: APIJourney? = nil
 
     struct EditTarget: Identifiable {
         let id = UUID()
@@ -218,14 +221,25 @@ struct TripsView: View {
                 Task { await loadJourneys() }
             }
         }
-        .sheet(isPresented: $showCompartirLugar) {
+        .sheet(isPresented: $showCompartirLugar, onDismiss: {
+            // Recién AQUÍ, cuando el sheet terminó de cerrarse de verdad, se
+            // abre el editor — no dentro de CompartirLugarSheet.onCreated.
+            // Presentar el fullScreenCover en el mismo tick en que se cierra
+            // el sheet es una carrera clásica de SwiftUI: el editor no
+            // aparecía porque ambas transiciones competían.
+            if let journey = pendingShareJourney {
+                pendingShareJourney = nil
+                editTarget = EditTarget(journey: journey, pageIndex: -1)
+            }
+        }) {
             CompartirLugarSheet { journey in
                 // Mismo editor Memoir, misma tarjeta, mismo botón "Publicar" que
                 // un trip normal — el journey ya nació con trip_id=null
                 // (attachToTrip:false), así que publicarlo nunca toca ningún
                 // trip. Esa es la única diferencia real; en la UI se comporta
-                // idéntico a cualquier otro journey.
-                editTarget = EditTarget(journey: journey, pageIndex: -1)
+                // idéntico a cualquier otro journey. CompartirLugarSheet ya se
+                // cierra sola (dismiss()); solo dejamos la posta aquí.
+                pendingShareJourney = journey
             }
         }
         .sheet(isPresented: $showIdentitySheet, onDismiss: {
