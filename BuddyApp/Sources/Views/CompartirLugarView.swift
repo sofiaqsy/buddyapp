@@ -243,7 +243,21 @@ struct CompartirLugarSheet: View {
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(spot.name).font(BT.body).foregroundStyle(Color.ink)
-                                    Text(spot.distanceLabel).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                                    HStack(spacing: 6) {
+                                        Text(spot.distanceLabel)
+                                            .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                                        // Propuesto por alguien y aún sin revisar. Se muestra
+                                        // para que se reutilice en vez de proponerlo de nuevo.
+                                        if spot.isPendingApproval {
+                                            Text("por revisar")
+                                                .font(BT.caption2)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.inkMuted.opacity(0.12))
+                                                .foregroundStyle(Color.inkMuted)
+                                                .clipShape(Capsule())
+                                        }
+                                    }
                                 }
                                 Spacer()
                             }

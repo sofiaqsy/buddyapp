@@ -365,6 +365,11 @@ struct APINearbySpot: Decodable, Identifiable {
     let coverUrl: String?
     let destinationId: String?
     let distanceMeters: Int
+    /// "approved" | "pending". Las pendientes aparecen a propósito: son
+    /// lugares que otro buddy ya propuso, y elegirlas evita duplicarlos.
+    let status: String?
+
+    var isPendingApproval: Bool { status == "pending" }
 
     /// "a 40 m" / "a 1,2 km" — la pista que necesita el buddy para saber cuál
     /// de los locales cercanos es en el que está parado.
