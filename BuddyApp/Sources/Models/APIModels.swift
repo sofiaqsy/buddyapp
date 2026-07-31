@@ -257,11 +257,13 @@ struct APIJourney: Decodable, Identifiable, Hashable {
     let departureAt: Date?
     let destination: APIDestinationRef?
     let place: APIPlaceRef?               // para journeys GPS-only (sin destination)
+    let spot: APISpotRef?                 // el local exacto que el buddy documentó
     let users: APIUserRef?
     let journeyPlace: [APIJourneyPlace]?
     let buddyCount: Int?
     let destinationId: String?
     let placeId: String?         // para journeys GPS-only (sin destination)
+    let spotId: String?          // spot curado elegido en "Compartir un lugar"
     let tripId: String?          // contenedor: varios lugares = un viaje
     let knowsHowToGet: Bool?
     let hasLodging: Bool?
@@ -303,6 +305,67 @@ struct APIPlaceRef: Decodable {
     let id: String
     let name: String
     let city: String?
+    let geoClass: String?   // "amenity", "shop", "tourism"... vs "place"/"boundary" (ciudad, no POI)
+    let geoType: String?    // "cafe", "hotel"... vs "city"/"town"/"village"/"administrative"
+
+    /// false cuando el geocoding solo resolvió al nivel de ciudad/distrito
+    /// administrativo — no es un lugar específico (cafetería, hospedaje, etc.)
+    /// que un buddy pueda "compartir". Ver findOrCreatePlace en buddy-core/src/lib/geo.js.
+    var isSpecificPlace: Bool {
+        if let geoClass {
+            if geoClass == "boundary" { return false }
+            if geoClass == "place", let geoType,
+               ["city", "town", "village", "administrative", "suburb", "neighbourhood"].contains(geoType) {
+                return false
+            }
+            return true
+        }
+        // Sin geo_class: o el backend aún no expone esos campos, o es una fila
+        // antigua. Heurística equivalente — un place a nivel ciudad tiene el
+        // mismo name que su city ("Lima"/"Lima"); un POI real no ("Cafetería
+        // Rosal" en city "Lima").
+        guard let city, !city.isEmpty else { return false }
+        return name.caseInsensitiveCompare(city) != .orderedSame
+    }
+}
+
+/// Spot curado del catálogo (tabla `spot`) — el local concreto: "Aneczú",
+/// no la ciudad "Villa Rica".
+struct APISpotRef: Decodable {
+    let id: String
+    let name: String
+    let lat: Double?
+    let lng: Double?
+    let coverUrl: String?
+    /// "approved" | "pending" — pending = propuesto por un buddy, aún sin
+    /// aprobar en el admin. El buddy ya puede documentarlo mientras tanto.
+    let status: String?
+
+    var isPendingApproval: Bool { status == "pending" }
+}
+
+/// Resultado de GET /places/nearby — spot curado con su distancia al GPS.
+struct APINearbySpot: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let lat: Double?
+    let lng: Double?
+    let coverUrl: String?
+    let destinationId: String?
+    let distanceMeters: Int
+
+    /// "a 40 m" / "a 1,2 km" — la pista que necesita el buddy para saber cuál
+    /// de los locales cercanos es en el que está parado.
+    var distanceLabel: String {
+        distanceMeters < 1000
+            ? "a \(distanceMeters) m"
+            : String(format: "a %.1f km", Double(distanceMeters) / 1000)
+    }
+}
+
+struct APINearbySpotsResponse: Decodable {
+    let spots: [APINearbySpot]
+    let radius: Int
 }
 
 // Página del feed "Historias de viajeros" (cursor pagination)

@@ -342,6 +342,7 @@ final class APIClient {
     func createJourney(
         destinationId: String? = nil,
         placeId: String? = nil,
+        spotId: String? = nil,
         osmId: String? = nil,
         lat: Double? = nil,
         lng: Double? = nil,
@@ -360,6 +361,7 @@ final class APIClient {
         var body: [String: Any] = ["attach_to_trip": attachToTrip]
         if let destinationId   { body["destination_id"]   = destinationId }
         if let placeId         { body["place_id"]         = placeId }
+        if let spotId          { body["spot_id"]          = spotId }
         if let osmId           { body["osm_id"]           = osmId }
         if let lat             { body["lat"]               = lat }
         if let lng             { body["lng"]               = lng }
@@ -367,8 +369,34 @@ final class APIClient {
         if let arrivalAt       { body["arrival_at"]        = ISO8601DateFormatter().string(from: arrivalAt) }
         if let knowsHowToGet   { body["knows_how_to_get"] = knowsHowToGet }
         if let hasLodging      { body["has_lodging"]       = hasLodging }
-        print("🧳 [APIClient] createJourney destination_id=\(destinationId ?? "nil") place_id=\(placeId ?? "nil") osm_id=\(osmId ?? "nil") lat=\(lat.map { "\($0)" } ?? "nil") lng=\(lng.map { "\($0)" } ?? "nil") attach_to_trip=\(attachToTrip)")
-        return try await request(path: "/journeys", method: "POST", body: body)
+        print("🧳 [APIClient] createJourney destination_id=\(destinationId ?? "nil") place_id=\(placeId ?? "nil") spot_id=\(spotId ?? "nil") osm_id=\(osmId ?? "nil") lat=\(lat.map { "\($0)" } ?? "nil") lng=\(lng.map { "\($0)" } ?? "nil") attach_to_trip=\(attachToTrip)")
+        let journey: APIJourney = try await request(path: "/journeys", method: "POST", body: body)
+        print("🧳 [APIClient] createJourney -> id=\(journey.id) status=\(journey.status ?? "nil") tripId=\(journey.tripId ?? "nil") spot=\(journey.spot?.name ?? "nil")")
+        return journey
+    }
+
+    /// Spots CURADOS cerca de unas coordenadas, ordenados por distancia.
+    /// Responde "¿en qué local estoy?" — algo que el reverse-geocoding no puede
+    /// para negocios pequeños que no están en OpenStreetMap.
+    func fetchNearbySpots(lat: Double, lng: Double, radius: Int = 500) async throws -> [APINearbySpot] {
+        let res: APINearbySpotsResponse = try await request(
+            path: "/places/nearby?lat=\(lat)&lng=\(lng)&radius=\(radius)"
+        )
+        print("📍 [APIClient] nearbySpots lat=\(lat) lng=\(lng) radius=\(radius)m → \(res.spots.count): \(res.spots.prefix(5).map { "\($0.name)@\($0.distanceMeters)m" }.joined(separator: ", "))")
+        return res.spots
+    }
+
+    /// Propone un lugar que aún no está en el catálogo. Nace como `pending`:
+    /// el buddy ya puede documentarlo, pero no sale en mapa/guía hasta que se
+    /// apruebe en el admin.
+    func proposeSpot(name: String, lat: Double, lng: Double) async throws -> APISpotRef {
+        let spot: APISpotRef = try await request(
+            path: "/places/propose",
+            method: "POST",
+            body: ["name": name, "lat": lat, "lng": lng]
+        )
+        print("📍 [APIClient] proposeSpot name=\"\(name)\" → id=\(spot.id) status=\(spot.status ?? "nil")")
+        return spot
     }
 
     /// Garantiza que exista un Trip para el destino dado — reusa uno activo/en

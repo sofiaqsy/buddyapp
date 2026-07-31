@@ -72,7 +72,13 @@ struct CompartirLugarSheet: View {
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
 
-    enum Step { case choose, search }
+    // Spots curados cercanos (paso "Lugar actual")
+    @State private var nearbySpots: [APINearbySpot] = []
+    @State private var isLoadingNearby = false
+    @State private var currentCoords: (lat: Double, lng: Double)?
+    @State private var proposedName = ""
+
+    enum Step { case choose, search, nearby }
 
     var body: some View {
         NavigationStack {
@@ -80,6 +86,7 @@ struct CompartirLugarSheet: View {
                 switch step {
                 case .choose: chooseStep
                 case .search: searchStep
+                case .nearby: nearbyStep
                 }
             }
             .navigationTitle("Compartir un lugar")
@@ -161,6 +168,10 @@ struct CompartirLugarSheet: View {
         .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
     }
 
+    /// No crea el journey todavía: primero pregunta al catálogo qué locales hay
+    /// cerca. El GPS sabe DÓNDE estás, pero solo el buddy sabe EN QUÉ local —
+    /// dos negocios pueden estar a 20 m uno del otro, dentro del margen de error
+    /// del propio GPS, así que elegir por él se equivocaría seguido.
     private func useCurrentLocation() {
         guard let loc = LocationService.current?.userLocation else {
             errorMessage = "No pudimos obtener tu ubicación. Activa el GPS o busca el lugar manualmente."
@@ -170,7 +181,181 @@ struct CompartirLugarSheet: View {
         }
         Haptic.medium()
         errorMessage = nil
-        submit(lat: loc.coordinate.latitude, lng: loc.coordinate.longitude)
+        let lat = loc.coordinate.latitude
+        let lng = loc.coordinate.longitude
+        currentCoords = (lat, lng)
+        step = .nearby
+        isLoadingNearby = true
+        Task {
+            let spots = (try? await APIClient.shared.fetchNearbySpots(lat: lat, lng: lng)) ?? []
+            await MainActor.run {
+                nearbySpots = spots
+                isLoadingNearby = false
+            }
+        }
+    }
+
+    // MARK: – Paso "Lugar actual": elegir entre los locales cercanos
+
+    @ViewBuilder
+    private var nearbyStep: some View {
+        if isLoadingNearby {
+            VStack(spacing: Spacing.md) {
+                ProgressView()
+                Text("Buscando lugares cerca de ti…")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if nearbySpots.isEmpty {
+            proposePlaceStep
+        } else {
+            VStack(spacing: 0) {
+                Text("¿EN CUÁL ESTÁS?")
+                    .font(BT.eyebrow)
+                    .tracking(2)
+                    .foregroundStyle(Color.inkMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.top, Spacing.lg)
+                    .padding(.bottom, Spacing.sm)
+
+                List {
+                    ForEach(nearbySpots) { spot in
+                        Button { submitSpot(spot) } label: {
+                            HStack(spacing: Spacing.md) {
+                                CachedImage(urlString: spot.coverUrl) { img in
+                                    img.resizable().scaledToFill()
+                                } placeholder: {
+                                    Image(systemName: "mappin.circle.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundStyle(Color.brand)
+                                }
+                                .frame(width: 40, height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(spot.name).font(BT.body).foregroundStyle(Color.ink)
+                                    Text(spot.distanceLabel).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .disabled(isSubmitting)
+                    }
+
+                    // Escape hatch: el buddy está en un local que aún no existe
+                    // en el catálogo aunque haya otros cerca.
+                    Button { step = .search } label: {
+                        Label("Ninguno de estos", systemImage: "magnifyingglass")
+                            .font(BT.footnote)
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    .disabled(isSubmitting)
+                }
+                .listStyle(.plain)
+                .overlay {
+                    if isSubmitting {
+                        Color.black.opacity(0.05).ignoresSafeArea()
+                        ProgressView()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sin spots cerca: el buddy nombra el lugar. Queda pendiente de aprobación
+    /// en el admin, pero puede documentarlo desde ya.
+    @ViewBuilder
+    private var proposePlaceStep: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text("NO ENCONTRAMOS ESTE LUGAR")
+                .font(BT.eyebrow)
+                .tracking(2)
+                .foregroundStyle(Color.inkMuted)
+                .padding(.top, Spacing.lg)
+
+            Text("¿Cómo se llama?")
+                .font(BT.title3)
+                .foregroundStyle(Color.ink)
+
+            Text("Escríbelo y lo agregamos al mapa de la comunidad\ndespués de revisarlo.")
+                .font(BT.footnote)
+                .foregroundStyle(Color.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("Ej. Cafetería Rosal", text: $proposedName)
+                .font(BT.callout)
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, 14)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+                .submitLabel(.done)
+                .onSubmit { submitProposal() }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.red)
+            }
+
+            Button { submitProposal() } label: {
+                HStack(spacing: Spacing.sm) {
+                    if isSubmitting { ProgressView().scaleEffect(0.8).tint(Color.inkInverse) }
+                    Text("Compartir aquí").font(BT.footnoteBold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(proposedName.trimmingCharacters(in: .whitespaces).isEmpty ? Color.inkMuted : Color.ink)
+                .foregroundStyle(Color.inkInverse)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmitting || proposedName.trimmingCharacters(in: .whitespaces).isEmpty)
+
+            Button { step = .search } label: {
+                Text("Buscar en el mapa")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+
+            Spacer()
+        }
+        .padding(.horizontal, Spacing.edge)
+    }
+
+    private func submitSpot(_ spot: APINearbySpot) {
+        Haptic.medium()
+        errorMessage = nil
+        submit(spotId: spot.id)
+    }
+
+    private func submitProposal() {
+        let name = proposedName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, let coords = currentCoords, !isSubmitting else { return }
+        Haptic.medium()
+        errorMessage = nil
+        isSubmitting = true
+        Task {
+            do {
+                let spot = try await APIClient.shared.proposeSpot(name: name, lat: coords.lat, lng: coords.lng)
+                let journey = try await APIClient.shared.createJourney(spotId: spot.id, attachToTrip: false)
+                await MainActor.run {
+                    isSubmitting = false
+                    dismiss()
+                    onCreated(journey)
+                }
+            } catch {
+                await MainActor.run {
+                    isSubmitting = false
+                    errorMessage = "No pudimos registrar este lugar. Inténtalo de nuevo."
+                    print("❌ [CompartirLugarSheet] proposeSpot failed: \(error)")
+                }
+            }
+        }
     }
 
     // MARK: – Paso 2: buscar otro lugar
@@ -263,13 +448,14 @@ struct CompartirLugarSheet: View {
 
     // MARK: – Envío común
 
-    private func submit(destinationId: String? = nil, placeId: String? = nil, lat: Double? = nil, lng: Double? = nil) {
+    private func submit(destinationId: String? = nil, placeId: String? = nil, spotId: String? = nil, lat: Double? = nil, lng: Double? = nil) {
         isSubmitting = true
         Task {
             do {
                 let journey = try await APIClient.shared.createJourney(
                     destinationId: destinationId,
                     placeId: placeId,
+                    spotId: spotId,
                     lat: lat,
                     lng: lng,
                     attachToTrip: false
