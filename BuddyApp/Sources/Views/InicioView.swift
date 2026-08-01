@@ -536,6 +536,9 @@ struct InicioView: View {
                     TripDetailGate(journey: journey, match: activeMatch, unreadCount: 0)
                         .environmentObject(routeStore)
                 }
+                .navigationDestination(for: APIPlaceCard.self) { place in
+                    PlaceGuideMapSheet(place: place)
+                }
                 .navigationDestination(for: String.self) { route in
                     stringDestination(route: route)
                 }
@@ -1433,7 +1436,7 @@ struct InicioView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.md) {
                     ForEach(placeShares) { place in
-                        NearbyPlaceCard(place: place)
+                        NearbyPlaceCard(place: place) { navPath.append(place) }
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
@@ -2345,7 +2348,10 @@ struct NearbyPlaceCard: View {
     /// buddies que mostrar (el sujeto es lo que aportó esa persona), así que
     /// ahí se pasa el conteo de fotos.
     var subtitleOverride: String? = nil
-    @State private var showMap = false
+    /// El padre decide CÓMO abrir el mapa (push en su propio NavigationStack).
+    /// Antes esta tarjeta lo hacía con .fullScreenCover, que tapa la tab bar
+    /// de la app sin excepción — un push dentro del stack existente no.
+    var onTap: () -> Void
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
@@ -2355,7 +2361,7 @@ struct NearbyPlaceCard: View {
     private let textInset: CGFloat = 12
 
     var body: some View {
-        Button { Haptic.light(); showMap = true } label: {
+        Button { Haptic.light(); onTap() } label: {
             VStack(alignment: .leading, spacing: 0) {
                 photoPreview
 
@@ -2385,7 +2391,6 @@ struct NearbyPlaceCard: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .fullScreenCover(isPresented: $showMap) { PlaceGuideMapSheet(place: place) }
     }
 
     /// Mosaico 2×2 con hasta 4 fotos a la vez — todo el espacio de la tarjeta

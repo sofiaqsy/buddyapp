@@ -51,8 +51,12 @@ struct YoView: View {
     @State private var unattendedCount = 0
     @State private var unattendedPlaceName = ""
 
+    /// Push, no modal: un push dentro de este stack respeta la barra de tabs
+    /// de la app; un .fullScreenCover la tapa siempre.
+    @State private var navPath = NavigationPath()
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             Group {
                 // ── Estado anónimo ──
                 if !authState.isLoggedIn {
@@ -231,6 +235,9 @@ struct YoView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Tu foto de perfil no se actualizó. Verifica tu conexión e inténtalo de nuevo.")
+            }
+            .navigationDestination(for: APIPlaceCard.self) { place in
+                PlaceGuideMapSheet(place: place)
             }
         }
         .task { await loadProfile() }
@@ -565,7 +572,9 @@ struct YoView: View {
                     ForEach(shares, id: \.id) { place in
                         // En el perfil el pie es cuántas fotos aportó a ese
                         // lugar; los buddies del destino no vienen al caso aquí.
-                        NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel)
+                        NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel) {
+                            navPath.append(place)
+                        }
                     }
                 }
                 .padding(.horizontal, Spacing.edge)

@@ -408,7 +408,13 @@ struct APIDestinationBuddiesResponse: Decodable {
 
 /// Tarjeta del carrusel "Lugares por aquí": el sujeto es el LUGAR, no la foto
 /// ni quien la subió. Ver place_cards_nearby en buddy-core.
-struct APIPlaceCard: Decodable, Identifiable {
+/// Hashable (por id) para poder empujarla a un NavigationPath — abrir su mapa
+/// tiene que ser un push dentro del NavigationStack existente, no un modal:
+/// un .fullScreenCover SIEMPRE tapa la barra de tabs de la app, un push no.
+struct APIPlaceCard: Decodable, Identifiable, Hashable {
+    static func == (lhs: APIPlaceCard, rhs: APIPlaceCard) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
     let id: String
     let name: String
     /// Con esto se puede pedirle a RouteStore la guía completa del destino y
