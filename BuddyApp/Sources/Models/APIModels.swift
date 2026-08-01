@@ -406,10 +406,20 @@ struct APIPlaceCard: Decodable, Identifiable {
     let name: String
     let destinationName: String?
     let coverUrl: String?
+    /// Hasta 4 fotos recientes — el Home las muestra como mini-carrusel para
+    /// pre-visualizar el lugar sin abrir la galería. El perfil (place_cards_by_traveler)
+    /// no manda este campo, por eso es opcional.
+    let coverUrls: [String]?
     let photoCount: Int
     let isNew: Bool
     let buddyCount: Int
     let buddies: [APIPlaceBuddy]
+
+    /// Lo que de verdad se pinta: coverUrls si vino, si no cae a [coverUrl].
+    var previewPhotos: [String] {
+        if let urls = coverUrls, !urls.isEmpty { return urls }
+        return coverUrl.map { [$0] } ?? []
+    }
 
     var photoLabel: String { "\(photoCount) foto\(photoCount == 1 ? "" : "s")" }
 

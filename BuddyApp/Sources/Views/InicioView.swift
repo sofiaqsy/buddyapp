@@ -1425,7 +1425,7 @@ struct InicioView: View {
     // pasó a alguien", sino "cómo se ve este lugar por dentro".
     private var placeSharesSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("LUGARES POR AQUÍ")
+            Text("RECOMENDADOS POR BUDDIES")
                 .font(BT.eyebrow).tracking(1.5)
                 .foregroundStyle(Color.ink)
                 .padding(.horizontal, Spacing.edge)
@@ -2347,6 +2347,7 @@ struct NearbyPlaceCard: View {
     /// debe mostrar TUS fotos, no las de toda la comunidad.
     var galleryTravelerId: String? = nil
     @State private var showGallery = false
+    @State private var currentPhoto = 0
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
@@ -2357,13 +2358,7 @@ struct NearbyPlaceCard: View {
     var body: some View {
         Button { Haptic.light(); showGallery = true } label: {
             VStack(alignment: .leading, spacing: 0) {
-                CachedImage(urlString: place.coverUrl) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    Rectangle().fill(Color.sandLight)
-                }
-                .frame(width: cardWidth, height: 170)
-                .clipped()
+                photoPreview
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(place.name)
@@ -2392,6 +2387,48 @@ struct NearbyPlaceCard: View {
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showGallery) { PlaceGallerySheet(place: place, travelerId: galleryTravelerId) }
+    }
+
+    /// Mini-carrusel de hasta 4 fotos, para pre-visualizar el lugar sin abrir
+    /// la galería. Con una sola foto se ve igual que antes (sin dots, sin swipe).
+    @ViewBuilder
+    private var photoPreview: some View {
+        let photos = place.previewPhotos
+        if photos.count > 1 {
+            ZStack(alignment: .bottom) {
+                TabView(selection: $currentPhoto) {
+                    ForEach(Array(photos.enumerated()), id: \.offset) { index, url in
+                        CachedImage(urlString: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: {
+                            Rectangle().fill(Color.sandLight)
+                        }
+                        .frame(width: cardWidth, height: 170)
+                        .clipped()
+                        .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(width: cardWidth, height: 170)
+
+                HStack(spacing: 4) {
+                    ForEach(photos.indices, id: \.self) { i in
+                        Circle()
+                            .fill(i == currentPhoto ? Color.white : Color.white.opacity(0.45))
+                            .frame(width: 5, height: 5)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+        } else {
+            CachedImage(urlString: photos.first) { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                Rectangle().fill(Color.sandLight)
+            }
+            .frame(width: cardWidth, height: 170)
+            .clipped()
+        }
     }
 
     /// Avatares superpuestos + "+N" con los que no caben.
