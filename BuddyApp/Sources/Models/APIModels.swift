@@ -432,6 +432,34 @@ struct APIPlaceCardsResponse: Decodable {
     let items: [APIPlaceCard]
 }
 
+/// Una visita al lugar: las fotos que UNA persona subió en UNA ocasión. La
+/// galería es una tarjeta por visita, no un montón de fotos sueltas — así se
+/// ve quién estuvo y cuándo.
+struct APIPlaceVisit: Decodable, Identifiable {
+    let journeyId: String
+    let travelerId: String?
+    let traveler: APIVisitAuthor?
+    let isBuddy: Bool?
+    let placeName: String?
+    let createdAt: Date?
+    let photos: [String]
+
+    var id: String { journeyId }
+}
+
+struct APIVisitAuthor: Decodable {
+    let fullName: String?
+    let avatarUrl: String?
+}
+
+struct APIPlaceGallery: Decodable {
+    let visits: [APIPlaceVisit]
+    let totalPhotos: Int
+    let buddyCount: Int
+    let travelerCount: Int
+    let hasMore: Bool
+}
+
 // Página del feed "Historias de viajeros" (cursor pagination)
 struct FeedPage: Decodable {
     let items: [APIJourney]

@@ -397,6 +397,16 @@ final class APIClient {
         return res.spots
     }
 
+    /// Galería de UN local: las visitas que la comunidad documentó ahí.
+    /// source=spot acota a ese sitio — sin eso devolvería las fotos de toda la ciudad.
+    func fetchSpotGallery(spotId: String, limit: Int = 20) async throws -> APIPlaceGallery {
+        let gallery: APIPlaceGallery = try await request(
+            path: "/places/\(spotId)/gallery?source=spot&limit=\(limit)"
+        )
+        print("🖼️ [APIClient] spotGallery \(spotId.prefix(8)) → visitas=\(gallery.visits.count) fotos=\(gallery.totalPhotos)")
+        return gallery
+    }
+
     /// Categorías del catálogo, para clasificar un lugar al proponerlo.
     func fetchSpotCategories() async throws -> [APISpotCategory] {
         let res: APISpotCategoriesResponse = try await request(path: "/places/categories")

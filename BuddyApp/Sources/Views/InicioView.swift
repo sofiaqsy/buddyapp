@@ -2339,9 +2339,7 @@ extension PublishedTripCard: Equatable {
 /// quien preguntarle.
 struct NearbyPlaceCard: View {
     let place: APIPlaceCard
-    /// nil mientras no exista la pantalla de galería del lugar: una tarjeta que
-    /// parece tocable y no lleva a ninguna parte se siente rota.
-    var onTap: (() -> Void)? = nil
+    @State private var showGallery = false
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
@@ -2350,68 +2348,21 @@ struct NearbyPlaceCard: View {
     private let textInset: CGFloat = 12
 
     var body: some View {
-        if let onTap {
-            Button { Haptic.light(); onTap() } label: { cardBody }
-                .buttonStyle(.plain)
-        } else {
-            cardBody
-        }
-    }
-
-    private var cardBody: some View {
+        Button { Haptic.light(); showGallery = true } label: {
             VStack(alignment: .leading, spacing: 0) {
-                ZStack(alignment: .topLeading) {
-                    CachedImage(urlString: place.coverUrl) { img in
-                        img.resizable().scaledToFill()
-                    } placeholder: {
-                        Rectangle().fill(Color.sandLight)
-                    }
-                    .frame(width: cardWidth, height: 170)
-                    .clipped()
-
-                    if place.isNew {
-                        Text("Nuevo")
-                            .font(BT.caption1.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(Color.tealDeep)
-                            .clipShape(Capsule())
-                            .padding(10)
-                    }
-
-                    // Sobre la foto, abajo: cuántas fotos hay de este lugar.
-                    VStack {
-                        Spacer()
-                        HStack(spacing: 5) {
-                            Image(systemName: "camera.fill").font(.system(size: 10))
-                            Text(place.photoLabel).font(BT.caption1.weight(.semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background(Capsule().fill(.black.opacity(0.45)))
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(width: cardWidth, height: 170)
+                CachedImage(urlString: place.coverUrl) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(Color.sandLight)
                 }
+                .frame(width: cardWidth, height: 170)
+                .clipped()
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text(place.name)
                         .font(BT.footnoteBold)
                         .foregroundStyle(Color.ink)
                         .lineLimit(1)
-
-                    if let dest = place.destinationName {
-                        HStack(spacing: 3) {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Color.inkMuted)
-                            Text(dest)
-                                .font(BT.caption1)
-                                .foregroundStyle(Color.inkMuted)
-                                .lineLimit(1)
-                        }
-                    }
 
                     if !place.buddies.isEmpty {
                         buddyAvatars
@@ -2431,6 +2382,9 @@ struct NearbyPlaceCard: View {
             .background(Color.surface)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showGallery) { PlaceGallerySheet(place: place) }
     }
 
     /// Avatares superpuestos + "+N" con los que no caben.
@@ -2462,6 +2416,99 @@ struct NearbyPlaceCard: View {
                     .frame(width: 26, height: 26)
                     .background(Circle().fill(Color.sandLight))
                     .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
+            }
+        }
+    }
+}
+
+/// Galería de un local: todo lo que la comunidad documentó ahí, agrupado por
+/// visita. Una foto suelta no dice nada; saber que la subió un buddy que sigue
+/// en el destino, sí.
+struct PlaceGallerySheet: View {
+    let place: APIPlaceCard
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var gallery: APIPlaceGallery?
+    @State private var isLoading = true
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let gallery, !gallery.visits.isEmpty {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: Spacing.xl) {
+                            ForEach(gallery.visits) { visit in
+                                visitBlock(visit)
+                            }
+                        }
+                        .padding(.vertical, Spacing.md)
+                    }
+                } else {
+                    VStack(spacing: Spacing.sm) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 32, weight: .light))
+                            .foregroundStyle(Color.inkMuted)
+                        Text("Todavía no hay fotos de este lugar")
+                            .font(BT.callout).foregroundStyle(Color.inkMuted)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .background(Color.canvas)
+            .navigationTitle(place.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cerrar") { dismiss() }
+                }
+            }
+        }
+        .task {
+            gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id)
+            isLoading = false
+        }
+    }
+
+    @ViewBuilder
+    private func visitBlock(_ visit: APIPlaceVisit) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(spacing: Spacing.sm) {
+                CachedImage(urlString: visit.traveler?.avatarUrl) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Circle().fill(Color.sandLight)
+                }
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(visit.traveler?.fullName ?? "Un viajero")
+                        .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                    // Ser buddy es la señal que hace útil la foto: quien la subió
+                    // sigue por ahí y se le puede preguntar.
+                    if visit.isBuddy == true {
+                        Text("Buddy").font(BT.caption1).foregroundStyle(Color.teal)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, Spacing.edge)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Spacing.sm) {
+                    ForEach(Array(visit.photos.enumerated()), id: \.offset) { _, url in
+                        CachedImage(urlString: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: {
+                            Rectangle().fill(Color.sandLight)
+                        }
+                        .frame(width: 240, height: 300)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
             }
         }
     }
