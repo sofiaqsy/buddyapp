@@ -2347,12 +2347,12 @@ struct NearbyPlaceCard: View {
     /// debe mostrar TUS fotos, no las de toda la comunidad.
     var galleryTravelerId: String? = nil
     @State private var showGallery = false
-    @State private var currentPhoto = 0
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
     /// fondo asomaba como una franja blanca al costado.
     private let cardWidth: CGFloat = 190
+    private let previewHeight: CGFloat = 170
     private let textInset: CGFloat = 12
 
     var body: some View {
@@ -2389,46 +2389,47 @@ struct NearbyPlaceCard: View {
         .sheet(isPresented: $showGallery) { PlaceGallerySheet(place: place, travelerId: galleryTravelerId) }
     }
 
-    /// Mini-carrusel de hasta 4 fotos, para pre-visualizar el lugar sin abrir
-    /// la galería. Con una sola foto se ve igual que antes (sin dots, sin swipe).
+    /// Mosaico 2×2 con hasta 4 fotos a la vez — todo el espacio de la tarjeta
+    /// pre-visualiza el lugar de un vistazo, sin swipe. Con menos de 4 fotos,
+    /// las celdas sobrantes repiten la última disponible en vez de quedar vacías.
     @ViewBuilder
     private var photoPreview: some View {
         let photos = place.previewPhotos
         if photos.count > 1 {
-            ZStack(alignment: .bottom) {
-                TabView(selection: $currentPhoto) {
-                    ForEach(Array(photos.enumerated()), id: \.offset) { index, url in
-                        CachedImage(urlString: url) { img in
-                            img.resizable().scaledToFill()
-                        } placeholder: {
-                            Rectangle().fill(Color.sandLight)
-                        }
-                        .frame(width: cardWidth, height: 170)
-                        .clipped()
-                        .tag(index)
-                    }
+            let cellW: CGFloat = (cardWidth - 2) / 2
+            let cellH: CGFloat = (previewHeight - 2) / 2
+            VStack(spacing: 2) {
+                HStack(spacing: 2) {
+                    photoCell(photos, 0, width: cellW, height: cellH)
+                    photoCell(photos, 1, width: cellW, height: cellH)
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(width: cardWidth, height: 170)
-
-                HStack(spacing: 4) {
-                    ForEach(photos.indices, id: \.self) { i in
-                        Circle()
-                            .fill(i == currentPhoto ? Color.white : Color.white.opacity(0.45))
-                            .frame(width: 5, height: 5)
-                    }
+                HStack(spacing: 2) {
+                    photoCell(photos, 2, width: cellW, height: cellH)
+                    photoCell(photos, 3, width: cellW, height: cellH)
                 }
-                .padding(.bottom, 8)
             }
+            .frame(width: cardWidth, height: previewHeight)
+            .clipped()
         } else {
             CachedImage(urlString: photos.first) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
-            .frame(width: cardWidth, height: 170)
+            .frame(width: cardWidth, height: previewHeight)
             .clipped()
         }
+    }
+
+    private func photoCell(_ photos: [String], _ index: Int, width: CGFloat, height: CGFloat) -> some View {
+        let url = photos.indices.contains(index) ? photos[index] : photos.last
+        return CachedImage(urlString: url) { img in
+            img.resizable().scaledToFill()
+        } placeholder: {
+            Rectangle().fill(Color.sandLight)
+        }
+        .frame(width: width, height: height)
+        .clipped()
     }
 
     /// Avatares superpuestos + "+N" con los que no caben.
