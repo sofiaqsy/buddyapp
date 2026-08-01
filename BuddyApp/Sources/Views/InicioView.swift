@@ -1739,13 +1739,15 @@ private struct MapPinView: View {
 
     @State private var region: MKCoordinateRegion
 
-    init(name: String, lat: Double, lng: Double) {
+    /// span por defecto (0.05) = nivel destino, usado por los llamados existentes.
+    /// El mapa de un spot concreto pasa uno mucho más chico para hacer zoom ahí.
+    init(name: String, lat: Double, lng: Double, span: Double = 0.05) {
         self.name = name
         self.lat  = lat
         self.lng  = lng
         _region = State(initialValue: MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: lat, longitude: lng),
-            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+            span: MKCoordinateSpan(latitudeDelta: span, longitudeDelta: span)
         ))
     }
 
@@ -2343,10 +2345,7 @@ struct NearbyPlaceCard: View {
     /// buddies que mostrar (el sujeto es lo que aportó esa persona), así que
     /// ahí se pasa el conteo de fotos.
     var subtitleOverride: String? = nil
-    /// Acota la galería a una persona. Lo pasa el perfil: ahí abrir un lugar
-    /// debe mostrar TUS fotos, no las de toda la comunidad.
-    var galleryTravelerId: String? = nil
-    @State private var showGallery = false
+    @State private var showMap = false
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
@@ -2356,7 +2355,7 @@ struct NearbyPlaceCard: View {
     private let textInset: CGFloat = 12
 
     var body: some View {
-        Button { Haptic.light(); showGallery = true } label: {
+        Button { Haptic.light(); showMap = true } label: {
             VStack(alignment: .leading, spacing: 0) {
                 photoPreview
 
@@ -2386,7 +2385,7 @@ struct NearbyPlaceCard: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showGallery) { PlaceGallerySheet(place: place, travelerId: galleryTravelerId) }
+        .sheet(isPresented: $showMap) { PlaceMapSheet(place: place) }
     }
 
     /// Mosaico 2×2 con hasta 4 fotos a la vez — todo el espacio de la tarjeta
@@ -2466,96 +2465,37 @@ struct NearbyPlaceCard: View {
     }
 }
 
-/// Galería de un local: todo lo que la comunidad documentó ahí, agrupado por
-/// visita. Una foto suelta no dice nada; saber que la subió un buddy que sigue
-/// en el destino, sí.
-struct PlaceGallerySheet: View {
+/// Mapa de UN local, con zoom cerrado en su pin — reutiliza el mismo MapPinView
+/// que ya usan la ruta del viajero y el detalle de trip, solo con un span mucho
+/// más chico para centrarse en el spot en vez de en toda la ciudad.
+struct PlaceMapSheet: View {
     let place: APIPlaceCard
-    /// nil = la comunidad entera (Home). Con valor, solo lo de esa persona (perfil).
-    var travelerId: String? = nil
 
     @Environment(\.dismiss) private var dismiss
-    @State private var gallery: APIPlaceGallery?
-    @State private var isLoading = true
 
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let gallery, !gallery.visits.isEmpty {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: Spacing.xl) {
-                            ForEach(gallery.visits) { visit in
-                                visitBlock(visit)
-                            }
-                        }
-                        .padding(.vertical, Spacing.md)
-                    }
+                if let lat = place.lat, let lng = place.lng {
+                    MapPinView(name: place.name, lat: lat, lng: lng, span: 0.003)
                 } else {
                     VStack(spacing: Spacing.sm) {
-                        Image(systemName: "photo.on.rectangle.angled")
+                        Image(systemName: "mappin.slash")
                             .font(.system(size: 32, weight: .light))
                             .foregroundStyle(Color.inkMuted)
-                        Text("Todavía no hay fotos de este lugar")
+                        Text("No tenemos la ubicación de este lugar")
                             .font(BT.callout).foregroundStyle(Color.inkMuted)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.canvas)
                 }
             }
-            .background(Color.canvas)
             .navigationTitle(place.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cerrar") { dismiss() }
                 }
-            }
-        }
-        .task {
-            gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id, travelerId: travelerId)
-            isLoading = false
-        }
-    }
-
-    @ViewBuilder
-    private func visitBlock(_ visit: APIPlaceVisit) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            HStack(spacing: Spacing.sm) {
-                CachedImage(urlString: visit.traveler?.avatarUrl) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    Circle().fill(Color.sandLight)
-                }
-                .frame(width: 32, height: 32)
-                .clipShape(Circle())
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(visit.traveler?.fullName ?? "Un viajero")
-                        .font(BT.footnoteBold).foregroundStyle(Color.ink)
-                    // Ser buddy es la señal que hace útil la foto: quien la subió
-                    // sigue por ahí y se le puede preguntar.
-                    if visit.isBuddy == true {
-                        Text("Buddy").font(BT.caption1).foregroundStyle(Color.teal)
-                    }
-                }
-                Spacer()
-            }
-            .padding(.horizontal, Spacing.edge)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Spacing.sm) {
-                    ForEach(Array(visit.photos.enumerated()), id: \.offset) { _, url in
-                        CachedImage(urlString: url) { img in
-                            img.resizable().scaledToFill()
-                        } placeholder: {
-                            Rectangle().fill(Color.sandLight)
-                        }
-                        .frame(width: 240, height: 300)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                    }
-                }
-                .padding(.horizontal, Spacing.edge)
             }
         }
     }

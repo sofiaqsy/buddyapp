@@ -405,6 +405,8 @@ struct APIPlaceCard: Decodable, Identifiable {
     let id: String
     let name: String
     let destinationName: String?
+    let lat: Double?
+    let lng: Double?
     let coverUrl: String?
     /// Hasta 4 fotos recientes — el Home las muestra como mini-carrusel para
     /// pre-visualizar el lugar sin abrir la galería. El perfil (place_cards_by_traveler)
