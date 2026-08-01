@@ -269,6 +269,15 @@ final class APIClient {
         return ctx
     }
 
+    /// Buddies aprobados de un destino, con nombre y avatar — no solo el
+    /// conteo. Alimenta la pestaña "Buddies" del detalle de un lugar.
+    func fetchDestinationBuddies(id: String) async throws -> [APIPlaceBuddy] {
+        let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let res: APIDestinationBuddiesResponse = try await request(path: "/destinations/\(encodedId)/buddies")
+        print("👥 [APIClient] destinationBuddies id=\(id.prefix(8)) → \(res.buddies.count)")
+        return res.buddies
+    }
+
     func fetchPlaceContext(id: String, source: String) async throws -> APIPlaceContext {
         let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let ctx: APIPlaceContext = try await request(path: "/places/\(encodedId)/context?source=\(source)")

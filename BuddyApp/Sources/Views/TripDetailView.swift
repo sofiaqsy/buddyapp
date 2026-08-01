@@ -31,6 +31,7 @@ struct TripDetailView: View {
     @State private var shareItem: URL? = nil
     @State private var tripStatus: String = "active"
     @State private var buddyCount: Int? = nil
+    @State private var resolvedDestinationId: String? = nil
     /// Carga progresiva: mostramos lotes de 10 (rail + mapa). Al deslizar el rail
     /// hasta el final se revelan los siguientes 10 y aparecen como markers.
     @State private var visibleCount = 10
@@ -99,9 +100,11 @@ struct TripDetailView: View {
         // /destinations/:id/context filtra por destination_ids — mismo criterio que Home.
         // Solo cuenta buddies que explícitamente atienden este destino.
         let destId = journey?.destinationId ?? journey?.destination?.id ?? destinationId
-        if let destId,
-           let ctx = try? await APIClient.shared.fetchDestinationContext(id: destId) {
-            await MainActor.run { buddyCount = ctx.buddies }
+        if let destId {
+            resolvedDestinationId = destId   // la pestaña "Buddies" del detalle lo necesita
+            if let ctx = try? await APIClient.shared.fetchDestinationContext(id: destId) {
+                await MainActor.run { buddyCount = ctx.buddies }
+            }
         }
 
         // Foco explícito (se abrió este mapa desde la tarjeta de UN lugar):
@@ -513,20 +516,26 @@ struct TripDetailView: View {
                     .padding(.bottom, 8)
             }
 
-            if let place = selectedPlace {
-                placeDetail(place)
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: selectedPlace?.id)
-            } else {
-                cardScroll
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: selectedPlace?.id)
-            }
+            cardScroll
         }
         // Glass más alto: el contenido (top-aligned) sube sobre la tab bar y el
         // glass sobrante queda detrás de ella → panel flush, sin hueco de mapa.
         .frame(width: geo.size.width, height: sheetHeight + bottomClearance, alignment: .top)
         .glassPanel()
+        // Seleccionar un lugar (pin o tarjeta) abre su ficha completa encima,
+        // en vez de reemplazar este panel por una versión chica del mismo lugar.
+        .sheet(item: $selectedPlace) { place in
+            PlaceGuideDetailSheet(
+                place: place,
+                destinationId: resolvedDestinationId,
+                buddyPresenceText: buddyPresenceText,
+                isFavorite: isFav(place),
+                onToggleFavorite: {
+                    if let jid = journey?.id { routeStore.toggleFavorite(placeId: place.id, journeyId: jid) }
+                },
+                onNavigate: { navigationTarget = place }
+            )
+        }
     }
 
     // MARK: – Card scroll
@@ -590,91 +599,6 @@ struct TripDetailView: View {
         .frame(height: 90)
         // Carga automática al deslizar el rail hasta el final
         .onAppear { loadMore() }
-    }
-
-    // MARK: – Place detail
-
-    private func placeDetail(_ place: Place) -> some View {
-        let palettes: [[Color]] = [
-            [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
-            [Color(hex: "3D2B1A"), Color(hex: "6B4226")],
-            [Color(hex: "4A3D35"), Color(hex: "7A6558")],
-            [Color(hex: "5C3E1A"), Color(hex: "8B6428")],
-        ]
-        let idx = abs(place.name.hashValue) % palettes.count
-
-        return HStack(spacing: 0) {
-            ZStack {
-                CachedImage(urlString: place.coverUrl) { img in
-                    img.resizable().scaledToFill()
-                        .frame(width: 110)
-                        .clipped()
-                } placeholder: {
-                    LinearGradient(colors: palettes[idx], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        .overlay { Text(place.stickerEmoji).font(.system(size: 44)) }
-                }
-            }
-            .frame(width: 110)
-            .clipped()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    Text(place.name).font(.system(size: 17, weight: .bold))
-                    Spacer()
-                    Button {
-                        if let jid = journey?.id { routeStore.toggleFavorite(placeId: place.id, journeyId: jid) }
-                    } label: {
-                        Image(systemName: isFav(place) ? "heart.fill" : "heart")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(isFav(place) ? Color.errorRed : Color.ink.opacity(0.45))
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(Color.secondary.opacity(0.12)))
-                            .symbolEffect(.bounce, value: isFav(place))
-                    }
-                    .buttonStyle(.plain)
-                    // Cómo llegar — abre el lugar en Google Maps / Waze / Apple Maps
-                    Button {
-                        Haptic.light()
-                        navigationTarget = place
-                    } label: {
-                        Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(Color.brand)
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(Color.secondary.opacity(0.12)))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Cómo llegar a \(place.name)")
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil }
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .padding(7)
-                            .background(Color.secondary.opacity(0.1))
-                            .clipShape(Circle())
-                    }
-                }
-                Text(place.description).font(.system(size: 13)).foregroundStyle(.secondary)
-                Divider()
-                if place.isCollected {
-                    Label("recuerdo desbloqueado", systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.teal)
-                } else {
-                    Label("aquí desbloqueas un recuerdo", systemImage: "sparkles")
-                        .font(.system(size: 13)).foregroundStyle(Color.sand)
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(height: contentHeight - 20)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.07), radius: 10, y: 3)
-        .padding(.horizontal, 16)
-        .frame(height: contentHeight, alignment: .top)
     }
 
     // MARK: – Fit map
@@ -978,5 +902,347 @@ struct MapIconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: – Place detail sheet (Fotos / Info / Buddies)
+//
+// Reemplaza la tarjeta chica que se mostraba embebida en el panel del mapa:
+// esto es una ficha aparte, con sus propias pestañas — no cabía ni tenía
+// sentido forzarla dentro del panel horizontal de tarjetas. Reseñas queda
+// fuera a propósito: no existe ese sistema (calificar/comentar) todavía.
+struct PlaceGuideDetailSheet: View {
+    let place: Place
+    let destinationId: String?
+    let buddyPresenceText: String?
+    let isFavorite: Bool
+    let onToggleFavorite: () -> Void
+    let onNavigate: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private enum Tab: String, CaseIterable {
+        case fotos = "Fotos", info = "Info", buddies = "Buddies"
+        var icon: String {
+            switch self {
+            case .fotos:   return "photo.on.rectangle"
+            case .info:    return "info.circle"
+            case .buddies: return "person.2"
+            }
+        }
+    }
+    @State private var tab: Tab = .fotos
+
+    @State private var gallery: APIPlaceGallery?
+    @State private var isLoadingGallery = true
+    @State private var buddies: [APIPlaceBuddy] = []
+    @State private var isLoadingBuddies = true
+    @State private var showFullGallery = false
+
+    /// Todas las fotos del lugar, sin importar quién las subió — aplanadas
+    /// desde las visitas de la galería.
+    private var allPhotos: [String] { gallery?.visits.flatMap(\.photos) ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if let buddyPresenceText {
+                HStack(spacing: 7) {
+                    Circle().fill(Color.onlineGreen).frame(width: 7, height: 7)
+                    Text(buddyPresenceText)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+            }
+
+            tabBar
+                .padding(.top, 14)
+
+            ScrollView {
+                switch tab {
+                case .fotos:   fotosTab
+                case .info:    infoTab
+                case .buddies: buddiesTab
+                }
+            }
+        }
+        .padding(.top, 16)
+        .presentationDetents([.fraction(0.55), .large])
+        .presentationDragIndicator(.visible)
+        .task {
+            async let galleryTask: APIPlaceGallery? = try? APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
+            async let buddiesTask: [APIPlaceBuddy]? = fetchBuddiesIfPossible()
+            let (g, b) = await (galleryTask, buddiesTask)
+            gallery = g
+            isLoadingGallery = false
+            buddies = b ?? []
+            isLoadingBuddies = false
+        }
+        .sheet(isPresented: $showFullGallery) {
+            PlaceFullGallerySheet(placeName: place.name, photos: allPhotos)
+        }
+    }
+
+    private func fetchBuddiesIfPossible() async -> [APIPlaceBuddy]? {
+        guard let destinationId else { return nil }
+        return try? await APIClient.shared.fetchDestinationBuddies(id: destinationId)
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(place.name)
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+
+            Button(action: onToggleFavorite) {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(isFavorite ? Color.errorRed : Color.ink.opacity(0.6))
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color.secondary.opacity(0.12)))
+                    .symbolEffect(.bounce, value: isFavorite)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                Haptic.light()
+                onNavigate()
+            } label: {
+                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.inkInverse)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color.brand))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cómo llegar a \(place.name)")
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color.secondary.opacity(0.12)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: Tab bar
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(Tab.allCases, id: \.self) { t in
+                let count: Int? = {
+                    switch t {
+                    case .fotos:   return gallery.map { $0.totalPhotos }
+                    case .buddies: return destinationId != nil ? buddies.count : nil
+                    case .info:    return nil
+                    }
+                }()
+                Button {
+                    Haptic.select()
+                    tab = t
+                } label: {
+                    VStack(spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: t.icon).font(.system(size: 13, weight: .semibold))
+                            Text(count.map { "\(t.rawValue) (\($0))" } ?? t.rawValue)
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(tab == t ? Color.brand : Color.inkMuted)
+                        Rectangle()
+                            .fill(tab == t ? Color.brand : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.horizontal, 8)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    // MARK: Fotos
+
+    @ViewBuilder
+    private var fotosTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if isLoadingGallery {
+                ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
+            } else if allPhotos.isEmpty {
+                emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
+            } else {
+                HStack {
+                    Text("Fotos recientes")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if allPhotos.count > 6 {
+                        Button { showFullGallery = true } label: {
+                            HStack(spacing: 2) {
+                                Text("Ver todas").font(.system(size: 13, weight: .semibold))
+                                Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
+                            }
+                            .foregroundStyle(Color.brand)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(allPhotos.prefix(12).enumerated()), id: \.offset) { _, url in
+                            Button { showFullGallery = true } label: {
+                                CachedImage(urlString: url) { img in
+                                    img.resizable().scaledToFill()
+                                } placeholder: {
+                                    Rectangle().fill(Color.sandLight)
+                                }
+                                .frame(width: 120, height: 120)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+            }
+        }
+        .padding(.top, 16)
+        .padding(.bottom, 24)
+    }
+
+    // MARK: Info
+
+    private var infoTab: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(place.category.label, systemImage: place.category.symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.brand)
+
+            if !place.description.isEmpty {
+                Text(place.description)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.primary)
+            }
+
+            Divider()
+
+            if place.isCollected {
+                Label("Ya desbloqueaste el recuerdo de este lugar", systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.teal)
+            } else {
+                Label("Aquí desbloqueas un recuerdo", systemImage: "sparkles")
+                    .font(.system(size: 13)).foregroundStyle(Color.sand)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Buddies
+
+    @ViewBuilder
+    private var buddiesTab: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if destinationId == nil {
+                emptyState(icon: "person.2", text: "No pudimos ubicar los buddies de este lugar")
+            } else if isLoadingBuddies {
+                ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
+            } else if buddies.isEmpty {
+                emptyState(icon: "person.2", text: "Todavía no hay buddies en este destino")
+            } else {
+                ForEach(Array(buddies.enumerated()), id: \.offset) { i, buddy in
+                    if i > 0 { Divider().padding(.leading, 66) }
+                    HStack(spacing: 12) {
+                        ZStack(alignment: .bottomTrailing) {
+                            CachedImage(urlString: buddy.avatarUrl) { img in
+                                img.resizable().scaledToFill()
+                            } placeholder: {
+                                Circle().fill(Color.sandLight)
+                                    .overlay(Text(buddy.initial).font(.system(size: 15, weight: .bold)).foregroundStyle(Color.ink))
+                            }
+                            .frame(width: 40, height: 40)
+                            .clipShape(Circle())
+
+                            if buddy.isAvailable == true {
+                                Circle().fill(Color.onlineGreen).frame(width: 11, height: 11)
+                                    .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
+                            }
+                        }
+                        Text(buddy.fullName ?? "Buddy")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                }
+            }
+        }
+        .padding(.top, 16)
+        .padding(.bottom, 24)
+    }
+
+    private func emptyState(icon: String, text: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(Color.inkMuted)
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.inkMuted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 30)
+        .padding(.horizontal, 40)
+    }
+}
+
+/// "Ver todas" desde la pestaña Fotos — grid simple de TODAS las fotos ya
+/// cargadas (no vuelve a pedirlas al server).
+struct PlaceFullGallerySheet: View {
+    let placeName: String
+    let photos: [String]
+
+    @Environment(\.dismiss) private var dismiss
+    private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 3) {
+                    ForEach(Array(photos.enumerated()), id: \.offset) { _, url in
+                        CachedImage(urlString: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: {
+                            Rectangle().fill(Color.sandLight)
+                        }
+                        .aspectRatio(1, contentMode: .fill)
+                        .clipped()
+                    }
+                }
+            }
+            .navigationTitle(placeName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cerrar") { dismiss() }
+                }
+            }
+        }
     }
 }

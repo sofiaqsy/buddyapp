@@ -393,10 +393,17 @@ struct APINearbySpotsResponse: Decodable {
 struct APIPlaceBuddy: Decodable, Hashable {
     let fullName: String?
     let avatarUrl: String?
+    /// Solo lo trae GET /destinations/:id/buddies (la pestaña "Buddies" del
+    /// detalle de lugar). El array embebido en place_cards_nearby no lo manda.
+    let isAvailable: Bool?
 
     var initial: String {
         String(fullName?.trimmingCharacters(in: .whitespaces).first ?? "B").uppercased()
     }
+}
+
+struct APIDestinationBuddiesResponse: Decodable {
+    let buddies: [APIPlaceBuddy]
 }
 
 /// Tarjeta del carrusel "Lugares por aquí": el sujeto es el LUGAR, no la foto
