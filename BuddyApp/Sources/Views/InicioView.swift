@@ -2340,6 +2340,12 @@ struct PlaceShareCard: View {
     let journey: APIJourney
     @State private var showStory = false
 
+    /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
+    /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
+    /// fondo asomaba como una franja blanca al costado.
+    private let cardWidth: CGFloat = 150
+    private let textInset: CGFloat = 10
+
     private var placeName: String {
         journey.spot?.name ?? journey.destination?.name ?? journey.title ?? "Un lugar"
     }
@@ -2356,7 +2362,7 @@ struct PlaceShareCard: View {
                 } placeholder: {
                     Rectangle().fill(Color.sandLight)
                 }
-                .frame(width: 150, height: 150)
+                .frame(width: cardWidth, height: cardWidth)
                 .clipped()
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -2377,8 +2383,8 @@ struct PlaceShareCard: View {
                             .lineLimit(1)
                     }
                 }
-                .frame(width: 150, alignment: .leading)
-                .padding(.horizontal, 10)
+                .frame(width: cardWidth - textInset * 2, alignment: .leading)
+                .padding(.horizontal, textInset)
                 .padding(.vertical, 10)
             }
             .background(Color.surface)
