@@ -404,6 +404,10 @@ struct APIPlaceBuddy: Decodable, Hashable {
 struct APIPlaceCard: Decodable, Identifiable {
     let id: String
     let name: String
+    /// Con esto se puede pedirle a RouteStore la guía completa del destino y
+    /// reutilizar TripDetailView (el mapa con "Recomendado por la comunidad")
+    /// en vez de un mapa nuevo.
+    let destinationId: String?
     let destinationName: String?
     let lat: Double?
     let lng: Double?

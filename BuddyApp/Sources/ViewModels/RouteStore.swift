@@ -66,6 +66,16 @@ final class RouteStore: ObservableObject {
         }
     }
 
+    /// Punto de entrada para browsear la guía de un destino SIN un journey
+    /// propio de por medio — lo usa la tarjeta de "Recomendados por buddies"
+    /// del Home para reutilizar TripDetailView al ver un lugar de la comunidad.
+    @MainActor
+    func ensureLoaded(destinationId: String) async -> MapLoadState {
+        await _ensureLoaded(key: "dest:\(destinationId)") {
+            await self._fetchDestState(destId: destinationId)
+        }
+    }
+
     /// Dedup interno: si ya hay un fetch en vuelo para la misma key, espera
     /// su resultado en lugar de disparar un segundo request.
     @MainActor

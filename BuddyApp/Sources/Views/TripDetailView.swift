@@ -6,6 +6,11 @@ struct TripDetailView: View {
     var match: APIMatch? = nil
     var journey: APIJourney? = nil
     var unreadCount: Int = 0
+    /// Respaldo para el conteo de buddies cuando no hay un journey propio de
+    /// por medio — al browsear un lugar de la comunidad desde el Home, no
+    /// existe "tu trip" a este destino, pero igual queremos mostrar quién
+    /// puede ayudar ahí.
+    var destinationId: String? = nil
     @EnvironmentObject var locationService: LocationService
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var router: AppRouter
@@ -27,11 +32,12 @@ struct TripDetailView: View {
     @State private var visibleCount = 10
     @State private var orderedIds: [UUID] = []   // orden congelado de la sesión
 
-    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0) {
+    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil) {
         self.route = route
         self.match = match
         self.journey = journey
         self.unreadCount = unreadCount
+        self.destinationId = destinationId
         // Si el destino no tiene spots curados, centrar el mapa en las coords explícitas
         // desde el inicio — sin esperar el delay de fitMap().
         if route.places.isEmpty, let center = route.explicitCenter {
@@ -87,7 +93,7 @@ struct TripDetailView: View {
 
         // /destinations/:id/context filtra por destination_ids — mismo criterio que Home.
         // Solo cuenta buddies que explícitamente atienden este destino.
-        let destId = journey?.destinationId ?? journey?.destination?.id
+        let destId = journey?.destinationId ?? journey?.destination?.id ?? destinationId
         if let destId,
            let ctx = try? await APIClient.shared.fetchDestinationContext(id: destId) {
             await MainActor.run { buddyCount = ctx.buddies }
@@ -308,12 +314,16 @@ struct TripDetailView: View {
                     Label("Compartir", systemImage: "square.and.arrow.up")
                 }
 
-                Divider()
+                // Solo tiene sentido cancelar TU trip — al browsear un lugar de
+                // la comunidad (sin journey propio) no hay nada que cancelar.
+                if journey != nil {
+                    Divider()
 
-                Button(role: .destructive) {
-                    showCancelConfirm = true
-                } label: {
-                    Label("Cancelar trip", systemImage: "xmark.circle")
+                    Button(role: .destructive) {
+                        showCancelConfirm = true
+                    } label: {
+                        Label("Cancelar trip", systemImage: "xmark.circle")
+                    }
                 }
             } label: {
                 Image(systemName: "ellipsis")

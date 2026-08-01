@@ -2385,7 +2385,7 @@ struct NearbyPlaceCard: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showMap) { PlaceMapSheet(place: place) }
+        .fullScreenCover(isPresented: $showMap) { PlaceGuideMapSheet(place: place) }
     }
 
     /// Mosaico 2×2 con hasta 4 fotos a la vez — todo el espacio de la tarjeta
@@ -2468,36 +2468,72 @@ struct NearbyPlaceCard: View {
 /// Mapa de UN local, con zoom cerrado en su pin — reutiliza el mismo MapPinView
 /// que ya usan la ruta del viajero y el detalle de trip, solo con un span mucho
 /// más chico para centrarse en el spot en vez de en toda la ciudad.
-struct PlaceMapSheet: View {
+/// Abre el MISMO mapa que ya existe para "Tu trip" (TripDetailView: el mapa con
+/// pines, "N buddies aquí" y el carrusel "Recomendado por la comunidad") —
+/// nada nuevo, solo cargado por destination_id en vez de por journey propio.
+///
+/// Usa un RouteStore local, dedicado a este sheet: el global vive en el árbol
+/// de vistas de "Tu trip" y pisarlo aquí rompería esa pantalla al volver.
+struct PlaceGuideMapSheet: View {
     let place: APIPlaceCard
 
+    @StateObject private var routeStore = RouteStore()
+    @State private var loadState: MapLoadState = .loading
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let lat = place.lat, let lng = place.lng {
-                    MapPinView(name: place.name, lat: lat, lng: lng, span: 0.003)
-                } else {
-                    VStack(spacing: Spacing.sm) {
-                        Image(systemName: "mappin.slash")
-                            .font(.system(size: 32, weight: .light))
-                            .foregroundStyle(Color.inkMuted)
-                        Text("No tenemos la ubicación de este lugar")
-                            .font(BT.callout).foregroundStyle(Color.inkMuted)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.canvas)
-                }
-            }
-            .navigationTitle(place.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cerrar") { dismiss() }
-                }
+        Group {
+            switch loadState {
+            case .loading:
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .topLeading) { closeButton }
+            case .guideAvailable:
+                // TripDetailView ya trae su propio botón de volver (chevron
+                // flotante sobre el mapa) — no hace falta agregar otro.
+                TripDetailView(route: routeStore.route, destinationId: place.destinationId)
+                    .environmentObject(routeStore)
+            case .noGuide(let lat, let lng):
+                MapPinView(name: place.name, lat: lat, lng: lng, span: 0.003)
+                    .overlay(alignment: .topLeading) { closeButton }
+            case .noData:
+                fallbackMessage("No tenemos la ubicación de este lugar", icon: "mappin.slash")
+                    .overlay(alignment: .topLeading) { closeButton }
+            case .error:
+                fallbackMessage("No pudimos cargar el mapa", icon: "wifi.exclamationmark")
+                    .overlay(alignment: .topLeading) { closeButton }
             }
         }
+        .task {
+            guard let destId = place.destinationId else {
+                loadState = place.lat != nil && place.lng != nil
+                    ? .noGuide(lat: place.lat!, lng: place.lng!) : .noData
+                return
+            }
+            loadState = await routeStore.ensureLoaded(destinationId: destId)
+        }
+    }
+
+    private var closeButton: some View {
+        Button { dismiss() } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Color.ink)
+                .frame(width: 32, height: 32)
+                .background(.thinMaterial, in: Circle())
+        }
+        .padding(.leading, Spacing.edge)
+        .padding(.top, Spacing.md)
+    }
+
+    private func fallbackMessage(_ text: String, icon: String) -> some View {
+        VStack(spacing: Spacing.sm) {
+            Image(systemName: icon)
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(Color.inkMuted)
+            Text(text).font(BT.callout).foregroundStyle(Color.inkMuted)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.canvas)
     }
 }
 
