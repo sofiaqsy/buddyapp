@@ -2343,6 +2343,9 @@ struct NearbyPlaceCard: View {
     /// buddies que mostrar (el sujeto es lo que aportó esa persona), así que
     /// ahí se pasa el conteo de fotos.
     var subtitleOverride: String? = nil
+    /// Acota la galería a una persona. Lo pasa el perfil: ahí abrir un lugar
+    /// debe mostrar TUS fotos, no las de toda la comunidad.
+    var galleryTravelerId: String? = nil
     @State private var showGallery = false
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
@@ -2388,7 +2391,7 @@ struct NearbyPlaceCard: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showGallery) { PlaceGallerySheet(place: place) }
+        .sheet(isPresented: $showGallery) { PlaceGallerySheet(place: place, travelerId: galleryTravelerId) }
     }
 
     /// Avatares superpuestos + "+N" con los que no caben.
@@ -2430,6 +2433,8 @@ struct NearbyPlaceCard: View {
 /// en el destino, sí.
 struct PlaceGallerySheet: View {
     let place: APIPlaceCard
+    /// nil = la comunidad entera (Home). Con valor, solo lo de esa persona (perfil).
+    var travelerId: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var gallery: APIPlaceGallery?
@@ -2470,7 +2475,7 @@ struct PlaceGallerySheet: View {
             }
         }
         .task {
-            gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id)
+            gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id, travelerId: travelerId)
             isLoading = false
         }
     }

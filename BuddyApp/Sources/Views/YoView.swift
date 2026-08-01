@@ -565,7 +565,13 @@ struct YoView: View {
                     ForEach(shares, id: \.id) { place in
                         // En el perfil el pie es cuántas fotos aportó a ese
                         // lugar; los buddies del destino no vienen al caso aquí.
-                        NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel)
+                        // Y la galería se acota a esta persona: son los lugares
+                        // que ELLA recomienda, no el álbum comunitario del sitio.
+                        NearbyPlaceCard(
+                            place: place,
+                            subtitleOverride: place.photoLabel,
+                            galleryTravelerId: user?.id
+                        )
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
