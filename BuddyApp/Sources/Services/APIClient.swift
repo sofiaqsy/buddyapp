@@ -779,12 +779,13 @@ final class APIClient {
         return res.items
     }
 
-    /// Lo nuevo en los lugares de por aquí. Carrusel, no feed paginado.
-    func fetchPlaceShares(lat: Double?, lng: Double?, limit: Int = 12) async throws -> [APIJourney] {
+    /// Lugares de por aquí que la comunidad ya documentó. El item es el LUGAR
+    /// (con sus fotos y sus buddies), no una foto suelta.
+    func fetchPlaceCards(lat: Double?, lng: Double?, limit: Int = 12) async throws -> [APIPlaceCard] {
         var path = "/feed/place-shares?limit=\(limit)"
         if let lat, let lng { path += "&lat=\(lat)&lng=\(lng)" }
-        let res: PlaceSharesResponse = try await request(path: path)
-        print("🌍 [APIClient] placeShares → \(res.items.count)")
+        let res: APIPlaceCardsResponse = try await request(path: path)
+        print("🌍 [APIClient] placeCards → \(res.items.count): \(res.items.prefix(5).map { "\($0.name)(\($0.photoCount)f/\($0.buddyCount)b)" }.joined(separator: ", "))")
         return res.items
     }
 

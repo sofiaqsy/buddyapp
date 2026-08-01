@@ -60,7 +60,7 @@ struct InicioView: View {
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
-    @State private var placeShares: [APIJourney] = []     // lugares recién documentados cerca
+    @State private var placeShares: [APIPlaceCard] = []   // lugares documentados cerca
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
     @State private var isLoadingRecentHelp = false        // anti re-entrada
@@ -1269,7 +1269,7 @@ struct InicioView: View {
                 // Su propia sección, y su propio fallo: si esto no carga, las
                 // historias igual se muestran.
                 Task {
-                    let shares = (try? await APIClient.shared.fetchPlaceShares(lat: feedLat, lng: feedLng)) ?? []
+                    let shares = (try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng)) ?? []
                     await MainActor.run { placeShares = shares }
                 }
                 return
@@ -1432,8 +1432,8 @@ struct InicioView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.md) {
-                    ForEach(placeShares) { share in
-                        PlaceShareCard(journey: share)
+                    ForEach(placeShares) { place in
+                        NearbyPlaceCard(place: place)
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
@@ -2333,16 +2333,146 @@ extension PublishedTripCard: Equatable {
 
 // MARK: – STORY VIEWER (pantalla completa de las páginas del trip)
 
-/// Tarjeta del carrusel "Lugares por aquí": foto, nombre del local y quién lo
-/// documentó. Al tocarla abre el mismo visor que una historia — el contenido es
-/// el mismo tipo de objeto, solo cambia dónde se descubre.
-struct PlaceShareCard: View {
-    let journey: APIJourney
-    @State private var showStory = false
+/// Tarjeta del carrusel "Lugares por aquí". El sujeto es el LUGAR: su foto más
+/// reciente, cuántas hay y quién puede ayudarte ahí. No dice quién subió la
+/// foto — para el viajero eso no cambia nada; sí importa que haya alguien a
+/// quien preguntarle.
+struct NearbyPlaceCard: View {
+    let place: APIPlaceCard
+    /// nil mientras no exista la pantalla de galería del lugar: una tarjeta que
+    /// parece tocable y no lleva a ninguna parte se siente rota.
+    var onTap: (() -> Void)? = nil
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
     /// fondo asomaba como una franja blanca al costado.
+    private let cardWidth: CGFloat = 190
+    private let textInset: CGFloat = 12
+
+    var body: some View {
+        if let onTap {
+            Button { Haptic.light(); onTap() } label: { cardBody }
+                .buttonStyle(.plain)
+        } else {
+            cardBody
+        }
+    }
+
+    private var cardBody: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                ZStack(alignment: .topLeading) {
+                    CachedImage(urlString: place.coverUrl) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        Rectangle().fill(Color.sandLight)
+                    }
+                    .frame(width: cardWidth, height: 170)
+                    .clipped()
+
+                    if place.isNew {
+                        Text("Nuevo")
+                            .font(BT.caption1.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Color.tealDeep)
+                            .clipShape(Capsule())
+                            .padding(10)
+                    }
+
+                    // Sobre la foto, abajo: cuántas fotos hay de este lugar.
+                    VStack {
+                        Spacer()
+                        HStack(spacing: 5) {
+                            Image(systemName: "camera.fill").font(.system(size: 10))
+                            Text(place.photoLabel).font(BT.caption1.weight(.semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .background(Capsule().fill(.black.opacity(0.45)))
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(width: cardWidth, height: 170)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(place.name)
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+
+                    if let dest = place.destinationName {
+                        HStack(spacing: 3) {
+                            Image(systemName: "mappin.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.inkMuted)
+                            Text(dest)
+                                .font(BT.caption1)
+                                .foregroundStyle(Color.inkMuted)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    if !place.buddies.isEmpty {
+                        buddyAvatars
+                    }
+
+                    if let label = place.buddyLabel {
+                        Text(label)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(width: cardWidth - textInset * 2, alignment: .leading)
+                .padding(.horizontal, textInset)
+                .padding(.vertical, 12)
+            }
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+    }
+
+    /// Avatares superpuestos + "+N" con los que no caben.
+    private var buddyAvatars: some View {
+        let shown  = Array(place.buddies.prefix(4))
+        let hidden = place.buddyCount - shown.count
+        return HStack(spacing: -8) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, buddy in
+                Group {
+                    if let url = buddy.avatarUrl {
+                        CachedImage(urlString: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: {
+                            Circle().fill(Color.sandLight)
+                        }
+                    } else {
+                        Circle().fill(Color.sandLight)
+                            .overlay(Text(buddy.initial).font(BT.caption2).foregroundStyle(Color.ink))
+                    }
+                }
+                .frame(width: 26, height: 26)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
+            }
+            if hidden > 0 {
+                Text("+\(hidden)")
+                    .font(BT.caption2.weight(.semibold))
+                    .foregroundStyle(Color.inkMuted)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Color.sandLight))
+                    .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
+            }
+        }
+    }
+}
+
+/// Tarjeta de UNA contribución propia, para el perfil: ahí el sujeto sí es la
+/// foto que subiste, no el lugar visto por la comunidad.
+struct PlaceShareCard: View {
+    let journey: APIJourney
+    @State private var showStory = false
+
     private let cardWidth: CGFloat = 150
     private let textInset: CGFloat = 10
 
@@ -2374,12 +2504,6 @@ struct PlaceShareCard: View {
                         Text(cityName)
                             .font(BT.caption1)
                             .foregroundStyle(Color.inkMuted)
-                            .lineLimit(1)
-                    }
-                    if let author = journey.users?.fullName?.components(separatedBy: " ").first {
-                        Text(author)
-                            .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted.opacity(0.8))
                             .lineLimit(1)
                     }
                 }

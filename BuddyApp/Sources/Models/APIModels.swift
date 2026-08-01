@@ -388,10 +388,48 @@ struct APINearbySpotsResponse: Decodable {
     let radius: Int?
 }
 
-/// Respuesta de /feed/place-shares y /users/:id/shares — sin cursor: alimentan
-/// carruseles, no listas paginadas.
+/// Respuesta de /users/:id/shares — sin cursor: alimenta un carrusel.
 struct PlaceSharesResponse: Decodable {
     let items: [APIJourney]
+}
+
+/// Buddy mostrado en la tarjeta de un lugar. Es un buddy del DESTINO (así se
+/// asignan), no del local — por eso la tarjeta lo rotula "N buddies en Lima".
+struct APIPlaceBuddy: Decodable, Hashable {
+    let fullName: String?
+    let avatarUrl: String?
+
+    var initial: String {
+        String(fullName?.trimmingCharacters(in: .whitespaces).first ?? "B").uppercased()
+    }
+}
+
+/// Tarjeta del carrusel "Lugares por aquí": el sujeto es el LUGAR, no la foto
+/// ni quien la subió. Ver place_cards_nearby en buddy-core.
+struct APIPlaceCard: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let destinationName: String?
+    let coverUrl: String?
+    let photoCount: Int
+    let isNew: Bool
+    let buddyCount: Int
+    let buddies: [APIPlaceBuddy]
+
+    var photoLabel: String { "\(photoCount) foto\(photoCount == 1 ? "" : "s")" }
+
+    /// "6 buddies en Villa Rica" — nombrar el destino evita dar a entender que
+    /// esos buddies están dentro del local.
+    var buddyLabel: String? {
+        guard buddyCount > 0 else { return nil }
+        let noun = buddyCount == 1 ? "buddy" : "buddies"
+        if let destinationName { return "\(buddyCount) \(noun) en \(destinationName)" }
+        return "\(buddyCount) \(noun)"
+    }
+}
+
+struct APIPlaceCardsResponse: Decodable {
+    let items: [APIPlaceCard]
 }
 
 // Página del feed "Historias de viajeros" (cursor pagination)
