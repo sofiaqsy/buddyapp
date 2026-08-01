@@ -772,6 +772,22 @@ final class APIClient {
         return try await request(path: path)
     }
 
+    /// Lugares que este buddy documentó — sección propia del perfil, aparte de
+    /// sus viajes: son aportes al catálogo de la comunidad, no viajes suyos.
+    func fetchUserShares(travelerId: String, limit: Int = 12) async throws -> [APIJourney] {
+        let res: PlaceSharesResponse = try await request(path: "/users/\(travelerId)/shares?limit=\(limit)")
+        return res.items
+    }
+
+    /// Lo nuevo en los lugares de por aquí. Carrusel, no feed paginado.
+    func fetchPlaceShares(lat: Double?, lng: Double?, limit: Int = 12) async throws -> [APIJourney] {
+        var path = "/feed/place-shares?limit=\(limit)"
+        if let lat, let lng { path += "&lat=\(lat)&lng=\(lng)" }
+        let res: PlaceSharesResponse = try await request(path: path)
+        print("🌍 [APIClient] placeShares → \(res.items.count)")
+        return res.items
+    }
+
     func updateUserBio(travelerId: String, bio: String) async throws {
         try await requestVoid(path: "/users/\(travelerId)", method: "PATCH", body: ["bio": bio])
     }

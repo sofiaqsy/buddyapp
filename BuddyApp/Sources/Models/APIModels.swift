@@ -388,6 +388,12 @@ struct APINearbySpotsResponse: Decodable {
     let radius: Int?
 }
 
+/// Respuesta de /feed/place-shares y /users/:id/shares — sin cursor: alimentan
+/// carruseles, no listas paginadas.
+struct PlaceSharesResponse: Decodable {
+    let items: [APIJourney]
+}
+
 // Página del feed "Historias de viajeros" (cursor pagination)
 struct FeedPage: Decodable {
     let items: [APIJourney]

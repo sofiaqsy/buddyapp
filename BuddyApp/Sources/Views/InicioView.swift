@@ -60,6 +60,7 @@ struct InicioView: View {
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
+    @State private var placeShares: [APIJourney] = []     // lugares recién documentados cerca
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
     @State private var isLoadingRecentHelp = false        // anti re-entrada
@@ -683,6 +684,14 @@ struct InicioView: View {
                         .padding(.top, Spacing.md)
                 }
 
+                // Fotos recién compartidas de lugares concretos. Sección propia
+                // y no mezclada en las historias: un viaje es una narración, un
+                // lugar compartido es una referencia sobre ese sitio.
+                if !placeShares.isEmpty {
+                    placeSharesSection
+                        .padding(.top, Spacing.xl)
+                }
+
                 communitySection
                     .padding(.top, Spacing.xl)
             }
@@ -1257,6 +1266,12 @@ struct InicioView: View {
                 feedHasMore = page.hasMore
                 feedFailed = false
                 isLoadingFeed = false
+                // Su propia sección, y su propio fallo: si esto no carga, las
+                // historias igual se muestran.
+                Task {
+                    let shares = (try? await APIClient.shared.fetchPlaceShares(lat: feedLat, lng: feedLng)) ?? []
+                    await MainActor.run { placeShares = shares }
+                }
                 return
             } catch {
                 if attempt == 0 { try? await Task.sleep(for: .seconds(1.5)) }
@@ -1401,6 +1416,28 @@ struct InicioView: View {
             .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
             .padding(.horizontal, Spacing.edge)
+        }
+    }
+
+    // MARK: – Lugares recién documentados (carrusel)
+    // Fotos de sitios concretos que los buddies acaban de compartir. Va aparte
+    // de "Historias de viajeros" porque responde a otra pregunta: no "qué le
+    // pasó a alguien", sino "cómo se ve este lugar por dentro".
+    private var placeSharesSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text("LUGARES POR AQUÍ")
+                .font(BT.eyebrow).tracking(1.5)
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, Spacing.edge)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Spacing.md) {
+                    ForEach(placeShares) { share in
+                        PlaceShareCard(journey: share)
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+            }
         }
     }
 
@@ -2295,6 +2332,63 @@ extension PublishedTripCard: Equatable {
 }
 
 // MARK: – STORY VIEWER (pantalla completa de las páginas del trip)
+
+/// Tarjeta del carrusel "Lugares por aquí": foto, nombre del local y quién lo
+/// documentó. Al tocarla abre el mismo visor que una historia — el contenido es
+/// el mismo tipo de objeto, solo cambia dónde se descubre.
+struct PlaceShareCard: View {
+    let journey: APIJourney
+    @State private var showStory = false
+
+    private var placeName: String {
+        journey.spot?.name ?? journey.destination?.name ?? journey.title ?? "Un lugar"
+    }
+    private var cityName: String? {
+        let city = journey.destination?.city
+        return city == placeName ? nil : city
+    }
+
+    var body: some View {
+        Button { Haptic.light(); showStory = true } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                CachedImage(urlString: journey.pageThumbs?.first) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(Color.sandLight)
+                }
+                .frame(width: 150, height: 150)
+                .clipped()
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(placeName)
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+                    if let cityName {
+                        Text(cityName)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
+                    if let author = journey.users?.fullName?.components(separatedBy: " ").first {
+                        Text(author)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted.opacity(0.8))
+                            .lineLimit(1)
+                    }
+                }
+                .frame(width: 150, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+            }
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+    }
+}
 
 struct StoryViewerSheet: View {
     let journey: APIJourney

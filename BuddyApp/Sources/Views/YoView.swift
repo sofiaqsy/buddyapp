@@ -13,6 +13,8 @@ struct YoView: View {
     @State private var user: APIUser? = nil
     @State private var stickers: [APIUserSticker] = []
     @State private var journeys: [APIJourney] = []
+    /// Lugares documentados como buddy — sección aparte de los viajes propios.
+    @State private var shares: [APIJourney] = []
     @State private var tripsNextCursor: String? = nil
     @State private var tripsHasMore: Bool = false
     @State private var isLoadingMoreTrips: Bool = false
@@ -132,6 +134,13 @@ struct YoView: View {
                             // 4 — Colección (historia del viajero)
                             stickerSection
                                 .padding(.top, Spacing.xl)
+
+                            // Solo si aportó alguno: sin lugares compartidos la
+                            // sección sobra, no hay nada que invitar todavía.
+                            if !shares.isEmpty {
+                                sharesSection
+                                    .padding(.top, Spacing.xl)
+                            }
 
                             tripsSection
                                 .padding(.top, Spacing.xl)
@@ -541,6 +550,25 @@ struct YoView: View {
             }
         }
         .padding(.horizontal, Spacing.edge)
+    }
+
+    // MARK: – Contribuciones como buddy (carrusel)
+    // Lugares que documentó para la comunidad. Aparte de TRIPS a propósito: son
+    // aportes al catálogo, no viajes suyos, y cada uno es un sitio concreto en
+    // vez de la narración de un recorrido.
+    private var sharesSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            sectionHeader("LUGARES QUE COMPARTISTE", count: shares.count)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Spacing.md) {
+                    ForEach(shares, id: \.id) { share in
+                        PlaceShareCard(journey: share)
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+            }
+        }
     }
 
     // MARK: – Trips grid
@@ -1061,12 +1089,14 @@ struct YoView: View {
         async let tripsTask    = try? APIClient.shared.fetchUserTrips(travelerId: me.id)
         async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
         async let destsTask    = try? APIClient.shared.fetchDestinations()
+        async let sharesTask   = try? APIClient.shared.fetchUserShares(travelerId: me.id)
 
-        let (s, tp, b, d) = await (stickersTask, tripsTask, buddyTask, destsTask)
-        print("👤 [YoView] datos cargados — stickers=\(s?.count ?? 0) trips=\(tp?.items.count ?? 0) hasMore=\(tp?.hasMore ?? false) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
+        let (s, tp, b, d, sh) = await (stickersTask, tripsTask, buddyTask, destsTask, sharesTask)
+        print("👤 [YoView] datos cargados — stickers=\(s?.count ?? 0) shares=\(sh?.count ?? 0) trips=\(tp?.items.count ?? 0) hasMore=\(tp?.hasMore ?? false) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
 
         stickers        = s ?? []
         journeys        = tp?.items ?? []
+        shares          = sh ?? []
         tripsNextCursor = tp?.nextCursor
         tripsHasMore    = tp?.hasMore ?? false
         buddyMe         = b
