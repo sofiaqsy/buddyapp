@@ -2490,7 +2490,7 @@ struct PlaceGuideMapSheet: View {
             case .guideAvailable:
                 // TripDetailView ya trae su propio botón de volver (chevron
                 // flotante sobre el mapa) — no hace falta agregar otro.
-                TripDetailView(route: routeStore.route, destinationId: place.destinationId)
+                TripDetailView(route: routeStore.route, destinationId: place.destinationId, focusPlaceId: place.id)
                     .environmentObject(routeStore)
             case .noGuide(let lat, let lng):
                 MapPinView(name: place.name, lat: lat, lng: lng, span: 0.003)

@@ -11,6 +11,10 @@ struct TripDetailView: View {
     /// existe "tu trip" a este destino, pero igual queremos mostrar quién
     /// puede ayudar ahí.
     var destinationId: String? = nil
+    /// Lugar a preseleccionar al entrar — el mismo spot que se tocó en la
+    /// tarjeta que abrió este mapa. Sin esto, se entra al mapa completo del
+    /// destino sin foco, y hay que buscar el pin entre todos los demás.
+    var focusPlaceId: String? = nil
     @EnvironmentObject var locationService: LocationService
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var router: AppRouter
@@ -32,12 +36,13 @@ struct TripDetailView: View {
     @State private var visibleCount = 10
     @State private var orderedIds: [UUID] = []   // orden congelado de la sesión
 
-    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil) {
+    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil, focusPlaceId: String? = nil) {
         self.route = route
         self.match = match
         self.journey = journey
         self.unreadCount = unreadCount
         self.destinationId = destinationId
+        self.focusPlaceId = focusPlaceId
         // Si el destino no tiene spots curados, centrar el mapa en las coords explícitas
         // desde el inicio — sin esperar el delay de fitMap().
         if route.places.isEmpty, let center = route.explicitCenter {
@@ -99,7 +104,22 @@ struct TripDetailView: View {
             await MainActor.run { buddyCount = ctx.buddies }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { fitMap() }
+        // Foco explícito (se abrió este mapa desde la tarjeta de UN lugar):
+        // seleccionarlo y centrar ahí en vez de esperar el fitMap() genérico,
+        // que encuadraría TODOS los pines del destino.
+        if let focusPlaceId, let match = livePlaces.first(where: { $0.id.uuidString.caseInsensitiveCompare(focusPlaceId) == .orderedSame }) {
+            await MainActor.run {
+                withAnimation(.easeInOut) { selectedPlace = match }
+                withAnimation(.easeInOut(duration: 0.6)) {
+                    camera = .region(MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: match.latitude, longitude: match.longitude),
+                        span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
+                    ))
+                }
+            }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { fitMap() }
+        }
 
         // Deep-link desde chat: seleccionar lugar sugerido por el buddy
         if let dp = PlaceDeepLink.shared.consume() {
