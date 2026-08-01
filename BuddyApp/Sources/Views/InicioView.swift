@@ -2339,6 +2339,10 @@ extension PublishedTripCard: Equatable {
 /// quien preguntarle.
 struct NearbyPlaceCard: View {
     let place: APIPlaceCard
+    /// En el Home el pie son los buddies del destino; en el perfil no hay
+    /// buddies que mostrar (el sujeto es lo que aportó esa persona), así que
+    /// ahí se pasa el conteo de fotos.
+    var subtitleOverride: String? = nil
     @State private var showGallery = false
 
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
@@ -2368,7 +2372,7 @@ struct NearbyPlaceCard: View {
                         buddyAvatars
                     }
 
-                    if let label = place.buddyLabel {
+                    if let label = subtitleOverride ?? place.buddyLabel {
                         Text(label)
                             .font(BT.caption1)
                             .foregroundStyle(Color.inkMuted)
@@ -2511,59 +2515,6 @@ struct PlaceGallerySheet: View {
                 .padding(.horizontal, Spacing.edge)
             }
         }
-    }
-}
-
-/// Tarjeta de UNA contribución propia, para el perfil: ahí el sujeto sí es la
-/// foto que subiste, no el lugar visto por la comunidad.
-struct PlaceShareCard: View {
-    let journey: APIJourney
-    @State private var showStory = false
-
-    private let cardWidth: CGFloat = 150
-    private let textInset: CGFloat = 10
-
-    private var placeName: String {
-        journey.spot?.name ?? journey.destination?.name ?? journey.title ?? "Un lugar"
-    }
-    private var cityName: String? {
-        let city = journey.destination?.city
-        return city == placeName ? nil : city
-    }
-
-    var body: some View {
-        Button { Haptic.light(); showStory = true } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                CachedImage(urlString: journey.pageThumbs?.first) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    Rectangle().fill(Color.sandLight)
-                }
-                .frame(width: cardWidth, height: cardWidth)
-                .clipped()
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(placeName)
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
-                        .lineLimit(1)
-                    if let cityName {
-                        Text(cityName)
-                            .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(width: cardWidth - textInset * 2, alignment: .leading)
-                .padding(.horizontal, textInset)
-                .padding(.vertical, 10)
-            }
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .sheet(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
     }
 }
 

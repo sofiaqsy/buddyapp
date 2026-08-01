@@ -13,8 +13,8 @@ struct YoView: View {
     @State private var user: APIUser? = nil
     @State private var stickers: [APIUserSticker] = []
     @State private var journeys: [APIJourney] = []
-    /// Lugares documentados como buddy — sección aparte de los viajes propios.
-    @State private var shares: [APIJourney] = []
+    /// Lugares que recomienda — sección aparte de los viajes propios.
+    @State private var shares: [APIPlaceCard] = []
     @State private var tripsNextCursor: String? = nil
     @State private var tripsHasMore: Bool = false
     @State private var isLoadingMoreTrips: Bool = false
@@ -558,12 +558,14 @@ struct YoView: View {
     // vez de la narración de un recorrido.
     private var sharesSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("LUGARES QUE COMPARTISTE", count: shares.count)
+            sectionHeader("LUGARES QUE RECOMIENDAS", count: shares.count)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.md) {
-                    ForEach(shares, id: \.id) { share in
-                        PlaceShareCard(journey: share)
+                    ForEach(shares, id: \.id) { place in
+                        // En el perfil el pie es cuántas fotos aportó a ese
+                        // lugar; los buddies del destino no vienen al caso aquí.
+                        NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel)
                     }
                 }
                 .padding(.horizontal, Spacing.edge)

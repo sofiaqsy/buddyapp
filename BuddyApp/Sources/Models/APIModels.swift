@@ -388,11 +388,6 @@ struct APINearbySpotsResponse: Decodable {
     let radius: Int?
 }
 
-/// Respuesta de /users/:id/shares — sin cursor: alimenta un carrusel.
-struct PlaceSharesResponse: Decodable {
-    let items: [APIJourney]
-}
-
 /// Buddy mostrado en la tarjeta de un lugar. Es un buddy del DESTINO (así se
 /// asignan), no del local — por eso la tarjeta lo rotula "N buddies en Lima".
 struct APIPlaceBuddy: Decodable, Hashable {

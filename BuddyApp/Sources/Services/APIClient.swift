@@ -782,10 +782,10 @@ final class APIClient {
         return try await request(path: path)
     }
 
-    /// Lugares que este buddy documentó — sección propia del perfil, aparte de
-    /// sus viajes: son aportes al catálogo de la comunidad, no viajes suyos.
-    func fetchUserShares(travelerId: String, limit: Int = 12) async throws -> [APIJourney] {
-        let res: PlaceSharesResponse = try await request(path: "/users/\(travelerId)/shares?limit=\(limit)")
+    /// Lugares que este buddy recomienda, agrupados por lugar — sección propia
+    /// del perfil, aparte de sus viajes: son aportes al catálogo, no viajes suyos.
+    func fetchUserShares(travelerId: String, limit: Int = 12) async throws -> [APIPlaceCard] {
+        let res: APIPlaceCardsResponse = try await request(path: "/users/\(travelerId)/shares?limit=\(limit)")
         return res.items
     }
 
