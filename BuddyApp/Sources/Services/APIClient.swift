@@ -382,7 +382,7 @@ final class APIClient {
         let res: APINearbySpotsResponse = try await request(
             path: "/places/nearby?lat=\(lat)&lng=\(lng)&radius=\(radius)"
         )
-        print("📍 [APIClient] nearbySpots lat=\(lat) lng=\(lng) radius=\(radius)m → \(res.spots.count): \(res.spots.prefix(5).map { "\($0.name)@\($0.distanceMeters)m" }.joined(separator: ", "))")
+        print("📍 [APIClient] nearbySpots lat=\(lat) lng=\(lng) radius=\(radius)m → \(res.spots.count): \(res.spots.prefix(5).map { "\($0.name)@\($0.distanceMeters.map(String.init) ?? "?")m" }.joined(separator: ", "))")
         return res.spots
     }
 
