@@ -505,18 +505,12 @@ struct TripDetailView: View {
                     .buttonStyle(.plain)
                 }
             } else {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Recomendado por la comunidad")
-                        .font(BT.title2)
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Text("\(livePlaces.count) recomendaciones")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.teal)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 6)
-                .padding(.bottom, 8)
+                Text("Recomendado por buddies")
+                    .font(BT.title2)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 6)
+                    .padding(.bottom, 8)
             }
 
             if let place = selectedPlace {
