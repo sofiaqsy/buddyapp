@@ -682,7 +682,7 @@ struct InicioView: View {
 
                 // Comunidad viva — actividad local o, en su defecto, el pulso
                 // global de la red. La sección vive siempre que haya algo real.
-                if !recentHelp.isEmpty || !communityPulse.isEmpty {
+                if !recentHelp.isEmpty || communityPulse.contains(where: { $0.type == "helped" }) {
                     communityLiveSection
                         .padding(.top, Spacing.md)
                 }
@@ -1395,21 +1395,22 @@ struct InicioView: View {
                 .padding(.horizontal, Spacing.edge)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                HStack(spacing: 0) {
                     if !recentHelp.isEmpty {
-                        ForEach(Array(recentHelp.prefix(3)), id: \.id) { help in
-                            communityCard(
+                        let city = resolvedLocation?.destinationName ?? locationService.currentCity
+                        ForEach(Array(recentHelp.prefix(3).enumerated()), id: \.element.id) { idx, help in
+                            if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
+                            communityRow(
                                 avatarUrl: help.buddy?.avatarUrl,
-                                icon: "person.fill",
-                                text: Text(help.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
-                                    .font(BT.footnoteBold).foregroundStyle(Color.ink)
-                                 + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted),
+                                cityText: city ?? "tu destino",
                                 timeText: help.completedAt != nil ? timeAgo(help.completedAt) : nil
                             )
                         }
                     } else {
-                        ForEach(Array(communityPulse.prefix(3)), id: \.id) { item in
-                            communityCard(avatarUrl: nil, icon: pulseIcon(item.type), text: pulseText(item), timeText: pulseTime(item))
+                        let helped = communityPulse.filter { $0.type == "helped" }.prefix(3)
+                        ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
+                            if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
+                            communityRow(avatarUrl: nil, cityText: item.city, timeText: pulseTime(item))
                         }
                     }
                 }
@@ -1441,67 +1442,39 @@ struct InicioView: View {
     }
 
     @ViewBuilder
-    private func communityCard(avatarUrl: String?, icon: String, text: Text, timeText: String?) -> some View {
-        HStack(spacing: 8) {
+    private func communityRow(avatarUrl: String?, cityText: String, timeText: String?) -> some View {
+        HStack(spacing: 10) {
             Circle()
                 .fill(Color.sandLight)
-                .frame(width: 26, height: 26)
+                .frame(width: 56, height: 56)
                 .overlay {
                     if let urlStr = avatarUrl, let url = URL(string: urlStr) {
                         AsyncImage(url: url) { img in
                             img.resizable().scaledToFill()
                         } placeholder: { Color.sandLight }
-                        .frame(width: 26, height: 26)
+                        .frame(width: 56, height: 56)
                         .clipShape(Circle())
                     } else {
-                        Image(systemName: icon)
-                            .font(.system(size: 11))
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 20))
                             .foregroundStyle(Color.sand)
                     }
                 }
 
-            VStack(alignment: .leading, spacing: 2) {
-                text.lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Ayuda en \(cityText)")
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
                 if let timeText {
                     Text(timeText)
                         .font(BT.caption2)
-                        .foregroundStyle(Color.inkMuted.opacity(0.7))
+                        .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                 }
             }
         }
-        .frame(width: 190, alignment: .leading)
-        .padding(.horizontal, Spacing.md)
-        .padding(.vertical, 10)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-        .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
-    }
-
-    private func pulseIcon(_ type: String) -> String {
-        switch type {
-        case "traveling": return "figure.walk"
-        case "ready":     return "person.2.fill"
-        default:          return "person.fill"
-        }
-    }
-
-    private func pulseText(_ item: APIPulseItem) -> Text {
-        switch item.type {
-        case "traveling":
-            let n = item.count ?? 1
-            let prefix = n == 1 ? "Un viajero está en " : "\(n) viajeros están en "
-            return Text(prefix).font(BT.footnote).foregroundStyle(Color.inkMuted)
-                + Text(item.city).font(BT.footnoteBold).foregroundStyle(Color.ink)
-        case "ready":
-            let n = item.count ?? 1
-            return Text(item.city).font(BT.footnoteBold).foregroundStyle(Color.ink)
-                + Text(n == 1 ? " · 1 buddy listo para ayudar" : " · \(n) buddies listos para ayudar")
-                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
-        default: // helped
-            return Text(item.city).font(BT.footnoteBold).foregroundStyle(Color.ink)
-                + Text(" · un buddy ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
-        }
+        .frame(width: 150, alignment: .leading)
     }
 
     private func pulseTime(_ item: APIPulseItem) -> String? {
