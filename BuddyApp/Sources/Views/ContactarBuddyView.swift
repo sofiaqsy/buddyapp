@@ -655,7 +655,7 @@ struct CategoryPickerView: View {
             }
             .padding(.horizontal, Spacing.edge)
             .padding(.top, Spacing.md)
-            .padding(.bottom, Spacing.lg)
+            .padding(.bottom, Spacing.lg / 2)
 
             // 2×3 grid — icon circle + title + subtitle
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
