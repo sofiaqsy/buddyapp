@@ -891,6 +891,9 @@ struct CategoryPickerView: View {
                 guard !isCarouselDragging else { return }
                 try? await Task.sleep(nanoseconds: 220_000_000)
                 guard !Task.isCancelled, !isCarouselDragging else { return }
+                let liveIdx = explorePhotos.firstIndex { $0.id == carouselCenterId } ?? -1
+                let prevSettledIdx = explorePhotos.firstIndex { $0.id == settledCenterId } ?? -1
+                print("🎯 [exploreCarousel] settle: carouselCenterId idx=\(liveIdx) settledCenterId(antes) idx=\(prevSettledIdx) → confirmando idx=\(liveIdx)")
                 settledCenterId = carouselCenterId
             }
 
