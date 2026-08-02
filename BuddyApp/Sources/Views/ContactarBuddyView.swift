@@ -751,32 +751,53 @@ struct CategoryPickerView: View {
         }
     }
 
+    /// Tamaño BASE fijo de cada card — el escalado nunca lo toca. Si el layout
+    /// dependiera del tamaño escalado (containerRelativeFrame, por ejemplo),
+    /// las 3 cards terminan ocupando el mismo espacio visual y el efecto se
+    /// pierde. Acá el HStack siempre reserva 130pt por card; scaleEffect +
+    /// zIndex + offset dibujan la del centro invadiendo el espacio de sus
+    /// vecinas, como el carrusel destacado de la App Store.
+    private let exploreCardWidth: CGFloat = 130
+    private let exploreCardHeight: CGFloat = 170
+
+    private var centeredExplorePlace: APIPlaceCard? {
+        explorePhotos.first { $0.id == carouselCenterId }?.place
+            ?? explorePhotos.first?.place
+    }
+
     private var exploreCarousel: some View {
         VStack(spacing: 14) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(explorePhotos) { photo in
-                        ExploreCarouselCard(photo: photo)
-                            .containerRelativeFrame(.horizontal, count: 3, spacing: 10)
-                            .frame(height: 180)
-                            .visualEffect { content, proxy in
-                                let carouselFrame = proxy.bounds(of: .named("explore"))
-                                let cardMidX = proxy.frame(in: .named("explore")).midX
-                                let viewportCenter = (carouselFrame?.width ?? UIScreen.main.bounds.width) / 2
-                                let distance = abs(cardMidX - viewportCenter)
-                                let normalized = min(distance / 220, 1)
-                                let scale = 1.0 + (1 - normalized) * 0.18
-                                return content.scaleEffect(scale)
-                            }
+            GeometryReader { geo in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 20) {
+                        ForEach(explorePhotos) { photo in
+                            ExploreCarouselCard(photo: photo)
+                                .frame(width: exploreCardWidth, height: exploreCardHeight)
+                                .visualEffect { content, proxy in
+                                    let cardMidX = proxy.frame(in: .named("explore")).midX
+                                    let viewportCenter = geo.size.width / 2
+                                    let distance = abs(cardMidX - viewportCenter)
+                                    let normalized = min(distance / 220, 1)
+                                    let scale = 1.0 + (1 - normalized) * 0.18
+                                    return content
+                                        .scaleEffect(scale)
+                                        .offset(y: -(scale - 1) * 40)
+                                }
+                                // zIndex no es parte de VisualEffect (no se puede encadenar
+                                // dentro de .visualEffect) — se aplica aparte, atado a la
+                                // card centrada que ya rastrea scrollPosition.
+                                .zIndex(photo.id == carouselCenterId ? 1 : 0)
+                                .id(photo.id)
+                        }
                     }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, (geo.size.width - exploreCardWidth) / 2)
                 }
-                .scrollTargetLayout()
-                .padding(.horizontal, (UIScreen.main.bounds.width - UIScreen.main.bounds.width / 3) / 2)
+                .coordinateSpace(name: "explore")
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $carouselCenterId)
             }
-            .coordinateSpace(name: "explore")
-            .scrollTargetBehavior(.viewAligned)
-            .scrollPosition(id: $carouselCenterId)
-            .frame(height: 230)
+            .frame(height: exploreCardHeight * 1.2 + 20)
             .onChange(of: explorePhotos.map(\.id)) { _, ids in
                 // La segunda foto abre al medio, ya escalada — no la primera.
                 guard carouselCenterId == nil, !ids.isEmpty else { return }
@@ -794,14 +815,21 @@ struct CategoryPickerView: View {
             }
 
             // Sin acción todavía — se conecta cuando el flujo de "consultar
-            // sobre este lugar" quede definido.
+            // sobre este lugar" quede definido. El nombre sigue a la foto
+            // centrada para que quede claro a qué lugar corresponde el CTA.
             Button {} label: {
                 HStack(spacing: 10) {
                     Image(systemName: "bubble.left.fill")
                         .foregroundStyle(Color.ink)
-                    Text("Consultar sobre este lugar")
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Consultar sobre")
+                            .font(BT.caption2)
+                            .foregroundStyle(Color.inkMuted)
+                        Text(centeredExplorePlace?.name ?? "este lugar")
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(Color.ink)
+                            .lineLimit(1)
+                    }
                     Spacer()
                     ZStack {
                         Circle().fill(Color.brand).frame(width: 30, height: 30)
@@ -817,6 +845,7 @@ struct CategoryPickerView: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, Spacing.edge)
+            .animation(.easeInOut(duration: 0.2), value: carouselCenterId)
 
             Text("Te conectamos con un buddy local que te puede ayudar")
                 .font(BT.caption1)
