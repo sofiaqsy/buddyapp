@@ -524,6 +524,10 @@ struct CategoryPickerView: View {
 
     @State private var selected: BuddyCategory? = nil
     @State private var carouselCenterId: String? = nil
+    /// Distancia viva de cada foto al centro del viewport, por id. La publica
+    /// cada card durante el layout y alimenta el zIndex, que necesita el mismo
+    /// dato que el scaleEffect pero no puede leerlo desde .visualEffect.
+    @State private var exploreCardDistances: [String: Double] = [:]
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -778,13 +782,19 @@ struct CategoryPickerView: View {
             ?? explorePhotos.first?.place
     }
 
-    /// Cuanto más cerca del centro, más adelante se dibuja. Mientras
-    /// carouselCenterId siga nil, el centro asumido es el mismo que deja
-    /// defaultScrollAnchor(.center): la foto del medio.
-    private func exploreZIndex(for index: Int) -> Double {
-        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId }
-            ?? explorePhotos.count / 2
-        return -Double(abs(index - centerIndex))
+    /// Cuanto más cerca del centro, más adelante se dibuja — leyendo la MISMA
+    /// distancia viva que alimenta el scaleEffect, no carouselCenterId. Ese id
+    /// solo se actualiza cuando el scroll se asienta (viewAligned), así que a
+    /// mitad del arrastre la card que ya venía creciendo hacia el centro seguía
+    /// pintándose detrás de la anterior: se veía como si la lateral se pusiera
+    /// adelante. Con la distancia real, escala y profundidad cambian juntas.
+    private func exploreZIndex(for photo: ExplorePhoto, index: Int) -> Double {
+        guard let distance = exploreCardDistances[photo.id] else {
+            // Primer frame, sin geometría aún: el centro asumido es el mismo
+            // que deja defaultScrollAnchor(.center), la foto del medio.
+            return -Double(abs(index - explorePhotos.count / 2))
+        }
+        return -distance
     }
 
     private var exploreCarousel: some View {
@@ -805,14 +815,18 @@ struct CategoryPickerView: View {
                                     return content
                                         .scaleEffect(scale)
                                 }
-                                // zIndex no puede ir dentro de .visualEffect, así que
-                                // se deriva del índice: la centrada arriba y las demás
-                                // escalonadas hacia atrás según qué tan lejos están.
-                                // Atarlo solo a carouselCenterId no alcanzaba: mientras
-                                // ese id es nil (antes de que .task lo asigne) las tres
-                                // empataban en 0 y SwiftUI pintaba la ÚLTIMA encima,
-                                // dejando la card derecha tapando a la del centro.
-                                .zIndex(exploreZIndex(for: index))
+                                // Publica la distancia al centro para que el zIndex
+                                // (que no se puede encadenar dentro de .visualEffect)
+                                // use exactamente el mismo dato que la escala.
+                                .background(
+                                    GeometryReader { cardGeo in
+                                        Color.clear.preference(
+                                            key: ExploreCardDistanceKey.self,
+                                            value: [photo.id: abs(cardGeo.frame(in: .named("explore")).midX - geo.size.width / 2)]
+                                        )
+                                    }
+                                )
+                                .zIndex(exploreZIndex(for: photo, index: index))
                                 .id(photo.id)
                         }
                     }
@@ -821,6 +835,7 @@ struct CategoryPickerView: View {
                     .padding(.vertical, exploreVerticalSlack)
                 }
                 .coordinateSpace(name: "explore")
+                .onPreferenceChange(ExploreCardDistanceKey.self) { exploreCardDistances = $0 }
                 .scrollTargetBehavior(.viewAligned)
                 .scrollPosition(id: $carouselCenterId)
                 // Arranca centrado en el contenido — con padding simétrico eso
@@ -890,6 +905,14 @@ struct CategoryPickerView: View {
                 .font(BT.caption1)
                 .foregroundStyle(Color.inkMuted)
         }
+    }
+}
+
+/// Distancia de cada card del carrusel al centro del viewport, por id de foto.
+private struct ExploreCardDistanceKey: PreferenceKey {
+    static var defaultValue: [String: Double] = [:]
+    static func reduce(value: inout [String: Double], nextValue: () -> [String: Double]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 
