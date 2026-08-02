@@ -1119,10 +1119,17 @@ struct InicioView: View {
         guard !Task.isCancelled else { return }
         await MainActor.run { loadDataFailed = false }
         // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
+        // exploreCards va en paralelo con destinations, ANTES de que
+        // isLoadingData pase a false — si se carga después (como antes),
+        // el composer alcanza a pintar la grilla de categorías vacía de
+        // fotos y recién after eso salta al carrusel, un flash visible.
         async let dests = APIClient.shared.fetchDestinations()
+        async let explore = APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng)
         let fetchedDests = (try? await dests) ?? []
+        let fetchedExplore = (try? await explore) ?? []
         await MainActor.run {
             destinations = fetchedDests
+            exploreCards = fetchedExplore
             ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
         }
 
@@ -1230,15 +1237,6 @@ struct InicioView: View {
         // así que se carga siempre acá, sin importar en qué rama cayó
         // refreshHomeCommunityContext arriba.
         await loadCommunityPulseIfNeeded()
-        await loadExploreCards()
-    }
-
-    /// Fotos reales de lugares para el carrusel "Explora {ciudad}" que
-    /// reemplaza la grilla de categorías en el composer sin trip activo.
-    private func loadExploreCards() async {
-        if let cards = try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng) {
-            await MainActor.run { exploreCards = cards }
-        }
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }

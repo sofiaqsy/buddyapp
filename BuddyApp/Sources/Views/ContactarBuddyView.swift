@@ -779,11 +779,9 @@ struct CategoryPickerView: View {
                                     let distance = abs(cardMidX - viewportCenter)
                                     let normalized = min(distance / 160, 1)
                                     let scale = 1.0 + (1 - normalized) * 0.32
-                                    let offsetY = -(scale - 1) * 40
-                                    print("📏 [exploreCarousel] photo=\(photo.id) geoW=\(Int(geo.size.width)) cardMidX=\(Int(cardMidX)) viewportCenter=\(Int(viewportCenter)) distance=\(Int(distance)) scale=\(String(format: "%.2f", scale)) offsetY=\(String(format: "%.1f", offsetY))")
                                     return content
                                         .scaleEffect(scale)
-                                        .offset(y: offsetY)
+                                        .offset(y: -(scale - 1) * 40)
                                 }
                                 // zIndex no es parte de VisualEffect (no se puede encadenar
                                 // dentro de .visualEffect) — se aplica aparte, atado a la
@@ -800,10 +798,16 @@ struct CategoryPickerView: View {
                 .scrollPosition(id: $carouselCenterId)
             }
             .frame(height: exploreCardHeight * 1.2 + 20)
-            .onChange(of: explorePhotos.map(\.id)) { _, ids in
+            .task(id: explorePhotos.map(\.id)) {
                 // La segunda foto abre al medio, ya escalada — no la primera.
-                guard carouselCenterId == nil, !ids.isEmpty else { return }
-                carouselCenterId = ids.count > 1 ? ids[1] : ids[0]
+                // Asignar scrollPosition en el mismo frame en que el ScrollView
+                // recién aparece no tenía efecto (todavía sin geometría) — el
+                // pequeño delay le da tiempo a asentar el layout antes de mover
+                // la posición inicial.
+                guard carouselCenterId == nil, explorePhotos.count > 1 else { return }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard !Task.isCancelled, carouselCenterId == nil else { return }
+                carouselCenterId = explorePhotos[1].id
             }
 
             if explorePhotos.count > 1 {
