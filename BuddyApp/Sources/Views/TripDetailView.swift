@@ -970,7 +970,7 @@ struct PlaceGuideDetailSheet: View {
             }
 
             tabBar
-                .padding(.top, 8)
+                .padding(.top, 14)
 
             ScrollView {
                 switch tab {
@@ -1047,30 +1047,23 @@ struct PlaceGuideDetailSheet: View {
 
     // MARK: Tab bar
 
+    // Ligera a propósito: las fotos son las protagonistas, no la navegación.
+    // Sin iconos, sin conteo en la etiqueta — el número vive en el contenido
+    // de cada pestaña, no compitiendo aquí arriba.
     private var tabBar: some View {
         HStack(spacing: 0) {
             ForEach(Tab.allCases, id: \.self) { t in
-                let count: Int? = {
-                    switch t {
-                    case .fotos:   return gallery.map { $0.totalPhotos }
-                    case .buddies: return destinationId != nil ? buddies.count : nil
-                    case .info:    return nil
-                    }
-                }()
                 Button {
                     Haptic.select()
                     tab = t
                 } label: {
-                    VStack(spacing: 5) {
-                        HStack(spacing: 5) {
-                            Image(systemName: t.icon).font(.system(size: 11, weight: .semibold))
-                            Text(count.map { "\(t.rawValue) (\($0))" } ?? t.rawValue)
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .foregroundStyle(tab == t ? Color.brand : Color.inkMuted)
+                    VStack(spacing: 6) {
+                        Text(t.rawValue)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(tab == t ? Color.brand : Color.inkMuted)
                         Rectangle()
                             .fill(tab == t ? Color.brand : Color.clear)
-                            .frame(height: 2)
+                            .frame(height: 1.5)
                     }
                 }
                 .buttonStyle(.plain)
@@ -1092,7 +1085,7 @@ struct PlaceGuideDetailSheet: View {
                 emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
             } else {
                 HStack {
-                    Text("Fotos recientes")
+                    Text("Galería · \(allPhotos.count)")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.primary)
                     Spacer()
@@ -1118,7 +1111,7 @@ struct PlaceGuideDetailSheet: View {
                                 } placeholder: {
                                     Rectangle().fill(Color.sandLight)
                                 }
-                                .frame(width: 90, height: 90)
+                                .frame(width: 115, height: 115)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
                             .buttonStyle(.plain)
@@ -1128,7 +1121,7 @@ struct PlaceGuideDetailSheet: View {
                 }
             }
         }
-        .padding(.top, 8)
+        .padding(.top, 20)
         .padding(.bottom, 12)
     }
 
