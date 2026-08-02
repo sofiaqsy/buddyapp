@@ -757,24 +757,26 @@ struct CategoryPickerView: View {
                 HStack(spacing: 10) {
                     ForEach(explorePhotos) { photo in
                         ExploreCarouselCard(photo: photo)
+                            .containerRelativeFrame(.horizontal, count: 3, spacing: 10)
+                            .frame(height: 180)
                             .visualEffect { content, proxy in
-                                let midX = proxy.frame(in: .global).midX
-                                let screenMid = UIScreen.main.bounds.width / 2
-                                let distance = abs(midX - screenMid)
-                                let scale = max(0.8, 1.0 - distance / 500)
-                                let opacity = max(0.6, 1.0 - distance / 300)
-                                return content
-                                    .scaleEffect(scale)
-                                    .opacity(opacity)
+                                let carouselFrame = proxy.bounds(of: .named("explore"))
+                                let cardMidX = proxy.frame(in: .named("explore")).midX
+                                let viewportCenter = (carouselFrame?.width ?? UIScreen.main.bounds.width) / 2
+                                let distance = abs(cardMidX - viewportCenter)
+                                let normalized = min(distance / 220, 1)
+                                let scale = 1.0 + (1 - normalized) * 0.18
+                                return content.scaleEffect(scale)
                             }
                     }
                 }
                 .scrollTargetLayout()
-                .padding(.horizontal, (UIScreen.main.bounds.width - 128) / 2)
+                .padding(.horizontal, (UIScreen.main.bounds.width - UIScreen.main.bounds.width / 3) / 2)
             }
+            .coordinateSpace(name: "explore")
             .scrollTargetBehavior(.viewAligned)
             .scrollPosition(id: $carouselCenterId)
-            .frame(height: 220)
+            .frame(height: 230)
             .onChange(of: explorePhotos.map(\.id)) { _, ids in
                 // La segunda foto abre al medio, ya escalada — no la primera.
                 guard carouselCenterId == nil, !ids.isEmpty else { return }
@@ -840,7 +842,7 @@ private struct ExploreCarouselCard: View {
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
-            .frame(width: 128, height: 180)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
             LinearGradient(
@@ -881,7 +883,7 @@ private struct ExploreCarouselCard: View {
             }
             .padding(10)
         }
-        .frame(width: 128, height: 180)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 }
