@@ -1403,14 +1403,13 @@ struct InicioView: View {
                                 icon: "person.fill",
                                 text: Text(help.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
                                     .font(BT.footnoteBold).foregroundStyle(Color.ink)
-                                 + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
-                                 + Text(help.completedAt != nil ? " · \(timeAgo(help.completedAt))" : "")
-                                    .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7))
+                                 + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted),
+                                timeText: help.completedAt != nil ? timeAgo(help.completedAt) : nil
                             )
                         }
                     } else {
                         ForEach(Array(communityPulse.prefix(3)), id: \.id) { item in
-                            communityCard(avatarUrl: nil, icon: pulseIcon(item.type), text: pulseText(item))
+                            communityCard(avatarUrl: nil, icon: pulseIcon(item.type), text: pulseText(item), timeText: pulseTime(item))
                         }
                     }
                 }
@@ -1442,29 +1441,38 @@ struct InicioView: View {
     }
 
     @ViewBuilder
-    private func communityCard(avatarUrl: String?, icon: String, text: Text) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func communityCard(avatarUrl: String?, icon: String, text: Text, timeText: String?) -> some View {
+        HStack(spacing: 8) {
             Circle()
                 .fill(Color.sandLight)
-                .frame(width: 32, height: 32)
+                .frame(width: 26, height: 26)
                 .overlay {
                     if let urlStr = avatarUrl, let url = URL(string: urlStr) {
                         AsyncImage(url: url) { img in
                             img.resizable().scaledToFill()
                         } placeholder: { Color.sandLight }
-                        .frame(width: 32, height: 32)
+                        .frame(width: 26, height: 26)
                         .clipShape(Circle())
                     } else {
                         Image(systemName: icon)
-                            .font(.system(size: 14))
+                            .font(.system(size: 11))
                             .foregroundStyle(Color.sand)
                     }
                 }
-            text.lineLimit(2)
-            Spacer(minLength: 0)
+
+            VStack(alignment: .leading, spacing: 2) {
+                text.lineLimit(1)
+                if let timeText {
+                    Text(timeText)
+                        .font(BT.caption2)
+                        .foregroundStyle(Color.inkMuted.opacity(0.7))
+                        .lineLimit(1)
+                }
+            }
         }
-        .frame(width: 160, height: 96, alignment: .leading)
-        .padding(Spacing.md)
+        .frame(width: 190, alignment: .leading)
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, 10)
         .background(Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md))
         .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
@@ -1493,9 +1501,12 @@ struct InicioView: View {
         default: // helped
             return Text(item.city).font(BT.footnoteBold).foregroundStyle(Color.ink)
                 + Text(" · un buddy ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
-                + Text(item.at != nil ? " · \(timeAgo(item.at))" : "")
-                    .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7))
         }
+    }
+
+    private func pulseTime(_ item: APIPulseItem) -> String? {
+        guard item.type == "helped", item.at != nil else { return nil }
+        return timeAgo(item.at)
     }
 
     /// Carga el pulso global solo cuando el destino actual no tiene actividad
