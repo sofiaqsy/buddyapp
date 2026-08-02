@@ -523,24 +523,12 @@ struct CategoryPickerView: View {
     let onRequest: (String, String?) async -> Void
 
     @State private var selected: BuddyCategory? = nil
-    /// scrollPosition(id:) actualiza esto EN VIVO mientras el dedo arrastra —
-    /// no solo al asentarse (documentado por Apple: "updates this binding as
-    /// the scroll position changes"). Usarlo directo para zIndex reintroduce
-    /// el mismo patrón de recomposición en pleno gesto que ya causó el
-    /// rebote una vez. Es la fuente de verdad para CTA/dots (donde un
-    /// cambio ocasional en vivo no genera side effects visibles), pero NO
-    /// para zIndex — para eso existe settledCenterId más abajo.
+    /// scrollPosition(id:) actualiza esto EN VIVO mientras el dedo arrastra
+    /// (documentado por Apple: "updates this binding as the scroll position
+    /// changes"). Fuente de verdad única para CTA/dots/zIndex — congelarlo
+    /// hasta el touch-up (como se hizo antes) no evitaba ningún error de
+    /// índice, solo dejaba el z-order desactualizado durante todo el drag.
     @State private var carouselCenterId: String? = nil
-    /// Solo se confirma cuando el dedo YA SE LEVANTÓ (isCarouselDragging ==
-    /// false) y pasó un margen para que termine la deceleración/snap. Un
-    /// debounce por "tiempo sin cambios" no alcanza: si el usuario arrastra
-    /// lento o pausa sin soltar, carouselCenterId ya cruzó al vecino y queda
-    /// quieto por más de ese tiempo mientras el dedo sigue tocando — eso
-    /// confirmaba el settle antes de tiempo y adelantaba la tarjeta
-    /// siguiente antes de llegar al centro. isCarouselDragging usa el estado
-    /// real del toque, no una inferencia por tiempo.
-    @State private var settledCenterId: String? = nil
-    @State private var isCarouselDragging = false
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -803,15 +791,19 @@ struct CategoryPickerView: View {
     }
 
     /// Cuanto más cerca del centro, más adelante se dibuja. Atado a
-    /// settledCenterId, NUNCA a carouselCenterId directo — ese último cambia
-    /// en vivo mientras el dedo arrastra (scrollPosition(id:) lo actualiza
-    /// según se documenta: "updates this binding as the scroll position
-    /// changes", no solo al asentarse), y usarlo acá reintroduce el mismo
-    /// patrón de recomposición en pleno gesto que causó el rebote original.
-    /// settledCenterId solo se confirma tras el debounce del .task(id:) de
-    /// abajo, así que este valor es estable durante todo el drag activo.
+    /// carouselCenterId EN VIVO — los logs de settle probaron que
+    /// settledCenterId siempre termina confirmando exactamente el mismo
+    /// índice que carouselCenterId ya tenía, así que congelar zIndex hasta
+    /// el touch-up no evitaba ningún error de índice: solo dejaba el
+    /// z-order desactualizado durante TODO el arrastre (la card que crece
+    /// por scaleEffect en vivo se queda detrás de la vieja centrada, que
+    /// se encoge pero mantiene el zIndex más alto hasta soltar — eso era
+    /// "la imagen de la izquierda queda encima"). carouselCenterId es una
+    /// sola variable de estado que cambia por gesto discreto de scroll, no
+    /// el patrón de escritura por-frame de GeometryReader+PreferenceKey
+    /// que causó el rebote original — usarlo acá no reintroduce ese bug.
     private func exploreZIndex(for photo: ExplorePhoto, index: Int) -> Double {
-        let centerIndex = explorePhotos.firstIndex { $0.id == settledCenterId }
+        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId }
             ?? explorePhotos.count / 2
         return -Double(abs(index - centerIndex))
     }
@@ -858,15 +850,6 @@ struct CategoryPickerView: View {
                 // efecto en el primer frame, cuando el ScrollView aún no tiene
                 // geometría, y dejaba la #0 centrada sin vecina a la izquierda).
                 .defaultScrollAnchor(.center)
-                // simultaneousGesture no compite con el pan nativo del
-                // ScrollView (no lo reemplaza, corre en paralelo) — solo se
-                // usa para saber si el dedo sigue tocando la pantalla, la
-                // señal real de "todavía no se asentó".
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { _ in isCarouselDragging = true }
-                        .onEnded { _ in isCarouselDragging = false }
-                )
             }
             // Coincide exactamente con el alto del contenido (card + el slack
             // de arriba y abajo), para que no sobre ni falte espacio.
@@ -879,22 +862,6 @@ struct CategoryPickerView: View {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard !Task.isCancelled, carouselCenterId == nil else { return }
                 carouselCenterId = explorePhotos[1].id
-                settledCenterId = explorePhotos[1].id
-            }
-            // Se reinicia con CUALQUIER cambio en el id centrado o en si el
-            // dedo sigue tocando. Si isCarouselDragging es true, no hace
-            // nada (todavía no soltó). Si es false, espera un margen para
-            // que la deceleración/snap del ScrollView termine, y solo
-            // entonces confirma — nunca mientras el dedo sigue en pantalla,
-            // sin importar cuánto tiempo lleve quieto ahí.
-            .task(id: "\(carouselCenterId ?? "nil")-\(isCarouselDragging)") {
-                guard !isCarouselDragging else { return }
-                try? await Task.sleep(nanoseconds: 220_000_000)
-                guard !Task.isCancelled, !isCarouselDragging else { return }
-                let liveIdx = explorePhotos.firstIndex { $0.id == carouselCenterId } ?? -1
-                let prevSettledIdx = explorePhotos.firstIndex { $0.id == settledCenterId } ?? -1
-                print("🎯 [exploreCarousel] settle: carouselCenterId idx=\(liveIdx) settledCenterId(antes) idx=\(prevSettledIdx) → confirmando idx=\(liveIdx)")
-                settledCenterId = carouselCenterId
             }
 
             if explorePhotos.count > 1 {
