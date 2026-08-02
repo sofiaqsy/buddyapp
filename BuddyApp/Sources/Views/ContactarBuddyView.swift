@@ -770,6 +770,11 @@ struct CategoryPickerView: View {
             .scrollTargetBehavior(.viewAligned)
             .scrollPosition(id: $carouselCenterId)
             .frame(height: 220)
+            .onChange(of: explorePhotos.map(\.id)) { _, ids in
+                // La segunda foto abre al medio, ya escalada — no la primera.
+                guard carouselCenterId == nil, !ids.isEmpty else { return }
+                carouselCenterId = ids.count > 1 ? ids[1] : ids[0]
+            }
 
             if explorePhotos.count > 1 {
                 HStack(spacing: 6) {
