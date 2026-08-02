@@ -779,9 +779,11 @@ struct CategoryPickerView: View {
                                     let distance = abs(cardMidX - viewportCenter)
                                     let normalized = min(distance / 160, 1)
                                     let scale = 1.0 + (1 - normalized) * 0.32
+                                    let offsetY = -(scale - 1) * 40
+                                    print("📏 [exploreCarousel] photo=\(photo.id) geoW=\(Int(geo.size.width)) cardMidX=\(Int(cardMidX)) viewportCenter=\(Int(viewportCenter)) distance=\(Int(distance)) scale=\(String(format: "%.2f", scale)) offsetY=\(String(format: "%.1f", offsetY))")
                                     return content
                                         .scaleEffect(scale)
-                                        .offset(y: -(scale - 1) * 40)
+                                        .offset(y: offsetY)
                                 }
                                 // zIndex no es parte de VisualEffect (no se puede encadenar
                                 // dentro de .visualEffect) — se aplica aparte, atado a la
