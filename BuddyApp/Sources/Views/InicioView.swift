@@ -59,6 +59,7 @@ struct InicioView: View {
     @State private var feedHasMore = true
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
+    @State private var exploreCards: [APIPlaceCard] = []   // carrusel "Explora {ciudad}" del composer
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
@@ -765,6 +766,7 @@ struct InicioView: View {
                     buddyCount: homeBuddyCount,
                     destinationName: resolvedLocation?.destinationName ?? locationService.currentCity,
                     communityContext: homeCommunityContext,
+                    placeCards: exploreCards,
                     pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
                     isLoading: isFindingBuddy
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
@@ -1228,6 +1230,15 @@ struct InicioView: View {
         // así que se carga siempre acá, sin importar en qué rama cayó
         // refreshHomeCommunityContext arriba.
         await loadCommunityPulseIfNeeded()
+        await loadExploreCards()
+    }
+
+    /// Fotos reales de lugares para el carrusel "Explora {ciudad}" que
+    /// reemplaza la grilla de categorías en el composer sin trip activo.
+    private func loadExploreCards() async {
+        if let cards = try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng) {
+            await MainActor.run { exploreCards = cards }
+        }
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }

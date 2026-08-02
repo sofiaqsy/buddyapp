@@ -426,6 +426,10 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
     let lng: Double?
     let coverUrl: String?
     let coverUrls: [String]?
+    /// Quién documentó la foto de portada — "Recomendado por {nombre}" en el
+    /// carrusel de exploración.
+    let coverAuthorName: String?
+    let coverAuthorAvatarUrl: String?
     let photoCount: Int
     let isNew: Bool
     let buddyCount: Int

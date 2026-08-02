@@ -506,6 +506,10 @@ struct CategoryPickerView: View {
     var activeBuddyName: String? = nil
     var activeBuddyAvatarUrl: String? = nil
     var communityContext: APIPlaceContext? = nil
+    /// Fotos reales de lugares del destino — cuando hay datos, reemplazan la
+    /// grilla de categorías por el carrusel "Explora {ciudad}". El botón
+    /// "Consultar sobre este lugar" todavía no dispara ninguna acción.
+    var placeCards: [APIPlaceCard] = []
     /// True while InicioView is still loading data. Renders this exact component
     /// redacted instead of a hand-built skeleton, so there is zero visual jump when
     /// real data arrives — same layout, padding, radius, just real content
@@ -519,6 +523,7 @@ struct CategoryPickerView: View {
     let onRequest: (String, String?) async -> Void
 
     @State private var selected: BuddyCategory? = nil
+    @State private var carouselCenterId: String? = nil
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -657,6 +662,9 @@ struct CategoryPickerView: View {
             .padding(.top, Spacing.md)
             .padding(.bottom, Spacing.lg / 2)
 
+            if !placeCards.isEmpty {
+                exploreCarousel
+            } else {
             // 2×3 grid — icon circle + title + subtitle
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
                 ForEach(categories) { cat in
@@ -711,6 +719,7 @@ struct CategoryPickerView: View {
             .redacted(reason: isSkeleton ? .placeholder : [])
             .disabled(isSkeleton)
             .padding(.horizontal, Spacing.edge)
+            }
 
             Spacer().frame(height: Spacing.md)
         }
@@ -724,6 +733,119 @@ struct CategoryPickerView: View {
             // Si hay un buddy activo, el botón se habilita vía activeBuddyName, no vía selected.
             selected = nil
         }
+    }
+
+    // MARK: – Explora {ciudad} (carrusel de fotos reales)
+    // Reemplaza la grilla de categorías cuando hay lugares documentados por
+    // buddies. La categoría se sigue pidiendo — solo cambia CUÁNDO: ya no es
+    // lo primero que ve el usuario, nace después de que un lugar le llamó la
+    // atención. El botón de abajo todavía no dispara ninguna acción.
+    private var exploreCarousel: some View {
+        VStack(spacing: 14) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(placeCards) { place in
+                        ExploreCarouselCard(place: place)
+                            .scrollTransition(.interactive, axis: .horizontal) { content, phase in
+                                content
+                                    .scaleEffect(phase.isIdentity ? 1.0 : 0.86)
+                                    .opacity(phase.isIdentity ? 1.0 : 0.7)
+                            }
+                    }
+                }
+                .scrollTargetLayout()
+                .padding(.horizontal, (UIScreen.main.bounds.width - 190) / 2)
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $carouselCenterId)
+            .frame(height: 250)
+
+            if placeCards.count > 1 {
+                HStack(spacing: 6) {
+                    ForEach(placeCards) { place in
+                        Circle()
+                            .fill(place.id == (carouselCenterId ?? placeCards.first?.id) ? Color.brand : Color.border)
+                            .frame(width: 6, height: 6)
+                    }
+                }
+            }
+
+            // Sin acción todavía — se conecta cuando el flujo de "consultar
+            // sobre este lugar" quede definido.
+            Button {} label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "bubble.left.fill")
+                        .foregroundStyle(Color.ink)
+                    Text("Consultar sobre este lugar")
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                    Spacer()
+                    ZStack {
+                        Circle().fill(Color.brand).frame(width: 30, height: 30)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.surface, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, Spacing.edge)
+
+            Text("Te conectamos con un buddy local que te puede ayudar")
+                .font(BT.caption1)
+                .foregroundStyle(Color.inkMuted)
+        }
+    }
+}
+
+private struct ExploreCarouselCard: View {
+    let place: APIPlaceCard
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CachedImage(urlString: place.coverUrl) { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                Rectangle().fill(Color.sandLight)
+            }
+            .frame(width: 190, height: 190)
+            .clipShape(RoundedRectangle(cornerRadius: 20))
+
+            Text(place.name)
+                .font(BT.footnoteBold)
+                .foregroundStyle(Color.ink)
+                .lineLimit(1)
+
+            if let author = place.coverAuthorName {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.sandLight)
+                        .frame(width: 20, height: 20)
+                        .overlay {
+                            if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
+                                AsyncImage(url: url) { img in
+                                    img.resizable().scaledToFill()
+                                } placeholder: { Color.sandLight }
+                                .frame(width: 20, height: 20)
+                                .clipShape(Circle())
+                            } else {
+                                Image(systemName: "person.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(Color.sand)
+                            }
+                        }
+                    Text("Recomendado por \(author.components(separatedBy: " ").first ?? author)")
+                        .font(BT.caption2)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(width: 190, alignment: .leading)
     }
 }
 
