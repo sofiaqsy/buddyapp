@@ -743,22 +743,22 @@ struct CategoryPickerView: View {
     private var exploreCarousel: some View {
         VStack(spacing: 14) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     ForEach(placeCards) { place in
                         ExploreCarouselCard(place: place)
                             .scrollTransition(.interactive, axis: .horizontal) { content, phase in
                                 content
-                                    .scaleEffect(phase.isIdentity ? 1.0 : 0.82)
+                                    .scaleEffect(phase.isIdentity ? 1.0 : 0.8)
                                     .opacity(phase.isIdentity ? 1.0 : 0.6)
                             }
                     }
                 }
                 .scrollTargetLayout()
-                .padding(.horizontal, (UIScreen.main.bounds.width - 190) / 2)
+                .padding(.horizontal, (UIScreen.main.bounds.width - 128) / 2)
             }
             .scrollTargetBehavior(.viewAligned)
             .scrollPosition(id: $carouselCenterId)
-            .frame(height: 260)
+            .frame(height: 220)
 
             if placeCards.count > 1 {
                 HStack(spacing: 6) {
@@ -812,7 +812,7 @@ private struct ExploreCarouselCard: View {
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
-            .frame(width: 190, height: 260)
+            .frame(width: 128, height: 180)
             .clipped()
 
             LinearGradient(
@@ -821,41 +821,40 @@ private struct ExploreCarouselCard: View {
                 endPoint: .bottom
             )
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(place.name)
-                    .font(BT.footnoteBold)
+                    .font(BT.caption1.weight(.bold))
                     .foregroundStyle(.white)
-                    .lineLimit(1)
+                    .lineLimit(2)
 
-                if let author = place.coverAuthorName {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color.sandLight)
-                            .frame(width: 20, height: 20)
-                            .overlay {
-                                if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
+                if !place.buddies.isEmpty {
+                    HStack(spacing: -6) {
+                        ForEach(Array(place.buddies.prefix(3).enumerated()), id: \.offset) { _, buddy in
+                            Group {
+                                if let urlStr = buddy.avatarUrl, let url = URL(string: urlStr) {
                                     AsyncImage(url: url) { img in
                                         img.resizable().scaledToFill()
                                     } placeholder: { Color.sandLight }
-                                    .frame(width: 20, height: 20)
-                                    .clipShape(Circle())
                                 } else {
-                                    Image(systemName: "person.fill")
-                                        .font(.system(size: 9))
-                                        .foregroundStyle(Color.sand)
+                                    Circle().fill(Color.sandLight)
+                                        .overlay(Text(buddy.initial).font(.system(size: 8, weight: .bold)).foregroundStyle(Color.ink))
                                 }
                             }
-                        Text("Recomendado por \(author.components(separatedBy: " ").first ?? author)")
-                            .font(BT.caption2)
-                            .foregroundStyle(.white.opacity(0.9))
-                            .lineLimit(1)
+                            .frame(width: 16, height: 16)
+                            .clipShape(Circle())
+                            .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+                        }
                     }
+                    Text("\(place.buddyCount) buddies aquí")
+                        .font(BT.caption2)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
                 }
             }
-            .padding(14)
+            .padding(10)
         }
-        .frame(width: 190, height: 260)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .frame(width: 128, height: 180)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 }
 
