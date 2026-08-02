@@ -647,9 +647,6 @@ struct InicioView: View {
                             SkeletonBox(cornerRadius: 4).frame(width: 130, height: 14)
                             CategoryPickerView(isSkeleton: true) { _, _ in }
                                 .padding(.horizontal, -Spacing.edge)
-                            RegisterCTACard(destinations: []) {}
-                                .redacted(reason: .placeholder)
-                                .disabled(true)
                         }
                         .skeletonPulse()
                     } else {
@@ -680,9 +677,9 @@ struct InicioView: View {
                 }
                 .animation(.easeInOut(duration: 0.15), value: isFindingBuddy)
 
-                // Comunidad viva — actividad local o, en su defecto, el pulso
-                // global de la red. La sección vive siempre que haya algo real.
-                if !recentHelp.isEmpty || communityPulse.contains(where: { $0.type == "helped" }) {
+                // Comunidad viva — últimas ayudas en cualquier lugar, sin
+                // restringir al destino del usuario.
+                if communityPulse.contains(where: { $0.type == "helped" }) {
                     communityLiveSection
                         .padding(.top, Spacing.md)
                 }
@@ -784,11 +781,7 @@ struct InicioView: View {
                 .opacity(isFindingBuddy ? 0.5 : 1)
                 .disabled(isFindingBuddy)
 
-                if !hasTripContext {
-                    RegisterCTACard(destinations: destinations) {
-                        requireIdentity { navPath.append("register") }
-                    }
-                }
+                // "¿Vas a viajar?" oculto por ahora en todos los casos.
             }
         }
     }
@@ -1396,22 +1389,10 @@ struct InicioView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    if !recentHelp.isEmpty {
-                        let city = resolvedLocation?.destinationName ?? locationService.currentCity
-                        ForEach(Array(recentHelp.prefix(3).enumerated()), id: \.element.id) { idx, help in
-                            if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
-                            communityRow(
-                                avatarUrl: help.buddy?.avatarUrl,
-                                cityText: city ?? "tu destino",
-                                timeText: help.completedAt != nil ? timeAgo(help.completedAt) : nil
-                            )
-                        }
-                    } else {
-                        let helped = communityPulse.filter { $0.type == "helped" }.prefix(3)
-                        ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
-                            if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
-                            communityRow(avatarUrl: nil, cityText: item.city, timeText: pulseTime(item))
-                        }
+                    let helped = communityPulse.filter { $0.type == "helped" }.prefix(3)
+                    ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
+                        if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
+                        communityRow(avatarUrl: nil, cityText: item.city, timeText: pulseTime(item))
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
@@ -1482,10 +1463,9 @@ struct InicioView: View {
         return timeAgo(item.at)
     }
 
-    /// Carga el pulso global solo cuando el destino actual no tiene actividad
-    /// propia — la sección nunca queda vacía mientras la red esté viva.
+    /// Comunidad viva ahora siempre muestra el pulso global (últimas ayudas
+    /// en cualquier lugar), sin restringir al destino activo del usuario.
     private func loadCommunityPulseIfNeeded() async {
-        guard recentHelp.isEmpty else { return }
         // El pulso global cambia lento — no refetchar en < 60 s.
         if let at = communityPulseLoadedAt, Date().timeIntervalSince(at) < 60, !communityPulse.isEmpty {
             return
