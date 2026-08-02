@@ -2377,15 +2377,16 @@ struct NearbyPlaceCard: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
-                    if !place.buddies.isEmpty {
-                        buddyAvatars
-                    }
-
-                    if let label = subtitleOverride ?? place.buddyLabel {
-                        Text(label)
-                            .font(BT.caption1)
-                            .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if !place.buddies.isEmpty {
+                            buddyAvatars
+                        }
+                        if let label = subtitleOverride ?? place.buddyLabel {
+                            Text(label)
+                                .font(BT.caption1)
+                                .foregroundStyle(.white.opacity(0.85))
+                                .lineLimit(1)
+                        }
                     }
                 }
                 .frame(width: cardWidth - textInset * 2, alignment: .leading)
@@ -2414,7 +2415,7 @@ struct NearbyPlaceCard: View {
     private var buddyAvatars: some View {
         let shown  = Array(place.buddies.prefix(4))
         let hidden = place.buddyCount - shown.count
-        return HStack(spacing: -8) {
+        return HStack(spacing: -6) {
             ForEach(Array(shown.enumerated()), id: \.offset) { _, buddy in
                 Group {
                     if let url = buddy.avatarUrl {
@@ -2425,20 +2426,20 @@ struct NearbyPlaceCard: View {
                         }
                     } else {
                         Circle().fill(Color.sandLight)
-                            .overlay(Text(buddy.initial).font(BT.caption2).foregroundStyle(Color.ink))
+                            .overlay(Text(buddy.initial).font(.system(size: 9, weight: .bold)).foregroundStyle(Color.ink))
                     }
                 }
-                .frame(width: 26, height: 26)
+                .frame(width: 18, height: 18)
                 .clipShape(Circle())
-                .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
+                .overlay(Circle().strokeBorder(Color.surface, lineWidth: 1.5))
             }
             if hidden > 0 {
                 Text("+\(hidden)")
-                    .font(BT.caption2.weight(.semibold))
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(Color.inkMuted)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 18, height: 18)
                     .background(Circle().fill(Color.sandLight))
-                    .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
+                    .overlay(Circle().strokeBorder(Color.surface, lineWidth: 1.5))
             }
         }
     }
