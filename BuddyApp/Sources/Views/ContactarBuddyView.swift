@@ -757,10 +757,15 @@ struct CategoryPickerView: View {
                 HStack(spacing: 10) {
                     ForEach(explorePhotos) { photo in
                         ExploreCarouselCard(photo: photo)
-                            .scrollTransition(.interactive, axis: .horizontal) { content, phase in
-                                content
-                                    .scaleEffect(phase.isIdentity ? 1.0 : 0.8)
-                                    .opacity(phase.isIdentity ? 1.0 : 0.6)
+                            .visualEffect { content, proxy in
+                                let midX = proxy.frame(in: .global).midX
+                                let screenMid = UIScreen.main.bounds.width / 2
+                                let distance = abs(midX - screenMid)
+                                let scale = max(0.8, 1.0 - distance / 500)
+                                let opacity = max(0.6, 1.0 - distance / 300)
+                                return content
+                                    .scaleEffect(scale)
+                                    .opacity(opacity)
                             }
                     }
                 }
