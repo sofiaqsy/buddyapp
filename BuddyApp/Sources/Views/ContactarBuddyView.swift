@@ -743,13 +743,13 @@ struct CategoryPickerView: View {
     private var exploreCarousel: some View {
         VStack(spacing: 14) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
+                HStack(spacing: 12) {
                     ForEach(placeCards) { place in
                         ExploreCarouselCard(place: place)
                             .scrollTransition(.interactive, axis: .horizontal) { content, phase in
                                 content
-                                    .scaleEffect(phase.isIdentity ? 1.0 : 0.86)
-                                    .opacity(phase.isIdentity ? 1.0 : 0.7)
+                                    .scaleEffect(phase.isIdentity ? 1.0 : 0.82)
+                                    .opacity(phase.isIdentity ? 1.0 : 0.6)
                             }
                     }
                 }
@@ -758,7 +758,7 @@ struct CategoryPickerView: View {
             }
             .scrollTargetBehavior(.viewAligned)
             .scrollPosition(id: $carouselCenterId)
-            .frame(height: 250)
+            .frame(height: 260)
 
             if placeCards.count > 1 {
                 HStack(spacing: 6) {
@@ -806,46 +806,56 @@ private struct ExploreCarouselCard: View {
     let place: APIPlaceCard
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        ZStack(alignment: .bottomLeading) {
             CachedImage(urlString: place.coverUrl) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
-            .frame(width: 190, height: 190)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
+            .frame(width: 190, height: 260)
+            .clipped()
 
-            Text(place.name)
-                .font(BT.footnoteBold)
-                .foregroundStyle(Color.ink)
-                .lineLimit(1)
+            LinearGradient(
+                colors: [.black.opacity(0), .black.opacity(0.75)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
 
-            if let author = place.coverAuthorName {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.sandLight)
-                        .frame(width: 20, height: 20)
-                        .overlay {
-                            if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
-                                AsyncImage(url: url) { img in
-                                    img.resizable().scaledToFill()
-                                } placeholder: { Color.sandLight }
-                                .frame(width: 20, height: 20)
-                                .clipShape(Circle())
-                            } else {
-                                Image(systemName: "person.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(Color.sand)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(place.name)
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                if let author = place.coverAuthorName {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.sandLight)
+                            .frame(width: 20, height: 20)
+                            .overlay {
+                                if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
+                                    AsyncImage(url: url) { img in
+                                        img.resizable().scaledToFill()
+                                    } placeholder: { Color.sandLight }
+                                    .frame(width: 20, height: 20)
+                                    .clipShape(Circle())
+                                } else {
+                                    Image(systemName: "person.fill")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(Color.sand)
+                                }
                             }
-                        }
-                    Text("Recomendado por \(author.components(separatedBy: " ").first ?? author)")
-                        .font(BT.caption2)
-                        .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
+                        Text("Recomendado por \(author.components(separatedBy: " ").first ?? author)")
+                            .font(BT.caption2)
+                            .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(1)
+                    }
                 }
             }
+            .padding(14)
         }
-        .frame(width: 190, alignment: .leading)
+        .frame(width: 190, height: 260)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
     }
 }
 
