@@ -2352,15 +2352,24 @@ struct NearbyPlaceCard: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .center, spacing: 6) {
                         if !place.buddies.isEmpty {
                             buddyAvatars
                         }
                         if let label = subtitleOverride ?? place.buddyLabel {
-                            Text(label)
-                                .font(BT.caption1)
-                                .foregroundStyle(.white.opacity(0.85))
-                                .lineLimit(1)
+                            let parts = label.components(separatedBy: " en ")
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(parts[0])
+                                    .font(BT.caption1)
+                                    .foregroundStyle(.white.opacity(0.85))
+                                    .lineLimit(1)
+                                if parts.count > 1 {
+                                    Text("en \(parts[1])")
+                                        .font(BT.caption1)
+                                        .foregroundStyle(.white.opacity(0.85))
+                                        .lineLimit(1)
+                                }
+                            }
                         }
                     }
                 }
