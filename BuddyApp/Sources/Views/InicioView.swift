@@ -60,7 +60,6 @@ struct InicioView: View {
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
-    @State private var placeShares: [APIPlaceCard] = []   // lugares documentados cerca
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
     @State private var isLoadingRecentHelp = false        // anti re-entrada
@@ -684,14 +683,6 @@ struct InicioView: View {
                         .padding(.top, Spacing.md)
                 }
 
-                // Fotos recién compartidas de lugares concretos. Sección propia
-                // y no mezclada en las historias: un viaje es una narración, un
-                // lugar compartido es una referencia sobre ese sitio.
-                if !placeShares.isEmpty {
-                    placeSharesSection
-                        .padding(.top, Spacing.xl)
-                }
-
                 communitySection
                     .padding(.top, Spacing.xl)
             }
@@ -1267,12 +1258,6 @@ struct InicioView: View {
                 feedHasMore = page.hasMore
                 feedFailed = false
                 isLoadingFeed = false
-                // Su propia sección, y su propio fallo: si esto no carga, las
-                // historias igual se muestran.
-                Task {
-                    let shares = (try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng)) ?? []
-                    await MainActor.run { placeShares = shares }
-                }
                 return
             } catch {
                 if attempt == 0 { try? await Task.sleep(for: .seconds(1.5)) }
@@ -1398,28 +1383,6 @@ struct InicioView: View {
                     ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
                         if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
                         communityRow(avatarUrl: item.buddyAvatarUrl, buddyName: item.buddyName, cityText: item.city, timeText: pulseTime(item))
-                    }
-                }
-                .padding(.horizontal, Spacing.edge)
-            }
-        }
-    }
-
-    // MARK: – Lugares recién documentados (carrusel)
-    // Fotos de sitios concretos que los buddies acaban de compartir. Va aparte
-    // de "Historias de viajeros" porque responde a otra pregunta: no "qué le
-    // pasó a alguien", sino "cómo se ve este lugar por dentro".
-    private var placeSharesSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("RECOMENDADOS POR BUDDIES")
-                .font(BT.eyebrow).tracking(1.5)
-                .foregroundStyle(Color.ink)
-                .padding(.horizontal, Spacing.edge)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Spacing.md) {
-                    ForEach(placeShares) { place in
-                        NearbyPlaceCard(place: place) { navPath.append(place) }
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
