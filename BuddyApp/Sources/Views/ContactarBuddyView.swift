@@ -658,7 +658,7 @@ struct CategoryPickerView: View {
             .padding(.bottom, Spacing.lg / 2)
 
             // 2×3 grid — icon circle + title + subtitle
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
                 ForEach(categories) { cat in
                     let isSelected = selected?.id == cat.id
                     let subtitle   = subtitles[cat.apiKey] ?? ""
