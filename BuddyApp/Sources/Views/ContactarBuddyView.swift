@@ -941,32 +941,34 @@ private struct ExploreCarouselCard: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(place.name)
-                    .font(BT.caption1.weight(.bold))
+                    .font(BT.footnoteBold)
                     .foregroundStyle(.white)
                     .lineLimit(2)
 
-                if !place.buddies.isEmpty {
-                    HStack(spacing: -6) {
-                        ForEach(Array(place.buddies.prefix(3).enumerated()), id: \.offset) { _, buddy in
-                            Group {
-                                if let urlStr = buddy.avatarUrl, let url = URL(string: urlStr) {
-                                    AsyncImage(url: url) { img in
-                                        img.resizable().scaledToFill()
-                                    } placeholder: { Color.sandLight }
-                                } else {
-                                    Circle().fill(Color.sandLight)
-                                        .overlay(Text(buddy.initial).font(.system(size: 8, weight: .bold)).foregroundStyle(Color.ink))
-                                }
+                if let author = place.coverAuthorName {
+                    HStack(spacing: 6) {
+                        Group {
+                            if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
+                                AsyncImage(url: url) { img in
+                                    img.resizable().scaledToFill()
+                                } placeholder: { Color.sandLight }
+                            } else {
+                                Circle().fill(Color.sandLight)
+                                    .overlay(Text(String(author.prefix(1))).font(.system(size: 9, weight: .bold)).foregroundStyle(Color.ink))
                             }
-                            .frame(width: 16, height: 16)
-                            .clipShape(Circle())
-                            .overlay(Circle().strokeBorder(.white, lineWidth: 1))
                         }
+                        .frame(width: 20, height: 20)
+                        .clipShape(Circle())
+                        .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+
+                        Text("Recomendado por ")
+                            .font(BT.caption2)
+                            .foregroundStyle(.white.opacity(0.9))
+                        + Text(author.components(separatedBy: " ").first ?? author)
+                            .font(BT.caption2.weight(.bold))
+                            .foregroundStyle(.white)
                     }
-                    Text("\(place.buddyCount) buddies aquí")
-                        .font(BT.caption2)
-                        .foregroundStyle(.white.opacity(0.9))
-                        .lineLimit(1)
+                    .lineLimit(1)
                 }
             }
             .padding(10)
