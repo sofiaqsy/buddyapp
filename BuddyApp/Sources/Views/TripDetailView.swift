@@ -1084,12 +1084,9 @@ struct PlaceGuideDetailSheet: View {
             } else if allPhotos.isEmpty {
                 emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
             } else {
-                HStack {
-                    Text("Galería · \(allPhotos.count)")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    if allPhotos.count > 6 {
+                if allPhotos.count > 6 {
+                    HStack {
+                        Spacer()
                         Button { showFullGallery = true } label: {
                             HStack(spacing: 2) {
                                 Text("Ver todas").font(.system(size: 13, weight: .semibold))
@@ -1099,8 +1096,8 @@ struct PlaceGuideDetailSheet: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 20)
                 }
-                .padding(.horizontal, 20)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
