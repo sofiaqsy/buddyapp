@@ -2393,46 +2393,14 @@ struct NearbyPlaceCard: View {
         .buttonStyle(.plain)
     }
 
-    /// Mosaico 2×2 con hasta 4 fotos a la vez — todo el espacio de la tarjeta
-    /// pre-visualiza el lugar de un vistazo, sin swipe. Con menos de 4 fotos,
-    /// las celdas sobrantes repiten la última disponible en vez de quedar vacías.
-    @ViewBuilder
+    /// Solo la última foto subida del lugar — un vistazo directo, sin mosaico.
     private var photoPreview: some View {
-        let photos = place.previewPhotos
-        if photos.count > 1 {
-            let cellW: CGFloat = (cardWidth - 2) / 2
-            let cellH: CGFloat = (previewHeight - 2) / 2
-            VStack(spacing: 2) {
-                HStack(spacing: 2) {
-                    photoCell(photos, 0, width: cellW, height: cellH)
-                    photoCell(photos, 1, width: cellW, height: cellH)
-                }
-                HStack(spacing: 2) {
-                    photoCell(photos, 2, width: cellW, height: cellH)
-                    photoCell(photos, 3, width: cellW, height: cellH)
-                }
-            }
-            .frame(width: cardWidth, height: previewHeight)
-            .clipped()
-        } else {
-            CachedImage(urlString: photos.first) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                Rectangle().fill(Color.sandLight)
-            }
-            .frame(width: cardWidth, height: previewHeight)
-            .clipped()
-        }
-    }
-
-    private func photoCell(_ photos: [String], _ index: Int, width: CGFloat, height: CGFloat) -> some View {
-        let url = photos.indices.contains(index) ? photos[index] : photos.last
-        return CachedImage(urlString: url) { img in
+        CachedImage(urlString: place.coverUrl) { img in
             img.resizable().scaledToFill()
         } placeholder: {
             Rectangle().fill(Color.sandLight)
         }
-        .frame(width: width, height: height)
+        .frame(width: cardWidth, height: previewHeight)
         .clipped()
     }
 
