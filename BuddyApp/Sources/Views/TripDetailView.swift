@@ -511,6 +511,7 @@ struct TripDetailView: View {
                 Text("Recomendado por buddies")
                     .font(BT.title2)
                     .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
                     .padding(.top, 6)
                     .padding(.bottom, 8)
