@@ -524,10 +524,6 @@ struct CategoryPickerView: View {
 
     @State private var selected: BuddyCategory? = nil
     @State private var carouselCenterId: String? = nil
-    /// Distancia viva de cada foto al centro del viewport, por id. La publica
-    /// cada card durante el layout y alimenta el zIndex, que necesita el mismo
-    /// dato que el scaleEffect pero no puede leerlo desde .visualEffect.
-    @State private var exploreCardDistances: [String: Double] = [:]
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -789,19 +785,19 @@ struct CategoryPickerView: View {
             ?? explorePhotos.first?.place
     }
 
-    /// Cuanto más cerca del centro, más adelante se dibuja — leyendo la MISMA
-    /// distancia viva que alimenta el scaleEffect, no carouselCenterId. Ese id
-    /// solo se actualiza cuando el scroll se asienta (viewAligned), así que a
-    /// mitad del arrastre la card que ya venía creciendo hacia el centro seguía
-    /// pintándose detrás de la anterior: se veía como si la lateral se pusiera
-    /// adelante. Con la distancia real, escala y profundidad cambian juntas.
+    /// Cuanto más cerca del centro, más adelante se dibuja. Se ató antes a la
+    /// distancia en vivo publicada por un GeometryReader+PreferenceKey en cada
+    /// card — pero eso escribía @State en cada frame de scroll, forzando a
+    /// SwiftUI a re-evaluar el body (y reordenar zIndex) MIENTRAS el dedo
+    /// seguía arrastrando el ScrollView. Ese contenido reordenándose bajo el
+    /// gesto activo es lo que producía el rebote: no era viewAligned ni
+    /// scrollPosition, era este re-render en pleno drag. carouselCenterId solo
+    /// cambia cuando el scroll se asienta (no en cada frame), así que atar el
+    /// zIndex a eso evita la mutación de estado durante el gesto.
     private func exploreZIndex(for photo: ExplorePhoto, index: Int) -> Double {
-        guard let distance = exploreCardDistances[photo.id] else {
-            // Primer frame, sin geometría aún: el centro asumido es el mismo
-            // que deja defaultScrollAnchor(.center), la foto del medio.
-            return -Double(abs(index - explorePhotos.count / 2))
-        }
-        return -distance
+        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId }
+            ?? explorePhotos.count / 2
+        return -Double(abs(index - centerIndex))
     }
 
     private var exploreCarousel: some View {
@@ -812,27 +808,19 @@ struct CategoryPickerView: View {
                         ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
                             ExploreCarouselCard(photo: photo)
                                 .frame(width: exploreCardWidth, height: exploreCardHeight)
+                                // visualEffect es el único lector de geometría acá a
+                                // propósito: es render-only y no dispara re-render de
+                                // @State, a diferencia de un GeometryReader+PreferenceKey
+                                // (que sí lo hace, y en pleno drag rompía el gesto — ver
+                                // nota en exploreZIndex).
                                 .visualEffect { content, proxy in
                                     let cardMidX = proxy.frame(in: .named("explore")).midX
                                     let viewportCenter = geo.size.width / 2
                                     let distance = abs(cardMidX - viewportCenter)
                                     let normalized = min(distance / 160, 1)
                                     let scale = 1.0 + (1 - normalized) * exploreScaleDelta
-                                    print("📏 [exploreCarousel] photo=\(photo.id) geoW=\(Int(geo.size.width)) cardMidX=\(Int(cardMidX)) viewportCenter=\(Int(viewportCenter)) distance=\(Int(distance)) scale=\(String(format: "%.2f", scale))")
-                                    return content
-                                        .scaleEffect(scale)
+                                    return content.scaleEffect(scale)
                                 }
-                                // Publica la distancia al centro para que el zIndex
-                                // (que no se puede encadenar dentro de .visualEffect)
-                                // use exactamente el mismo dato que la escala.
-                                .background(
-                                    GeometryReader { cardGeo in
-                                        Color.clear.preference(
-                                            key: ExploreCardDistanceKey.self,
-                                            value: [photo.id: abs(cardGeo.frame(in: .named("explore")).midX - geo.size.width / 2)]
-                                        )
-                                    }
-                                )
                                 .zIndex(exploreZIndex(for: photo, index: index))
                                 .id(photo.id)
                         }
@@ -842,7 +830,6 @@ struct CategoryPickerView: View {
                     .padding(.vertical, exploreVerticalSlack)
                 }
                 .coordinateSpace(name: "explore")
-                .onPreferenceChange(ExploreCardDistanceKey.self) { exploreCardDistances = $0 }
                 // limitBehavior: .never deja que la velocidad del swipe
                 // decida (permite avanzar más de una card en un flick fuerte
                 // en vez de restringir siempre a una), lo que hace el snap
@@ -907,14 +894,6 @@ struct CategoryPickerView: View {
             .padding(.horizontal, Spacing.edge)
             .animation(.easeInOut(duration: 0.2), value: carouselCenterId)
         }
-    }
-}
-
-/// Distancia de cada card del carrusel al centro del viewport, por id de foto.
-private struct ExploreCardDistanceKey: PreferenceKey {
-    static var defaultValue: [String: Double] = [:]
-    static func reduce(value: inout [String: Double], nextValue: () -> [String: Double]) {
-        value.merge(nextValue()) { _, new in new }
     }
 }
 
