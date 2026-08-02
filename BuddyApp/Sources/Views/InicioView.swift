@@ -1141,6 +1141,7 @@ struct InicioView: View {
             await MainActor.run { isLoadingData = false }
             await loadFeed()
             await refreshHomeCommunityContext()
+            await loadCommunityPulseIfNeeded()
             return
         }
         // ── Contenido PRIVADO: guest y verified cargan sus journeys ──
@@ -1232,6 +1233,10 @@ struct InicioView: View {
         await refreshHomeCommunityContext()
         await loadRecentHelp(force: true)
         await loadRecentHelpPerTrip()
+        // Comunidad viva es global — no depende de trip ni de GPS resuelto,
+        // así que se carga siempre acá, sin importar en qué rama cayó
+        // refreshHomeCommunityContext arriba.
+        await loadCommunityPulseIfNeeded()
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
@@ -1392,7 +1397,7 @@ struct InicioView: View {
                     let helped = communityPulse.filter { $0.type == "helped" }.prefix(3)
                     ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
                         if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
-                        communityRow(avatarUrl: nil, cityText: item.city, timeText: pulseTime(item))
+                        communityRow(avatarUrl: item.buddyAvatarUrl, cityText: item.city, timeText: pulseTime(item))
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
@@ -1468,10 +1473,15 @@ struct InicioView: View {
     private func loadCommunityPulseIfNeeded() async {
         // El pulso global cambia lento — no refetchar en < 60 s.
         if let at = communityPulseLoadedAt, Date().timeIntervalSince(at) < 60, !communityPulse.isEmpty {
+            print("🌐 [loadCommunityPulseIfNeeded] throttled — usando cache de \(communityPulse.count) item(s)")
             return
         }
-        if let pulse = try? await APIClient.shared.fetchCommunityPulse() {
+        do {
+            let pulse = try await APIClient.shared.fetchCommunityPulse()
+            print("🌐 [loadCommunityPulseIfNeeded] ✅ \(pulse.count) item(s): \(pulse.map { "\($0.type)@\($0.city)" })")
             await MainActor.run { communityPulse = pulse; communityPulseLoadedAt = Date() }
+        } catch {
+            print("❌ [loadCommunityPulseIfNeeded] ERROR: \(error)")
         }
     }
 
