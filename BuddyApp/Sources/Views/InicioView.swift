@@ -2331,8 +2331,8 @@ struct NearbyPlaceCard: View {
     /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
     /// fondo asomaba como una franja blanca al costado.
-    private let cardWidth: CGFloat = 190
-    private let previewHeight: CGFloat = 170
+    private let cardWidth: CGFloat = 133
+    private let previewHeight: CGFloat = 119
     private let textInset: CGFloat = 12
 
     var body: some View {
