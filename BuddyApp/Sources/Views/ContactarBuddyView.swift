@@ -843,7 +843,14 @@ struct CategoryPickerView: View {
                 // en vez de restringir siempre a una), lo que hace el snap
                 // menos "pegajoso" para gestos cortos.
                 .scrollTargetBehavior(.viewAligned(limitBehavior: .never))
-                .scrollPosition(id: $carouselCenterId)
+                // anchor: .center es obligatorio acá. Sin él, scrollPosition
+                // reporta el item alineado por su borde LEADING, no el
+                // centrado — o sea el vecino de la izquierda del que se ve en
+                // el medio. Eso desfasaba en uno el zIndex (poniendo adelante
+                // justo a la card de la izquierda), los dots y el CTA.
+                // defaultScrollAnchor(.center) no cubre esto: solo fija dónde
+                // arranca el scroll, no cómo se resuelve este binding.
+                .scrollPosition(id: $carouselCenterId, anchor: .center)
                 // Arranca centrado en el contenido — con padding simétrico eso
                 // deja la foto del medio exactamente en el centro del viewport,
                 // sin depender de asignar scrollPosition a mano (que no tenía
