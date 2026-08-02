@@ -743,12 +743,14 @@ struct CategoryPickerView: View {
     /// Fotos sueltas, no agrupadas por lugar — si "El Encanto" tiene 3 fotos,
     /// el carrusel muestra 3 tarjetas, no 1 tarjeta con 3 fotos adentro.
     private var explorePhotos: [ExplorePhoto] {
-        placeCards.flatMap { place -> [ExplorePhoto] in
+        let photos = placeCards.flatMap { place -> [ExplorePhoto] in
             let urls = (place.coverUrls?.isEmpty == false ? place.coverUrls! : [place.coverUrl].compactMap { $0 })
             return urls.enumerated().map { i, url in
                 ExplorePhoto(id: "\(place.id)-\(i)", url: url, place: place)
             }
         }
+        print("🖼️ [exploreCarousel] placeCards=\(placeCards.count) → explorePhotos=\(photos.count) (\(placeCards.map { "\($0.name):\($0.coverUrls?.count ?? (($0.coverUrl != nil) ? 1 : 0))" }.joined(separator: ", ")))")
+        return photos
     }
 
     /// Tamaño BASE fijo de cada card — el escalado nunca lo toca. Si el layout
@@ -779,6 +781,7 @@ struct CategoryPickerView: View {
                                     let distance = abs(cardMidX - viewportCenter)
                                     let normalized = min(distance / 220, 1)
                                     let scale = 1.0 + (1 - normalized) * 0.18
+                                    print("📏 [exploreCarousel] photo=\(photo.id.prefix(8)) viewportW=\(Int(geo.size.width)) cardMidX=\(Int(cardMidX)) distance=\(Int(distance)) scale=\(String(format: "%.2f", scale))")
                                     return content
                                         .scaleEffect(scale)
                                         .offset(y: -(scale - 1) * 40)
