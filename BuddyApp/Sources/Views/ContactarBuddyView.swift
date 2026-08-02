@@ -779,9 +779,9 @@ struct CategoryPickerView: View {
                                     let distance = abs(cardMidX - viewportCenter)
                                     let normalized = min(distance / 160, 1)
                                     let scale = 1.0 + (1 - normalized) * 0.32
+                                    print("📏 [exploreCarousel] photo=\(photo.id) geoW=\(Int(geo.size.width)) cardMidX=\(Int(cardMidX)) viewportCenter=\(Int(viewportCenter)) distance=\(Int(distance)) scale=\(String(format: "%.2f", scale))")
                                     return content
                                         .scaleEffect(scale)
-                                        .offset(y: -(scale - 1) * 40)
                                 }
                                 // zIndex no es parte de VisualEffect (no se puede encadenar
                                 // dentro de .visualEffect) — se aplica aparte, atado a la
@@ -796,14 +796,21 @@ struct CategoryPickerView: View {
                 .coordinateSpace(name: "explore")
                 .scrollTargetBehavior(.viewAligned)
                 .scrollPosition(id: $carouselCenterId)
+                // Arranca centrado en el contenido — con padding simétrico eso
+                // deja la foto del medio exactamente en el centro del viewport,
+                // sin depender de asignar scrollPosition a mano (que no tenía
+                // efecto en el primer frame, cuando el ScrollView aún no tiene
+                // geometría, y dejaba la #0 centrada sin vecina a la izquierda).
+                .defaultScrollAnchor(.center)
             }
-            .frame(height: exploreCardHeight * 1.2 + 20)
+            // La card centrada mide exploreCardHeight * 1.32 — si el contenedor
+            // solo reserva 1.2, el ScrollView la recorta arriba y abajo y el
+            // aumento se lee como recorte en vez de como zoom.
+            .frame(height: exploreCardHeight * 1.32 + 24)
             .task(id: explorePhotos.map(\.id)) {
-                // La segunda foto abre al medio, ya escalada — no la primera.
-                // Asignar scrollPosition en el mismo frame en que el ScrollView
-                // recién aparece no tenía efecto (todavía sin geometría) — el
-                // pequeño delay le da tiempo a asentar el layout antes de mover
-                // la posición inicial.
+                // El label del CTA y el zIndex siguen a la foto centrada; en el
+                // primer render defaultScrollAnchor ya la dejó en el medio, acá
+                // solo se sincroniza el id con esa posición inicial.
                 guard carouselCenterId == nil, explorePhotos.count > 1 else { return }
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard !Task.isCancelled, carouselCenterId == nil else { return }
