@@ -531,10 +531,16 @@ struct CategoryPickerView: View {
     /// cambio ocasional en vivo no genera side effects visibles), pero NO
     /// para zIndex — para eso existe settledCenterId más abajo.
     @State private var carouselCenterId: String? = nil
-    /// Solo se confirma cuando carouselCenterId deja de cambiar por un
-    /// instante (debounce vía el .task(id:) de abajo) — el zIndex depende
-    /// de este valor, nunca del que cambia en vivo durante el drag.
+    /// Solo se confirma cuando el dedo YA SE LEVANTÓ (isCarouselDragging ==
+    /// false) y pasó un margen para que termine la deceleración/snap. Un
+    /// debounce por "tiempo sin cambios" no alcanza: si el usuario arrastra
+    /// lento o pausa sin soltar, carouselCenterId ya cruzó al vecino y queda
+    /// quieto por más de ese tiempo mientras el dedo sigue tocando — eso
+    /// confirmaba el settle antes de tiempo y adelantaba la tarjeta
+    /// siguiente antes de llegar al centro. isCarouselDragging usa el estado
+    /// real del toque, no una inferencia por tiempo.
     @State private var settledCenterId: String? = nil
+    @State private var isCarouselDragging = false
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -852,6 +858,15 @@ struct CategoryPickerView: View {
                 // efecto en el primer frame, cuando el ScrollView aún no tiene
                 // geometría, y dejaba la #0 centrada sin vecina a la izquierda).
                 .defaultScrollAnchor(.center)
+                // simultaneousGesture no compite con el pan nativo del
+                // ScrollView (no lo reemplaza, corre en paralelo) — solo se
+                // usa para saber si el dedo sigue tocando la pantalla, la
+                // señal real de "todavía no se asentó".
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in isCarouselDragging = true }
+                        .onEnded { _ in isCarouselDragging = false }
+                )
             }
             // Coincide exactamente con el alto del contenido (card + el slack
             // de arriba y abajo), para que no sobre ni falte espacio.
@@ -866,15 +881,16 @@ struct CategoryPickerView: View {
                 carouselCenterId = explorePhotos[1].id
                 settledCenterId = explorePhotos[1].id
             }
-            // Debounce: cada vez que carouselCenterId cambia (incluso en
-            // pleno drag), este task se cancela y arranca de nuevo. Solo si
-            // pasan 180ms SIN otro cambio se confirma como "asentado" — así
-            // settledCenterId (y por lo tanto el zIndex) nunca reacciona a
-            // valores transitorios que scrollPosition(id:) emite mientras el
-            // dedo sigue tocando la pantalla.
-            .task(id: carouselCenterId) {
-                try? await Task.sleep(nanoseconds: 180_000_000)
-                guard !Task.isCancelled else { return }
+            // Se reinicia con CUALQUIER cambio en el id centrado o en si el
+            // dedo sigue tocando. Si isCarouselDragging es true, no hace
+            // nada (todavía no soltó). Si es false, espera un margen para
+            // que la deceleración/snap del ScrollView termine, y solo
+            // entonces confirma — nunca mientras el dedo sigue en pantalla,
+            // sin importar cuánto tiempo lleve quieto ahí.
+            .task(id: "\(carouselCenterId ?? "nil")-\(isCarouselDragging)") {
+                guard !isCarouselDragging else { return }
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                guard !Task.isCancelled, !isCarouselDragging else { return }
                 settledCenterId = carouselCenterId
             }
 
