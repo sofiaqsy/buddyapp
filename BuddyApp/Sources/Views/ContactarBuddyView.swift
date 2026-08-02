@@ -759,6 +759,19 @@ struct CategoryPickerView: View {
     /// vecinas, como el carrusel destacado de la App Store.
     private let exploreCardWidth: CGFloat = 130
     private let exploreCardHeight: CGFloat = 170
+    private let exploreScaleDelta: CGFloat = 0.32
+
+    /// Aire vertical DENTRO del contenido del ScrollView. scaleEffect no altera
+    /// el layout, así que el HStack sigue midiendo exploreCardHeight: el
+    /// ScrollView dimensiona su contenido a esa altura, lo apoya arriba de su
+    /// frame, y la card centrada —que renderiza un 32% más alta— se sale por
+    /// arriba del borde y queda recortada ahí. Se lee como zoom topado contra
+    /// un contenedor, no como una card más grande. Este padding va en el
+    /// HStack (no en el frame externo) para que el contenido en sí ya reserve
+    /// el alto que la card escalada necesita.
+    private var exploreVerticalSlack: CGFloat {
+        exploreCardHeight * exploreScaleDelta / 2 + 8
+    }
 
     private var centeredExplorePlace: APIPlaceCard? {
         explorePhotos.first { $0.id == carouselCenterId }?.place
@@ -778,7 +791,7 @@ struct CategoryPickerView: View {
                                     let viewportCenter = geo.size.width / 2
                                     let distance = abs(cardMidX - viewportCenter)
                                     let normalized = min(distance / 160, 1)
-                                    let scale = 1.0 + (1 - normalized) * 0.32
+                                    let scale = 1.0 + (1 - normalized) * exploreScaleDelta
                                     print("📏 [exploreCarousel] photo=\(photo.id) geoW=\(Int(geo.size.width)) cardMidX=\(Int(cardMidX)) viewportCenter=\(Int(viewportCenter)) distance=\(Int(distance)) scale=\(String(format: "%.2f", scale))")
                                     return content
                                         .scaleEffect(scale)
@@ -792,6 +805,7 @@ struct CategoryPickerView: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, (geo.size.width - exploreCardWidth) / 2)
+                    .padding(.vertical, exploreVerticalSlack)
                 }
                 .coordinateSpace(name: "explore")
                 .scrollTargetBehavior(.viewAligned)
@@ -803,10 +817,9 @@ struct CategoryPickerView: View {
                 // geometría, y dejaba la #0 centrada sin vecina a la izquierda).
                 .defaultScrollAnchor(.center)
             }
-            // La card centrada mide exploreCardHeight * 1.32 — si el contenedor
-            // solo reserva 1.2, el ScrollView la recorta arriba y abajo y el
-            // aumento se lee como recorte en vez de como zoom.
-            .frame(height: exploreCardHeight * 1.32 + 24)
+            // Coincide exactamente con el alto del contenido (card + el slack
+            // de arriba y abajo), para que no sobre ni falte espacio.
+            .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
             .task(id: explorePhotos.map(\.id)) {
                 // El label del CTA y el zIndex siguen a la foto centrada; en el
                 // primer render defaultScrollAnchor ya la dejó en el medio, acá
