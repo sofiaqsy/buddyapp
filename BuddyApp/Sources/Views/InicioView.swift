@@ -2362,13 +2362,19 @@ struct NearbyPlaceCard: View {
 
     var body: some View {
         Button { Haptic.light(); onTap() } label: {
-            VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
                 photoPreview
+
+                LinearGradient(
+                    colors: [.black.opacity(0), .black.opacity(0.75)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(place.name)
                         .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
+                        .foregroundStyle(.white)
                         .lineLimit(1)
 
                     if !place.buddies.isEmpty {
@@ -2378,7 +2384,7 @@ struct NearbyPlaceCard: View {
                     if let label = subtitleOverride ?? place.buddyLabel {
                         Text(label)
                             .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted)
+                            .foregroundStyle(.white.opacity(0.85))
                             .lineLimit(1)
                     }
                 }
@@ -2386,7 +2392,7 @@ struct NearbyPlaceCard: View {
                 .padding(.horizontal, textInset)
                 .padding(.vertical, 12)
             }
-            .background(Color.surface)
+            .frame(width: cardWidth, height: previewHeight)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
         }
