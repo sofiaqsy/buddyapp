@@ -1397,7 +1397,7 @@ struct InicioView: View {
                     let helped = communityPulse.filter { $0.type == "helped" }.prefix(3)
                     ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
                         if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
-                        communityRow(avatarUrl: item.buddyAvatarUrl, cityText: item.city, timeText: pulseTime(item))
+                        communityRow(avatarUrl: item.buddyAvatarUrl, buddyName: item.buddyName, cityText: item.city, timeText: pulseTime(item))
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
@@ -1428,7 +1428,7 @@ struct InicioView: View {
     }
 
     @ViewBuilder
-    private func communityRow(avatarUrl: String?, cityText: String, timeText: String?) -> some View {
+    private func communityRow(avatarUrl: String?, buddyName: String?, cityText: String, timeText: String?) -> some View {
         HStack(spacing: 10) {
             Circle()
                 .fill(Color.sandLight)
@@ -1448,9 +1448,10 @@ struct InicioView: View {
                 }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Ayuda en \(cityText)")
-                    .font(BT.footnoteBold)
-                    .foregroundStyle(Color.ink)
+                (Text(buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
+                    .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                 + Text(" ayudó en \(cityText)")
+                    .font(BT.caption1).foregroundStyle(Color.inkMuted))
                     .lineLimit(2)
                 if let timeText {
                     Text(timeText)

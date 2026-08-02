@@ -497,6 +497,7 @@ struct APIPulseItem: Decodable, Identifiable {
     let city: String
     let count: Int?
     let at: Date?
+    let buddyName: String?
     let buddyAvatarUrl: String?
     var id: String { "\(type)-\(city)-\(at?.timeIntervalSince1970 ?? 0)" }
 }
