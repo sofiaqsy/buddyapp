@@ -765,6 +765,12 @@ struct CategoryPickerView: View {
     private let exploreCardWidth: CGFloat = 160
     private let exploreCardHeight: CGFloat = 230
     private let exploreScaleDelta: CGFloat = 0.32
+    /// Espacio entre cards — junto con exploreCardWidth define el "paso" que
+    /// viewAligned necesita cruzar para saltar a la siguiente. Más chico que
+    /// antes (20) para que un swipe corto, como uno que arranca cerca del
+    /// borde de la pantalla con poco recorrido disponible, alcance a cruzar
+    /// el umbral en vez de rebotar de vuelta a la misma tarjeta.
+    private let exploreCardSpacing: CGFloat = 10
 
     /// Aire vertical DENTRO del contenido del ScrollView. scaleEffect no altera
     /// el layout, así que el HStack sigue midiendo exploreCardHeight: el
@@ -802,7 +808,7 @@ struct CategoryPickerView: View {
         VStack(spacing: 14) {
             GeometryReader { geo in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 20) {
+                    HStack(spacing: exploreCardSpacing) {
                         ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
                             ExploreCarouselCard(photo: photo)
                                 .frame(width: exploreCardWidth, height: exploreCardHeight)
@@ -837,7 +843,11 @@ struct CategoryPickerView: View {
                 }
                 .coordinateSpace(name: "explore")
                 .onPreferenceChange(ExploreCardDistanceKey.self) { exploreCardDistances = $0 }
-                .scrollTargetBehavior(.viewAligned)
+                // limitBehavior: .never deja que la velocidad del swipe
+                // decida (permite avanzar más de una card en un flick fuerte
+                // en vez de restringir siempre a una), lo que hace el snap
+                // menos "pegajoso" para gestos cortos.
+                .scrollTargetBehavior(.viewAligned(limitBehavior: .never))
                 .scrollPosition(id: $carouselCenterId)
                 // Arranca centrado en el contenido — con padding simétrico eso
                 // deja la foto del medio exactamente en el centro del viewport,
