@@ -523,7 +523,18 @@ struct CategoryPickerView: View {
     let onRequest: (String, String?) async -> Void
 
     @State private var selected: BuddyCategory? = nil
+    /// scrollPosition(id:) actualiza esto EN VIVO mientras el dedo arrastra —
+    /// no solo al asentarse (documentado por Apple: "updates this binding as
+    /// the scroll position changes"). Usarlo directo para zIndex reintroduce
+    /// el mismo patrón de recomposición en pleno gesto que ya causó el
+    /// rebote una vez. Es la fuente de verdad para CTA/dots (donde un
+    /// cambio ocasional en vivo no genera side effects visibles), pero NO
+    /// para zIndex — para eso existe settledCenterId más abajo.
     @State private var carouselCenterId: String? = nil
+    /// Solo se confirma cuando carouselCenterId deja de cambiar por un
+    /// instante (debounce vía el .task(id:) de abajo) — el zIndex depende
+    /// de este valor, nunca del que cambia en vivo durante el drag.
+    @State private var settledCenterId: String? = nil
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -785,17 +796,16 @@ struct CategoryPickerView: View {
             ?? explorePhotos.first?.place
     }
 
-    /// Cuanto más cerca del centro, más adelante se dibuja. Se ató antes a la
-    /// distancia en vivo publicada por un GeometryReader+PreferenceKey en cada
-    /// card — pero eso escribía @State en cada frame de scroll, forzando a
-    /// SwiftUI a re-evaluar el body (y reordenar zIndex) MIENTRAS el dedo
-    /// seguía arrastrando el ScrollView. Ese contenido reordenándose bajo el
-    /// gesto activo es lo que producía el rebote: no era viewAligned ni
-    /// scrollPosition, era este re-render en pleno drag. carouselCenterId solo
-    /// cambia cuando el scroll se asienta (no en cada frame), así que atar el
-    /// zIndex a eso evita la mutación de estado durante el gesto.
+    /// Cuanto más cerca del centro, más adelante se dibuja. Atado a
+    /// settledCenterId, NUNCA a carouselCenterId directo — ese último cambia
+    /// en vivo mientras el dedo arrastra (scrollPosition(id:) lo actualiza
+    /// según se documenta: "updates this binding as the scroll position
+    /// changes", no solo al asentarse), y usarlo acá reintroduce el mismo
+    /// patrón de recomposición en pleno gesto que causó el rebote original.
+    /// settledCenterId solo se confirma tras el debounce del .task(id:) de
+    /// abajo, así que este valor es estable durante todo el drag activo.
     private func exploreZIndex(for photo: ExplorePhoto, index: Int) -> Double {
-        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId }
+        let centerIndex = explorePhotos.firstIndex { $0.id == settledCenterId }
             ?? explorePhotos.count / 2
         return -Double(abs(index - centerIndex))
     }
@@ -847,13 +857,25 @@ struct CategoryPickerView: View {
             // de arriba y abajo), para que no sobre ni falte espacio.
             .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
             .task(id: explorePhotos.map(\.id)) {
-                // El label del CTA y el zIndex siguen a la foto centrada; en el
-                // primer render defaultScrollAnchor ya la dejó en el medio, acá
-                // solo se sincroniza el id con esa posición inicial.
+                // El CTA/dots siguen a la foto centrada; en el primer render
+                // defaultScrollAnchor ya la dejó en el medio, acá solo se
+                // sincroniza el id con esa posición inicial.
                 guard carouselCenterId == nil, explorePhotos.count > 1 else { return }
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard !Task.isCancelled, carouselCenterId == nil else { return }
                 carouselCenterId = explorePhotos[1].id
+                settledCenterId = explorePhotos[1].id
+            }
+            // Debounce: cada vez que carouselCenterId cambia (incluso en
+            // pleno drag), este task se cancela y arranca de nuevo. Solo si
+            // pasan 180ms SIN otro cambio se confirma como "asentado" — así
+            // settledCenterId (y por lo tanto el zIndex) nunca reacciona a
+            // valores transitorios que scrollPosition(id:) emite mientras el
+            // dedo sigue tocando la pantalla.
+            .task(id: carouselCenterId) {
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                guard !Task.isCancelled else { return }
+                settledCenterId = carouselCenterId
             }
 
             if explorePhotos.count > 1 {
