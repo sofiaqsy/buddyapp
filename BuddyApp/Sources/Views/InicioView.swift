@@ -2332,7 +2332,7 @@ struct NearbyPlaceCard: View {
     /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
     /// fondo asomaba como una franja blanca al costado.
     private let cardWidth: CGFloat = 120
-    private let previewHeight: CGFloat = 131
+    private let previewHeight: CGFloat = 144
     private let textInset: CGFloat = 12
 
     var body: some View {
@@ -2352,7 +2352,7 @@ struct NearbyPlaceCard: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
-                    HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 4) {
                         if !place.buddies.isEmpty {
                             buddyAvatars
                         }
