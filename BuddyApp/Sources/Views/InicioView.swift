@@ -1394,31 +1394,28 @@ struct InicioView: View {
                 .foregroundStyle(Color.ink)
                 .padding(.horizontal, Spacing.edge)
 
-            VStack(spacing: 0) {
-                if !recentHelp.isEmpty {
-                    ForEach(Array(recentHelp.prefix(3).enumerated()), id: \.element.id) { idx, help in
-                        if idx > 0 { Divider().padding(.leading, 56) }
-                        communityRow(
-                            avatarUrl: help.buddy?.avatarUrl,
-                            icon: "person.fill",
-                            text: Text(help.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
-                                .font(BT.footnoteBold).foregroundStyle(Color.ink)
-                             + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
-                             + Text(help.completedAt != nil ? " · \(timeAgo(help.completedAt))" : "")
-                                .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7))
-                        )
-                    }
-                } else {
-                    ForEach(Array(communityPulse.prefix(3).enumerated()), id: \.element.id) { idx, item in
-                        if idx > 0 { Divider().padding(.leading, 56) }
-                        communityRow(avatarUrl: nil, icon: pulseIcon(item.type), text: pulseText(item))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    if !recentHelp.isEmpty {
+                        ForEach(Array(recentHelp.prefix(3)), id: \.id) { help in
+                            communityCard(
+                                avatarUrl: help.buddy?.avatarUrl,
+                                icon: "person.fill",
+                                text: Text(help.buddy?.fullName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
+                                    .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                                 + Text(" ayudó a un viajero").font(BT.footnote).foregroundStyle(Color.inkMuted)
+                                 + Text(help.completedAt != nil ? " · \(timeAgo(help.completedAt))" : "")
+                                    .font(BT.caption1).foregroundStyle(Color.inkMuted.opacity(0.7))
+                            )
+                        }
+                    } else {
+                        ForEach(Array(communityPulse.prefix(3)), id: \.id) { item in
+                            communityCard(avatarUrl: nil, icon: pulseIcon(item.type), text: pulseText(item))
+                        }
                     }
                 }
+                .padding(.horizontal, Spacing.edge)
             }
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
-            .padding(.horizontal, Spacing.edge)
         }
     }
 
@@ -1445,8 +1442,8 @@ struct InicioView: View {
     }
 
     @ViewBuilder
-    private func communityRow(avatarUrl: String?, icon: String, text: Text) -> some View {
-        HStack(spacing: 12) {
+    private func communityCard(avatarUrl: String?, icon: String, text: Text) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
             Circle()
                 .fill(Color.sandLight)
                 .frame(width: 32, height: 32)
@@ -1463,11 +1460,14 @@ struct InicioView: View {
                             .foregroundStyle(Color.sand)
                     }
                 }
-            text.lineLimit(1)
+            text.lineLimit(2)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, Spacing.md)
-        .padding(.vertical, 10)
+        .frame(width: 160, height: 96, alignment: .leading)
+        .padding(Spacing.md)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+        .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
     }
 
     private func pulseIcon(_ type: String) -> String {
