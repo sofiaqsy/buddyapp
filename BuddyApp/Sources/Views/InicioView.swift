@@ -1384,7 +1384,7 @@ struct InicioView: View {
     // Con actividad local: "Keyla ayudó a un viajero · hace 2h".
     // Sin ella, el pulso global de la red: "Un viajero está en Villa Rica",
     // "Villa Rica · un buddy ayudó a un viajero · hace 2h",
-    // "Villa Rica · 3 buddies listos para ayudar". Máx. 3 filas.
+    // "Villa Rica · 3 buddies listos para ayudar". Máx. 10 filas.
     private var communityLiveSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             Text("COMUNIDAD VIVA")
@@ -1394,7 +1394,7 @@ struct InicioView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    let helped = communityPulse.filter { $0.type == "helped" }.prefix(3)
+                    let helped = communityPulse.filter { $0.type == "helped" }.prefix(10)
                     ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
                         if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
                         communityRow(avatarUrl: item.buddyAvatarUrl, buddyName: item.buddyName, cityText: item.city, timeText: pulseTime(item))
