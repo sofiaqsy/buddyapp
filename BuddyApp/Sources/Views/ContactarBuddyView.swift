@@ -778,12 +778,21 @@ struct CategoryPickerView: View {
             ?? explorePhotos.first?.place
     }
 
+    /// Cuanto más cerca del centro, más adelante se dibuja. Mientras
+    /// carouselCenterId siga nil, el centro asumido es el mismo que deja
+    /// defaultScrollAnchor(.center): la foto del medio.
+    private func exploreZIndex(for index: Int) -> Double {
+        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId }
+            ?? explorePhotos.count / 2
+        return -Double(abs(index - centerIndex))
+    }
+
     private var exploreCarousel: some View {
         VStack(spacing: 14) {
             GeometryReader { geo in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 20) {
-                        ForEach(explorePhotos) { photo in
+                        ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
                             ExploreCarouselCard(photo: photo)
                                 .frame(width: exploreCardWidth, height: exploreCardHeight)
                                 .visualEffect { content, proxy in
@@ -796,10 +805,14 @@ struct CategoryPickerView: View {
                                     return content
                                         .scaleEffect(scale)
                                 }
-                                // zIndex no es parte de VisualEffect (no se puede encadenar
-                                // dentro de .visualEffect) — se aplica aparte, atado a la
-                                // card centrada que ya rastrea scrollPosition.
-                                .zIndex(photo.id == carouselCenterId ? 1 : 0)
+                                // zIndex no puede ir dentro de .visualEffect, así que
+                                // se deriva del índice: la centrada arriba y las demás
+                                // escalonadas hacia atrás según qué tan lejos están.
+                                // Atarlo solo a carouselCenterId no alcanzaba: mientras
+                                // ese id es nil (antes de que .task lo asigne) las tres
+                                // empataban en 0 y SwiftUI pintaba la ÚLTIMA encima,
+                                // dejando la card derecha tapando a la del centro.
+                                .zIndex(exploreZIndex(for: index))
                                 .id(photo.id)
                         }
                     }
