@@ -439,12 +439,6 @@ struct TripDetailView: View {
 
     // MARK: – Bottom panel
 
-    /// Alto del panel cuando muestra la ficha de un lugar (Fotos/Info/Buddies) —
-    /// más alto que el panel de la lista, porque tiene pestañas y contenido
-    /// propio, no una tarjeta chica. Fijo a propósito: es un swap de contenido
-    /// dentro del mismo panel, no una hoja que el usuario arrastra.
-    private let detailPanelHeight: CGFloat = 460
-
     @ViewBuilder
     private func bottomSection(geo: GeometryProxy) -> some View {
         VStack(spacing: 0) {
@@ -544,9 +538,9 @@ struct TripDetailView: View {
         }
         // Glass más alto: el contenido (top-aligned) sube sobre la tab bar y el
         // glass sobrante queda detrás de ella → panel flush, sin hueco de mapa.
-        .frame(width: geo.size.width,
-               height: (selectedPlace != nil ? detailPanelHeight : sheetHeight) + bottomClearance,
-               alignment: .top)
+        // Alto SIEMPRE el mismo (sheetHeight+bottomClearance) — el detalle del
+        // lugar se acomoda dentro de este espacio, no lo agranda.
+        .frame(width: geo.size.width, height: sheetHeight + bottomClearance, alignment: .top)
         .glassPanel()
         .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
     }
@@ -959,21 +953,24 @@ struct PlaceGuideDetailSheet: View {
     private var allPhotos: [String] { gallery?.visits.flatMap(\.photos) ?? [] }
 
     var body: some View {
+        // Mismo espacio que ocupaba la lista de tarjetas (~265pt) — nada
+        // aquí puede darse el lujo de respirar como en una hoja aparte.
         VStack(alignment: .leading, spacing: 0) {
             header
             if let buddyPresenceText {
-                HStack(spacing: 7) {
-                    Circle().fill(Color.onlineGreen).frame(width: 7, height: 7)
+                HStack(spacing: 6) {
+                    Circle().fill(Color.onlineGreen).frame(width: 6, height: 6)
                     Text(buddyPresenceText)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 6)
+                .padding(.top, 3)
             }
 
             tabBar
-                .padding(.top, 14)
+                .padding(.top, 8)
 
             ScrollView {
                 switch tab {
@@ -983,7 +980,7 @@ struct PlaceGuideDetailSheet: View {
                 }
             }
         }
-        .padding(.top, 16)
+        .padding(.top, 10)
         .task {
             async let galleryTask: APIPlaceGallery? = try? APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
             async let buddiesTask: [APIPlaceBuddy]? = fetchBuddiesIfPossible()
@@ -1006,18 +1003,18 @@ struct PlaceGuideDetailSheet: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
             Text(place.name)
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: 19, weight: .bold))
                 .foregroundStyle(.primary)
-                .lineLimit(2)
+                .lineLimit(1)
             Spacer(minLength: 8)
 
             Button(action: onToggleFavorite) {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(isFavorite ? Color.errorRed : Color.ink.opacity(0.6))
-                    .frame(width: 36, height: 36)
+                    .frame(width: 28, height: 28)
                     .background(Circle().fill(Color.secondary.opacity(0.12)))
                     .symbolEffect(.bounce, value: isFavorite)
             }
@@ -1028,9 +1025,9 @@ struct PlaceGuideDetailSheet: View {
                 onNavigate()
             } label: {
                 Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.inkInverse)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 28, height: 28)
                     .background(Circle().fill(Color.brand))
             }
             .buttonStyle(.plain)
@@ -1038,9 +1035,9 @@ struct PlaceGuideDetailSheet: View {
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 28, height: 28)
                     .background(Circle().fill(Color.secondary.opacity(0.12)))
             }
             .buttonStyle(.plain)
@@ -1064,11 +1061,11 @@ struct PlaceGuideDetailSheet: View {
                     Haptic.select()
                     tab = t
                 } label: {
-                    VStack(spacing: 8) {
-                        HStack(spacing: 6) {
-                            Image(systemName: t.icon).font(.system(size: 13, weight: .semibold))
+                    VStack(spacing: 5) {
+                        HStack(spacing: 5) {
+                            Image(systemName: t.icon).font(.system(size: 11, weight: .semibold))
                             Text(count.map { "\(t.rawValue) (\($0))" } ?? t.rawValue)
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.system(size: 12, weight: .semibold))
                         }
                         .foregroundStyle(tab == t ? Color.brand : Color.inkMuted)
                         Rectangle()
@@ -1121,8 +1118,8 @@ struct PlaceGuideDetailSheet: View {
                                 } placeholder: {
                                     Rectangle().fill(Color.sandLight)
                                 }
-                                .frame(width: 120, height: 120)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .frame(width: 90, height: 90)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
                             .buttonStyle(.plain)
                         }
@@ -1131,14 +1128,14 @@ struct PlaceGuideDetailSheet: View {
                 }
             }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 24)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
     }
 
     // MARK: Info
 
     private var infoTab: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
             Label(place.category.label, systemImage: place.category.symbol)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.brand)
@@ -1160,8 +1157,8 @@ struct PlaceGuideDetailSheet: View {
             }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 24)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -1205,8 +1202,8 @@ struct PlaceGuideDetailSheet: View {
                 }
             }
         }
-        .padding(.top, 16)
-        .padding(.bottom, 24)
+        .padding(.top, 4)
+        .padding(.bottom, 12)
     }
 
     private func emptyState(icon: String, text: String) -> some View {
