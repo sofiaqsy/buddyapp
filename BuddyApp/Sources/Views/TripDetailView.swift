@@ -439,9 +439,31 @@ struct TripDetailView: View {
 
     // MARK: – Bottom panel
 
+    /// Alto del panel cuando muestra la ficha de un lugar (Fotos/Info/Buddies) —
+    /// más alto que el panel de la lista, porque tiene pestañas y contenido
+    /// propio, no una tarjeta chica. Fijo a propósito: es un swap de contenido
+    /// dentro del mismo panel, no una hoja que el usuario arrastra.
+    private let detailPanelHeight: CGFloat = 460
+
     @ViewBuilder
     private func bottomSection(geo: GeometryProxy) -> some View {
         VStack(spacing: 0) {
+            if let place = selectedPlace {
+                // Mismo panel, contenido reemplazado — nada se levanta encima
+                // del mapa. Antes esto abría un .sheet modal; se sentía como
+                // una interrupción en vez de una respuesta a tocar el lugar.
+                PlaceGuideDetailSheet(
+                    place: place,
+                    destinationId: resolvedDestinationId,
+                    buddyPresenceText: buddyPresenceText,
+                    isFavorite: isFav(place),
+                    onToggleFavorite: {
+                        if let jid = journey?.id { routeStore.toggleFavorite(placeId: place.id, journeyId: jid) }
+                    },
+                    onNavigate: { navigationTarget = place },
+                    onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil } }
+                )
+            } else {
             // Presencia humana — el corazón de Buddy, antes que los lugares
             if let presence = buddyPresenceText {
                 HStack(spacing: 7) {
@@ -518,25 +540,15 @@ struct TripDetailView: View {
             }
 
             cardScroll
+            }
         }
         // Glass más alto: el contenido (top-aligned) sube sobre la tab bar y el
         // glass sobrante queda detrás de ella → panel flush, sin hueco de mapa.
-        .frame(width: geo.size.width, height: sheetHeight + bottomClearance, alignment: .top)
+        .frame(width: geo.size.width,
+               height: (selectedPlace != nil ? detailPanelHeight : sheetHeight) + bottomClearance,
+               alignment: .top)
         .glassPanel()
-        // Seleccionar un lugar (pin o tarjeta) abre su ficha completa encima,
-        // en vez de reemplazar este panel por una versión chica del mismo lugar.
-        .sheet(item: $selectedPlace) { place in
-            PlaceGuideDetailSheet(
-                place: place,
-                destinationId: resolvedDestinationId,
-                buddyPresenceText: buddyPresenceText,
-                isFavorite: isFav(place),
-                onToggleFavorite: {
-                    if let jid = journey?.id { routeStore.toggleFavorite(placeId: place.id, journeyId: jid) }
-                },
-                onNavigate: { navigationTarget = place }
-            )
-        }
+        .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
     }
 
     // MARK: – Card scroll
@@ -919,8 +931,10 @@ struct PlaceGuideDetailSheet: View {
     let isFavorite: Bool
     let onToggleFavorite: () -> Void
     let onNavigate: () -> Void
-
-    @Environment(\.dismiss) private var dismiss
+    /// Embebido en el panel del mapa (no como sheet): @Environment(\.dismiss)
+    /// no tiene nada que cerrar ahí, así que quién lo contiene decide qué
+    /// significa "cerrar" (volver a mostrar la lista).
+    let onClose: () -> Void
 
     private enum Tab: String, CaseIterable {
         case fotos = "Fotos", info = "Info", buddies = "Buddies"
@@ -970,8 +984,6 @@ struct PlaceGuideDetailSheet: View {
             }
         }
         .padding(.top, 16)
-        .presentationDetents([.fraction(0.55), .large])
-        .presentationDragIndicator(.visible)
         .task {
             async let galleryTask: APIPlaceGallery? = try? APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
             async let buddiesTask: [APIPlaceBuddy]? = fetchBuddiesIfPossible()
@@ -1024,7 +1036,7 @@ struct PlaceGuideDetailSheet: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Cómo llegar a \(place.name)")
 
-            Button { dismiss() } label: {
+            Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.secondary)
