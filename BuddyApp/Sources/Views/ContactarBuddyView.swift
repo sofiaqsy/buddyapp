@@ -740,12 +740,23 @@ struct CategoryPickerView: View {
     // buddies. La categoría se sigue pidiendo — solo cambia CUÁNDO: ya no es
     // lo primero que ve el usuario, nace después de que un lugar le llamó la
     // atención. El botón de abajo todavía no dispara ninguna acción.
+    /// Fotos sueltas, no agrupadas por lugar — si "El Encanto" tiene 3 fotos,
+    /// el carrusel muestra 3 tarjetas, no 1 tarjeta con 3 fotos adentro.
+    private var explorePhotos: [ExplorePhoto] {
+        placeCards.flatMap { place -> [ExplorePhoto] in
+            let urls = (place.coverUrls?.isEmpty == false ? place.coverUrls! : [place.coverUrl].compactMap { $0 })
+            return urls.enumerated().map { i, url in
+                ExplorePhoto(id: "\(place.id)-\(i)", url: url, place: place)
+            }
+        }
+    }
+
     private var exploreCarousel: some View {
         VStack(spacing: 14) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(placeCards) { place in
-                        ExploreCarouselCard(place: place)
+                    ForEach(explorePhotos) { photo in
+                        ExploreCarouselCard(photo: photo)
                             .scrollTransition(.interactive, axis: .horizontal) { content, phase in
                                 content
                                     .scaleEffect(phase.isIdentity ? 1.0 : 0.8)
@@ -760,11 +771,11 @@ struct CategoryPickerView: View {
             .scrollPosition(id: $carouselCenterId)
             .frame(height: 220)
 
-            if placeCards.count > 1 {
+            if explorePhotos.count > 1 {
                 HStack(spacing: 6) {
-                    ForEach(placeCards) { place in
+                    ForEach(explorePhotos) { photo in
                         Circle()
-                            .fill(place.id == (carouselCenterId ?? placeCards.first?.id) ? Color.brand : Color.border)
+                            .fill(photo.id == (carouselCenterId ?? explorePhotos.first?.id) ? Color.brand : Color.border)
                             .frame(width: 6, height: 6)
                     }
                 }
@@ -802,12 +813,19 @@ struct CategoryPickerView: View {
     }
 }
 
-private struct ExploreCarouselCard: View {
+private struct ExplorePhoto: Identifiable {
+    let id: String
+    let url: String
     let place: APIPlaceCard
+}
+
+private struct ExploreCarouselCard: View {
+    let photo: ExplorePhoto
+    private var place: APIPlaceCard { photo.place }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            CachedImage(urlString: place.coverUrl) { img in
+            CachedImage(urlString: photo.url) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
