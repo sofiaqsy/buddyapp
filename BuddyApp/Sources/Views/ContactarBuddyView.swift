@@ -876,15 +876,10 @@ struct CategoryPickerView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "bubble.left.fill")
                         .foregroundStyle(Color.ink)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("Consultar sobre")
-                            .font(BT.caption2)
-                            .foregroundStyle(Color.inkMuted)
-                        Text(centeredExplorePlace?.name ?? "este lugar")
-                            .font(BT.footnoteBold)
-                            .foregroundStyle(Color.ink)
-                            .lineLimit(1)
-                    }
+                    Text("Consultar en \(centeredExplorePlace?.destinationName ?? "este lugar")")
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
                     Spacer()
                     ZStack {
                         Circle().fill(Color.brand).frame(width: 30, height: 30)
