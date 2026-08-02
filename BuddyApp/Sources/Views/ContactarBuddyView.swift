@@ -758,11 +758,12 @@ struct CategoryPickerView: View {
     /// Tamaño BASE fijo de cada card — el escalado nunca lo toca. Si el layout
     /// dependiera del tamaño escalado (containerRelativeFrame, por ejemplo),
     /// las 3 cards terminan ocupando el mismo espacio visual y el efecto se
-    /// pierde. Acá el HStack siempre reserva 130pt por card; scaleEffect +
-    /// zIndex + offset dibujan la del centro invadiendo el espacio de sus
-    /// vecinas, como el carrusel destacado de la App Store.
-    private let exploreCardWidth: CGFloat = 130
-    private let exploreCardHeight: CGFloat = 170
+    /// pierde. Acá el HStack siempre reserva este ancho por card; scaleEffect +
+    /// zIndex dibujan la del centro invadiendo el espacio de sus vecinas, como
+    /// el carrusel destacado de la App Store. El alto crece más que el ancho
+    /// para que la card quede más vertical sin comerse el peek lateral.
+    private let exploreCardWidth: CGFloat = 160
+    private let exploreCardHeight: CGFloat = 230
     private let exploreScaleDelta: CGFloat = 0.32
 
     /// Aire vertical DENTRO del contenido del ScrollView. scaleEffect no altera
@@ -900,10 +901,6 @@ struct CategoryPickerView: View {
             .buttonStyle(.plain)
             .padding(.horizontal, Spacing.edge)
             .animation(.easeInOut(duration: 0.2), value: carouselCenterId)
-
-            Text("Te conectamos con un buddy local que te puede ayudar")
-                .font(BT.caption1)
-                .foregroundStyle(Color.inkMuted)
         }
     }
 }
