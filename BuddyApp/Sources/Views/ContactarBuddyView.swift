@@ -1606,11 +1606,11 @@ private struct ExploreCarouselCard: View {
     }
 
     var body: some View {
-        // La ficha flota SOBRE la foto, no debajo. Apilada no había nada que
-        // difuminar —el material sobre un fondo plano se ve igual que blanco—
-        // y encima obligaba a un degradado que blanqueaba el pie de la imagen.
-        // Sobre la foto, el glass hace ese trabajo solo: deja ver el lugar a
-        // través del papel y la foto llega entera hasta abajo.
+        // La foto entera, sin recuadros encima: la ficha de vidrio flotaba como
+        // una etiqueta pegada y partía la imagen en dos. Acá el texto no vive en
+        // un contenedor sino en la sombra de la propia foto — el degradado nace
+        // en la mitad inferior y la primera línea aparece recién donde ya hay
+        // algo de fondo, así nada tiene borde y todo se lee.
         ZStack(alignment: .bottom) {
             CachedImage(urlString: photo.url) { img in
                 img.resizable().scaledToFill()
@@ -1620,17 +1620,32 @@ private struct ExploreCarouselCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
-            // Una sola composición, no tres bloques: sin reglas ni divisores.
-            // La jerarquía la hacen el color y el aire —etiqueta tenue, nombre
-            // en ink, autor apagado— que es como separan Apple Photos o Arc.
+            // Casi la mitad de la card, con las paradas cargadas al final: así
+            // el oscurecido es imperceptible donde empieza y solo se vuelve
+            // sólido detrás de la última línea. Un degradado corto y fuerte
+            // dibuja una banda; uno largo y suave se lee como la foto misma.
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0),    location: 0),
+                    .init(color: .black.opacity(0.10), location: 0.38),
+                    .init(color: .black.opacity(0.34), location: 0.64),
+                    .init(color: .black.opacity(0.62), location: 0.85),
+                    .init(color: .black.opacity(0.78), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 148)
+            .allowsHitTesting(false)
+
+            // Una sola composición: la jerarquía la hace la opacidad del blanco
+            // —etiqueta al 65%, nombre pleno, autor al 75%— y no cajas ni reglas.
             VStack(spacing: 0) {
                 if let category = place.category, !category.isEmpty {
-                    // Caption chico y regular: es contexto, no título. El
-                    // tracking abierto la mantiene legible en tenue.
                     Text(category.uppercased())
                         .font(.system(size: 9))
                         .tracking(1.4)
-                        .foregroundStyle(Color.inkMuted)
+                        .foregroundStyle(.white.opacity(0.65))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .padding(.bottom, 6)
@@ -1638,7 +1653,7 @@ private struct ExploreCarouselCard: View {
 
                 Text(place.name)
                     .font(BT.footnoteBold)
-                    .foregroundStyle(Color.ink)
+                    .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
@@ -1659,36 +1674,37 @@ private struct ExploreCarouselCard: View {
                         }
                         .frame(width: 22, height: 22)
                         .clipShape(Circle())
+                        // Sin el aro, un avatar claro se funde con la foto clara
+                        // y uno oscuro desaparece en el degradado.
+                        .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.5))
                     }
 
-                    // El nombre se distingue solo por peso: en brand competía
-                    // de igual a igual con el del lugar.
+                    // El nombre se distingue por peso, no por color: sobre foto
+                    // cualquier tinte se ensucia y el blanco es lo único estable.
                     if let author = authorFirstName {
                         Text("Recomendado por ")
                             .font(BT.caption2)
-                            .foregroundStyle(Color.inkMuted)
+                            .foregroundStyle(.white.opacity(0.75))
                         + Text(author)
                             .font(BT.caption2.weight(.semibold))
-                            .foregroundStyle(Color.inkMuted)
+                            .foregroundStyle(.white)
                     } else {
                         Text("Recomendado por la comunidad")
                             .font(BT.caption2)
-                            .foregroundStyle(Color.inkMuted)
+                            .foregroundStyle(.white.opacity(0.75))
                     }
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .padding(.top, 7)
+                .padding(.top, 8)
             }
+            // La sombra corta sale barata y salva el caso peor: una foto clara
+            // justo detrás de la línea, donde el degradado todavía es tenue.
+            .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity)
-            .glassRounded(Radius.sm)
-            .padding(8)
+            .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Sin stroke: el borde dibujaba la card sobre el fondo. Con radio mayor
-        // y solo la sombra del sistema, se apoya en él.
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .cardShadow()
     }
