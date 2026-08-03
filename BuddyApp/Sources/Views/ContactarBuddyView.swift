@@ -1627,15 +1627,17 @@ private struct ExploreCarouselCard: View {
                     Rectangle().fill(Color.sandLight)
                 }
                 .frame(height: exploreCardPhotoHeight)
-                .blur(radius: 26)
+                .blur(radius: 18)
                 // El blur muestrea fuera del borde; sin sobredimensionar, los
                 // lados quedan lavados.
                 .scaleEffect(1.25)
             }
             .clipped()
-            // Piso para el texto: el desenfoque quita el detalle pero no baja el
-            // contraste, y el nombre va en ink sobre lo que haya quedado.
-            .overlay(exploreCardPaper.opacity(0.62))
+            // 0.18 y no 0.62: al 62% la veladura era casi un color plano y la
+            // foto no se leía debajo. Queda un piso mínimo porque el desenfoque
+            // quita detalle pero no contraste, y el nombre va en ink — sin nada
+            // encima, sobre una foto oscura desaparece.
+            .overlay(exploreCardPaper.opacity(0.18))
             .allowsHitTesting(false)
     }
 
