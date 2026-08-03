@@ -1467,44 +1467,38 @@ struct InicioView: View {
                     }
                 }
 
-            VStack(alignment: .leading, spacing: 3) {
-                // El tiempo va trailing y alineado por baseline con la frase.
-                // Con toda la información apilada a la izquierda, el 40% derecho
-                // de la fila quedaba estructuralmente vacío y el bloque formaba
-                // un triángulo apoyado a la izquierda. Un timestamp en el borde
-                // convierte esta línea en una barra de extremo a extremo, que es
-                // lo que hace que una fila de Mail o Mensajes se sienta
-                // equilibrada: el balance no está en cada línea, sino en que la
-                // línea dominante toque los dos bordes.
+            VStack(alignment: .leading, spacing: 4) {
+                // El apoyo se queda con la línea entera y a un solo tamaño. Antes
+                // compartía renglón con la hora, que le robaba ancho y la obligaba
+                // a una línea; y la acción iba un escalón por debajo del nombre,
+                // así que lo que la fila viene a contar se leía más chico que
+                // quién lo hizo. Medium y no semibold en el nombre: el ojo tiene
+                // que encontrar el sujeto rápido, pero la negrita plena es la
+                // firma visual de una red social y convertía el hecho en un post.
+                (Text(name).font(BT.footnote.weight(.medium)).foregroundStyle(Color.ink)
+                 + Text(" \(pulseAction(item))").font(BT.footnote).foregroundStyle(Color.ink))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Los dos metadatos comparten renglón en los extremos opuestos.
+                // Así la fila cierra tocando ambos bordes —lo que equilibra una
+                // fila de Mail o Mensajes— sin que eso le cueste ancho a la
+                // frase, y la ciudad deja de encabezar su línea: al repetirse en
+                // las tres filas, arrancarlas todas igual las hacía ver plantilla.
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    // Medium y no semibold: el ojo necesita encontrar el sujeto
-                    // rápido, pero el nombre en negrita plena es la firma visual
-                    // de una red social y hacía que la fila se leyera como el
-                    // post de alguien en vez de como un hecho de actividad.
-                    (Text(name).font(BT.footnote.weight(.medium)).foregroundStyle(Color.ink)
-                     + Text(" \(pulseAction(item))").font(BT.caption1).foregroundStyle(Color.ink))
+                    Text(pulseTimeAgo(item))
+                        .font(BT.caption2)
+                        .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
 
                     Spacer(minLength: 8)
 
-                    // layoutPriority para que, si algo tiene que truncarse con
-                    // Dynamic Type grande, sea la frase y nunca el ancla derecha.
-                    Text(pulseTimeAgo(item))
+                    Text(item.city)
                         .font(BT.caption2)
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                         .layoutPriority(1)
                 }
-
-                // La ciudad queda de pie de la línea 1. Es corta, pero colgando
-                // de una línea que ya va de borde a borde se lee como caption y
-                // no como huérfana. Además su borde izquierdo deja de competir:
-                // antes encabezaba la línea 2 y, al ser siempre la misma ciudad,
-                // las tres filas arrancaban idénticas y parecían una plantilla.
-                Text(item.city)
-                    .font(BT.caption2)
-                    .foregroundStyle(Color.inkMuted)
-                    .lineLimit(1)
             }
         }
     }
