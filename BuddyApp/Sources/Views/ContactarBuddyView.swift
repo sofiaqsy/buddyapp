@@ -867,24 +867,24 @@ struct CategoryPickerView: View {
                                 // medio queda libre para su acción propia.
                                 .onTapGesture {
                                     guard photo.id != carouselCenterId else { return }
-                                    // spring en vez de .snappy: esa curva frena
-                                    // en seco y el salto se siente rígido. Con
-                                    // response alto y damping < 1 la card se
-                                    // siente atraída al centro y se asienta con
-                                    // un rebote mínimo, como el snap del propio
-                                    // arrastre.
+                                    // Ambas cosas en la MISMA transacción. Con la
+                                    // escritura de estado afuera, el re-render
+                                    // que dispara cancelaba la animación del
+                                    // scroll recién arrancada: los logs de
+                                    // posición mostraban midX saltando 371→201
+                                    // en un frame, sin valores intermedios,
+                                    // mientras que arrastrando con el dedo daba
+                                    // decenas. Por eso cambiar la curva de
+                                    // animación no hacía ninguna diferencia.
+                                    //
+                                    // carouselCenterId se escribe acá porque
+                                    // scrollTo mueve el scroll pero NO actualiza
+                                    // el binding de scrollPosition; sin esto el
+                                    // zIndex seguía adelantando la card anterior.
                                     withAnimation(.spring(response: 0.55, dampingFraction: 0.78)) {
                                         proxy.scrollTo(photo.id, anchor: .center)
+                                        carouselCenterId = photo.id
                                     }
-                                    // scrollTo mueve el scroll pero NO actualiza
-                                    // el binding de scrollPosition: los logs
-                                    // mostraron carouselCenterId clavado en la
-                                    // card 0 después de tocar la 1 y la 2. Con
-                                    // el estado desfasado, el zIndex seguía
-                                    // adelantando la 0 — que tras el scroll
-                                    // quedaba a la izquierda. Acá el destino se
-                                    // conoce con certeza, así que se escribe.
-                                    carouselCenterId = photo.id
                                 }
                         }
                     }
