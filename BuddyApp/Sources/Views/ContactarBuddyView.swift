@@ -597,6 +597,10 @@ struct CategoryPickerView: View {
     /// Abre el hilo con el buddy asignado. Sin esto el CTA seguiría llevando a
     /// iniciar una conversación que ya existe.
     var onOpenBuddyChat: (() -> Void)? = nil
+    /// Tocar la card ya centrada abre ese lugar en el mapa. Nil donde no hay a
+    /// dónde navegar —dentro de la conversación, por ejemplo—, y ahí el tap
+    /// sobre la del medio simplemente no hace nada, como antes.
+    var onOpenPlace: ((APIPlaceCard) -> Void)? = nil
     var isLoading: Bool = false
     /// El CTA del carrusel ya no dispara una búsqueda: abre la conversación.
     /// Ese cambio de verbo es todo el rediseño — la ayuda deja de ser una
@@ -1123,7 +1127,13 @@ struct CategoryPickerView: View {
                                 // NO están centradas, así el tap sobre la del
                                 // medio queda libre para su acción propia.
                                 .onTapGesture {
-                                    guard photo.id != carouselCenterId else { return }
+                                    // La card centrada ya no necesita centrarse:
+                                    // su tap es el que abre el lugar en el mapa.
+                                    guard photo.id != carouselCenterId else {
+                                        Haptic.medium()
+                                        onOpenPlace?(photo.place)
+                                        return
+                                    }
                                     // Ambas cosas en la MISMA transacción. Con la
                                     // escritura de estado afuera, el re-render
                                     // que dispara cancelaba la animación del

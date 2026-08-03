@@ -814,6 +814,7 @@ struct InicioView: View {
                     activeBuddyHasUnread: activeBuddyHasUnread,
                     searchingCategoryKey: openRequest?.category,
                     onOpenBuddyChat: openAssignedBuddyChat,
+                    onOpenPlace: { navPath.append($0) },
                     isLoading: isFindingBuddy,
                     onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
@@ -843,6 +844,7 @@ struct InicioView: View {
                     activeBuddyHasUnread: activeBuddyHasUnread,
                     searchingCategoryKey: openRequest?.category,
                     onOpenBuddyChat: openAssignedBuddyChat,
+                    onOpenPlace: { navPath.append($0) },
                     isLoading: isFindingBuddy,
                     onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
