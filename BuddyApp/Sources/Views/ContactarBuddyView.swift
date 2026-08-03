@@ -599,11 +599,11 @@ struct CategoryPickerView: View {
     /// categorías: al quedar sobre el carrusel, mandaba a elegir y lo único
     /// elegible a la vista eran las fotos.
     private var exploreSubtitleAttributed: AttributedString {
-        var prefix = AttributedString("Lugares reales que comparten los buddies de ")
+        var prefix = AttributedString("Lugares que recomiendan los buddies de ")
         prefix.foregroundColor = UIColor(Color.inkMuted)
 
         guard let city = destinationName else {
-            var str = AttributedString("Lugares reales que comparte la comunidad por acá.")
+            var str = AttributedString("Lugares que recomienda la comunidad por acá.")
             str.foregroundColor = UIColor(Color.inkMuted)
             return str
         }
@@ -1085,17 +1085,14 @@ private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
 
-    /// El LUGAR sigue siendo el protagonista de la card y la persona pasa a ser
-    /// el medio: el usuario no quiere hablar con Keyla, quiere resolver una
-    /// duda sobre la ciudad. Por eso el pie dejó de decir "Recomendado por
-    /// {nombre}" — eso convertía la card en la ficha de una persona. El avatar
-    /// se queda igual: es la prueba de que hay gente real detrás, sin robarle
-    /// el protagonismo al lugar.
-    private var footerText: String {
-        guard place.buddyCount > 0 else { return "Compartido por buddies locales" }
-        return place.buddyCount == 1
-            ? "1 buddy conoce este lugar"
-            : "\(place.buddyCount) buddies conocen este lugar"
+    /// Quien recomienda el lugar, no cuánta gente lo conoce: la recomendación
+    /// de una persona concreta pesa más como prueba social que un conteo, y
+    /// encadena con el subtítulo ("Lugares que recomiendan los buddies de
+    /// Lima"). El nombre va en negrita para que se lea antes que el prefijo.
+    private var authorFirstName: String? {
+        guard let full = place.coverAuthorName?.trimmingCharacters(in: .whitespaces),
+              !full.isEmpty else { return nil }
+        return full.components(separatedBy: " ").first ?? full
     }
 
     var body: some View {
@@ -1137,9 +1134,18 @@ private struct ExploreCarouselCard: View {
                         .overlay(Circle().strokeBorder(.white, lineWidth: 1))
                     }
 
-                    Text(footerText)
-                        .font(BT.caption2)
-                        .foregroundStyle(.white.opacity(0.92))
+                    if let author = authorFirstName {
+                        Text("Recomendado por ")
+                            .font(BT.caption2)
+                            .foregroundStyle(.white.opacity(0.9))
+                        + Text(author)
+                            .font(BT.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                    } else {
+                        Text("Recomendado por la comunidad")
+                            .font(BT.caption2)
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
                 }
                 .lineLimit(1)
             }
