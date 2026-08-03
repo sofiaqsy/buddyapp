@@ -1664,13 +1664,13 @@ private struct ExploreCarouselCard: View {
                         // TERMINA siempre en canvas. Si el color llegara hasta
                         // el final, cada card cerraría en un tono distinto y el
                         // carrusel se volvería un mosaico contra la página.
-                        .init(color: fadeTint.opacity(0),          location: 0),
-                        .init(color: fadeTint.opacity(0.06),       location: 0.30),
-                        .init(color: fadeTint.opacity(0.20),       location: 0.50),
-                        .init(color: fadeTint.opacity(0.46),       location: 0.66),
-                        .init(color: fadeTint.opacity(0.74),       location: 0.79),
-                        .init(color: exploreCardPaper.opacity(0.92), location: 0.90),
-                        .init(color: exploreCardPaper,             location: 0.97),
+                        .init(color: fadeTint.opacity(0),            location: 0),
+                        .init(color: fadeTint.opacity(0.09),         location: 0.34),
+                        .init(color: fadeTint.opacity(0.18),         location: 0.52),
+                        .init(color: fadeTint.opacity(0.24),         location: 0.66),
+                        .init(color: exploreCardPaper.opacity(0.58), location: 0.78),
+                        .init(color: exploreCardPaper.opacity(0.88), location: 0.88),
+                        .init(color: exploreCardPaper,               location: 0.96),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
