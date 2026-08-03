@@ -1606,48 +1606,27 @@ private struct ExploreCarouselCard: View {
     }
 
     var body: some View {
-        // Foto arriba, ficha abajo — no un overlay sobre la imagen. Con el texto
-        // encima hacía falta un degradado que oscurecía justo la parte baja de
-        // la foto, que es donde suele estar el lugar. Separarlos deja la imagen
-        // entera y le da a la ficha el contraste de una etiqueta impresa.
-        VStack(spacing: 0) {
+        // La ficha flota SOBRE la foto, no debajo. Apilada no había nada que
+        // difuminar —el material sobre un fondo plano se ve igual que blanco—
+        // y encima obligaba a un degradado que blanqueaba el pie de la imagen.
+        // Sobre la foto, el glass hace ese trabajo solo: deja ver el lugar a
+        // través del papel y la foto llega entera hasta abajo.
+        ZStack(alignment: .bottom) {
             CachedImage(urlString: photo.url) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 176)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            // Arranca abajo y sube despacio: el degradado ya no tiene que hacer
-            // legible ningún texto —el texto vive en la ficha—, solo evitar que
-            // la foto termine en un corte recto. Con las paradas repartidas el
-            // blanco recién se nota en el último tercio y la imagen sigue siendo
-            // la protagonista.
-            .overlay(alignment: .bottom) {
-                LinearGradient(
-                    stops: [
-                        .init(color: Color.surface.opacity(0),    location: 0),
-                        .init(color: Color.surface.opacity(0.06), location: 0.62),
-                        .init(color: Color.surface.opacity(0.35), location: 0.86),
-                        .init(color: Color.surface,               location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 40)
-            }
 
             // Una sola composición, no tres bloques: sin reglas ni divisores.
             // La jerarquía la hacen el color y el aire —etiqueta tenue, nombre
             // en ink, autor apagado— que es como separan Apple Photos o Arc.
-            // Las líneas que había antes dibujaban cajas y peleaban con eso.
             VStack(spacing: 0) {
-                Spacer(minLength: 0)
-
                 if let category = place.category, !category.isEmpty {
-                    // Caption regular y no eyebrow semibold: es contexto, no
-                    // título. El tracking abierto la mantiene legible en tenue.
+                    // Caption chico y regular: es contexto, no título. El
+                    // tracking abierto la mantiene legible en tenue.
                     Text(category.uppercased())
                         .font(.system(size: 9))
                         .tracking(1.4)
@@ -1682,9 +1661,8 @@ private struct ExploreCarouselCard: View {
                         .clipShape(Circle())
                     }
 
-                    // Antes el nombre iba en brand y competía de igual a igual
-                    // con el del lugar. Toda la línea baja a inkMuted; el nombre
-                    // se distingue solo por peso, que alcanza a esta escala.
+                    // El nombre se distingue solo por peso: en brand competía
+                    // de igual a igual con el del lugar.
                     if let author = authorFirstName {
                         Text("Recomendado por ")
                             .font(BT.caption2)
@@ -1701,13 +1679,12 @@ private struct ExploreCarouselCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .padding(.top, 7)
-
-                Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.surface)
+            .frame(maxWidth: .infinity)
+            .glassRounded(Radius.sm)
+            .padding(8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Sin stroke: el borde dibujaba la card sobre el fondo. Con radio mayor
