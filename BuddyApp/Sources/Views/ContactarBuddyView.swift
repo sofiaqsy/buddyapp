@@ -803,8 +803,15 @@ struct CategoryPickerView: View {
     /// el patrón de escritura por-frame de GeometryReader+PreferenceKey
     /// que causó el rebote original — usarlo acá no reintroduce ese bug.
     private func exploreZIndex(for photo: ExplorePhoto, index: Int) -> Double {
-        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId }
-            ?? explorePhotos.count / 2
+        let resolved = explorePhotos.firstIndex { $0.id == carouselCenterId }
+        let centerIndex = resolved ?? explorePhotos.count / 2
+        // DIAGNÓSTICO (temporal): solo en la card 0 para tener una línea por
+        // pasada de layout en vez de una por card. Muestra si el id centrado
+        // resolvió a un índice real o cayó al fallback, que es la diferencia
+        // entre "el estado sabe dónde está el scroll" y "está adivinando".
+        if index == 0 {
+            print("🎯 [zIndex] carouselCenterId=\(carouselCenterId?.suffix(8) ?? "nil") resolved=\(resolved.map(String.init) ?? "FALLBACK") centerIndex=\(centerIndex) total=\(explorePhotos.count)")
+        }
         return -Double(abs(index - centerIndex))
     }
 
@@ -879,11 +886,19 @@ struct CategoryPickerView: View {
             // defaultScrollAnchor(.center): dos mecanismos definiendo la
             // posición inicial solo pueden discrepar.
             .onChange(of: explorePhotos.map(\.id), initial: true) { _, ids in
-                guard !ids.isEmpty else { carouselCenterId = nil; return }
+                guard !ids.isEmpty else {
+                    print("🎯 [initialCenter] ids vacío → carouselCenterId=nil")
+                    carouselCenterId = nil
+                    return
+                }
                 // Solo (re)centrar si el id actual ya no existe en la tanda
                 // nueva — si no, un refresh del feed movería el carrusel bajo
                 // el dedo del usuario.
-                guard carouselCenterId == nil || !ids.contains(carouselCenterId!) else { return }
+                guard carouselCenterId == nil || !ids.contains(carouselCenterId!) else {
+                    print("🎯 [initialCenter] skip — carouselCenterId=\(carouselCenterId?.suffix(8) ?? "nil") sigue presente en ids(\(ids.count))")
+                    return
+                }
+                print("🎯 [initialCenter] fijando idx=\(ids.count / 2) de \(ids.count) → \(ids[ids.count / 2].suffix(8))")
                 carouselCenterId = ids[ids.count / 2]
             }
 
