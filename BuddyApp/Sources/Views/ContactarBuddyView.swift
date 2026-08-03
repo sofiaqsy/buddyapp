@@ -1619,6 +1619,18 @@ private struct ExploreCarouselCard: View {
             .frame(maxWidth: .infinity)
             .frame(height: 178)
             .clipped()
+            // La foto se disuelve en la ficha en vez de terminar en un corte
+            // recto. Es el mismo degradado de antes invertido: aquel oscurecía
+            // la imagen para poder escribir encima; este solo la entrega al
+            // papel, sin tapar nada que importe.
+            .overlay(alignment: .bottom) {
+                LinearGradient(
+                    colors: [Color.surface.opacity(0), Color.surface],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 52)
+            }
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
