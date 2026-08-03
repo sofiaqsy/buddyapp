@@ -568,6 +568,9 @@ struct InicioView: View {
                 .navigationDestination(for: APIPlaceCard.self) { place in
                     PlaceGuideMapSheet(place: place)
                 }
+                .navigationDestination(for: DestinationMapRoute.self) { route in
+                    PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
+                }
                 .navigationDestination(for: String.self) { route in
                     stringDestination(route: route)
                 }
@@ -720,6 +723,13 @@ struct InicioView: View {
         }
     }
 
+    /// Abre la guía del destino resuelto por GPS. Sin trip no hay un APIJourney
+    /// que empujar, y el destino tampoco es un spot: necesita su propia ruta.
+    private func openResolvedDestinationMap() {
+        guard let dest = resolvedLocation else { return }
+        navPath.append(DestinationMapRoute(destinationId: dest.destinationId, name: dest.destinationName))
+    }
+
     /// Handler compartido del CategoryPickerView — igual para ambos contextos.
     private func handleComposerRequest(category: String, description: String?) {
         requireIdentity {
@@ -834,6 +844,7 @@ struct InicioView: View {
                 CategoryPickerView(
                     buddyCount: homeBuddyCount,
                     destinationName: resolvedLocation?.destinationName ?? locationService.currentCity,
+                    onDestinationTap: resolvedLocation == nil ? nil : openResolvedDestinationMap,
                     activeBuddyName: activeBuddyFirstName,
                     activeBuddyAvatarUrl: activeBuddyAvatarUrl,
                     communityContext: homeCommunityContext,
@@ -2109,6 +2120,13 @@ struct HomeContextSelector: View {
 // Carries both pieces the home-help sheet needs atomically.
 // Using this as the .sheet(item:) driver eliminates the Bool/optional
 // desync that caused blank screens on first open.
+/// El destino completo como ruta de navegación. APIJourney no sirve —puede no
+/// haber trip— y APIPlaceCard tampoco: eso es un spot, no la ciudad.
+struct DestinationMapRoute: Hashable {
+    let destinationId: String
+    let name: String
+}
+
 struct HomeHelpItem: Identifiable {
     let id = UUID()
     let destinationId: String
@@ -2518,7 +2536,26 @@ struct NearbyPlaceCard: View {
 /// Usa un RouteStore local, dedicado a este sheet: el global vive en el árbol
 /// de vistas de "Tu trip" y pisarlo aquí rompería esa pantalla al volver.
 struct PlaceGuideMapSheet: View {
-    let place: APIPlaceCard
+    let destinationId: String?
+    /// Spot a enfocar dentro de la guía. Nil cuando se abre el destino entero
+    /// —desde "Lima" en el subtítulo— y no un lugar puntual.
+    let focusPlaceId: String?
+    let name: String
+    let lat: Double?
+    let lng: Double?
+
+    init(destinationId: String?, focusPlaceId: String? = nil, name: String, lat: Double? = nil, lng: Double? = nil) {
+        self.destinationId = destinationId
+        self.focusPlaceId  = focusPlaceId
+        self.name          = name
+        self.lat           = lat
+        self.lng           = lng
+    }
+
+    init(place: APIPlaceCard) {
+        self.init(destinationId: place.destinationId, focusPlaceId: place.id,
+                  name: place.name, lat: place.lat, lng: place.lng)
+    }
 
     @StateObject private var routeStore = RouteStore()
     @State private var loadState: MapLoadState = .loading
@@ -2533,10 +2570,10 @@ struct PlaceGuideMapSheet: View {
             case .guideAvailable:
                 // TripDetailView ya trae su propio botón de volver (chevron
                 // flotante sobre el mapa) — no hace falta agregar otro.
-                TripDetailView(route: routeStore.route, destinationId: place.destinationId, focusPlaceId: place.id)
+                TripDetailView(route: routeStore.route, destinationId: destinationId, focusPlaceId: focusPlaceId)
                     .environmentObject(routeStore)
             case .noGuide(let lat, let lng):
-                MapPinView(name: place.name, lat: lat, lng: lng, span: 0.003)
+                MapPinView(name: name, lat: lat, lng: lng, span: 0.003)
                     .overlay(alignment: .topLeading) { closeButton }
             case .noData:
                 fallbackMessage("No tenemos la ubicación de este lugar", icon: "mappin.slash")
@@ -2547,9 +2584,9 @@ struct PlaceGuideMapSheet: View {
             }
         }
         .task {
-            guard let destId = place.destinationId else {
-                loadState = place.lat != nil && place.lng != nil
-                    ? .noGuide(lat: place.lat!, lng: place.lng!) : .noData
+            guard let destId = destinationId else {
+                loadState = lat != nil && lng != nil
+                    ? .noGuide(lat: lat!, lng: lng!) : .noData
                 return
             }
             loadState = await routeStore.ensureLoaded(destinationId: destId)
