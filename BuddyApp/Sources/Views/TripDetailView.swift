@@ -1208,7 +1208,13 @@ struct PlaceGuideDetailSheet: View {
                 // este teléfono volvería a subir la foto recién borrada.
                 await MainActor.run { MemoirPersistence.shared.removePage(at: pageIndex, journeyId: photo.journeyId) }
                 gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
-                await MainActor.run { Haptic.success() }
+                await MainActor.run {
+                    Haptic.success()
+                    // El Home y el perfil muestran estas mismas fotos y no
+                    // tienen forma de enterarse solos: sin este aviso la foto
+                    // borrada seguía ahí hasta el próximo arranque.
+                    NotificationCenter.default.post(name: .placePhotosChanged, object: photo.journeyId)
+                }
             } catch {
                 print("❌ [deletePhoto] journey=\(photo.journeyId) page=\(pageIndex): \(error)")
             }

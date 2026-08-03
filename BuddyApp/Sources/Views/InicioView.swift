@@ -610,6 +610,11 @@ struct InicioView: View {
                     showPublishSuccessToast = true
                     UIAccessibility.post(notification: .announcement, argument: "Historia publicada")
                 }
+                // Sin toast: acá no se publicó nada, solo cambió el contenido
+                // de un lugar que el carrusel ya estaba mostrando.
+                .onReceive(NotificationCenter.default.publisher(for: .placePhotosChanged)) { _ in
+                    Task { await loadData() }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .helpCompleted)) { _ in
                     Task { await loadRecentHelp(force: true); await refreshTripState() }
                 }

@@ -267,6 +267,11 @@ struct YoView: View {
         .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
             Task { await loadProfile(forceRefresh: true) }
         }
+        // forceRefresh porque el guard de 60s ignoraría la recarga: borrar una
+        // foto y volver al perfil pasa en segundos.
+        .onReceive(NotificationCenter.default.publisher(for: .placePhotosChanged)) { _ in
+            Task { await loadProfile(forceRefresh: true) }
+        }
     }
 
     // MARK: – Profile Header (avatar + stats)

@@ -143,6 +143,11 @@ extension Notification.Name {
     static let journeyActivated  = Notification.Name("journeyActivated")
     static let journeyPublished  = Notification.Name("journeyPublished")
     static let journeyCancelled  = Notification.Name("journeyCancelled")
+    /// Se agregó o quitó una foto de un lugar. Aparte de journeyPublished
+    /// porque esto NO es publicar: reusar aquella mostraría el toast de
+    /// "Historia publicada" al borrar. Lo que comparten es la consecuencia —
+    /// las fotos del lugar cambiaron y hay que recargar donde se muestran.
+    static let placePhotosChanged = Notification.Name("placePhotosChanged")
     static let tabReselected     = Notification.Name("tabReselected")   // re-tap del tab activo
     static let helpCompleted     = Notification.Name("helpCompleted")   // se cerró un apoyo → refrescar comunidad
     static let openPlaceInMap    = Notification.Name("openPlaceInMap")  // userInfo: lat, lng, name
