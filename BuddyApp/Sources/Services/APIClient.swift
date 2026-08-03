@@ -800,10 +800,24 @@ final class APIClient {
         return try await request(path: path)
     }
 
+    /// Recorta URLs de cover a "<carpeta>/<archivo>?query" para que quepan en el
+    /// log: lo único que interesa al diagnosticar staleness es qué página es y
+    /// si trae token de versión.
+    static func shortCovers(_ urls: [String]?) -> [String] {
+        (urls ?? []).map { u in
+            guard let c = URLComponents(string: u) else { return u }
+            return c.path.split(separator: "/").suffix(2).joined(separator: "/") + (c.query.map { "?\($0)" } ?? " «sin ?v=»")
+        }
+    }
+
     /// Lugares que este buddy recomienda, agrupados por lugar — sección propia
     /// del perfil, aparte de sus viajes: son aportes al catálogo, no viajes suyos.
     func fetchUserShares(travelerId: String, limit: Int = 12) async throws -> [APIPlaceCard] {
         let res: APIPlaceCardsResponse = try await request(path: "/users/\(travelerId)/shares?limit=\(limit)")
+        print("👤 [APIClient] userShares → \(res.items.count): \(res.items.map { "\($0.name)(\($0.photoCount)f)" }.joined(separator: ", "))")
+        for item in res.items.prefix(3) {
+            print("👤 [APIClient]   \(item.name) covers=\(APIClient.shortCovers(item.coverUrls))")
+        }
         return res.items
     }
 
@@ -818,11 +832,7 @@ final class APIClient {
         // ve son estas URLs. Interesa si traen ?v= —o sea si el backend con el
         // token está desplegado— y si la borrada sigue en la lista.
         for item in res.items.prefix(3) {
-            let short = (item.coverUrls ?? []).map { u -> String in
-                guard let c = URLComponents(string: u) else { return u }
-                return c.path.split(separator: "/").suffix(2).joined(separator: "/") + (c.query.map { "?\($0)" } ?? " «sin ?v=»")
-            }
-            print("🌍 [APIClient]   \(item.name) covers=\(short)")
+            print("🌍 [APIClient]   \(item.name) covers=\(APIClient.shortCovers(item.coverUrls))")
         }
         return res.items
     }
