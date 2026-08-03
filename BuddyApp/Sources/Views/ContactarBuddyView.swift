@@ -1685,16 +1685,19 @@ private struct ExploreCarouselCard: View {
 
                 if let category = place.category, !category.isEmpty {
                     Text(category.uppercased())
-                        .font(.system(size: 8, weight: .semibold))
-                        .tracking(0.9)
+                        .font(.system(size: 6, weight: .semibold))
+                        .tracking(0.6)
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .padding(.bottom, 3)
                 }
 
+                // Tamaños fijos y no tokens: a −30% ninguno cae en la escala del
+                // sistema, y mezclar footnoteBold con dos textos ya escalados
+                // rompería la proporción entre los tres.
                 Text(place.name)
-                    .font(BT.footnoteBold)
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.ink)
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
@@ -1710,31 +1713,31 @@ private struct ExploreCarouselCard: View {
                             } else {
                                 Circle().fill(Color.sandLight)
                                     .overlay(Text(String(author.prefix(1)))
-                                        .font(.system(size: 9, weight: .bold))
+                                        .font(.system(size: 6, weight: .bold))
                                         .foregroundStyle(Color.ink))
                             }
                         }
-                        .frame(width: 20, height: 20)
+                        .frame(width: 14, height: 14)
                         .clipShape(Circle())
                         // Un círculo no tiene línea base, así que en un HStack
                         // por baseline se iría al fondo. Se le declara una a
                         // 4pt de su borde inferior: ahí es donde el ojo lee que
                         // el avatar y el texto están sentados en la misma línea.
-                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4 }
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
                     }
 
                     // El nombre se distingue solo por peso: en brand competía
                     // de igual a igual con el del lugar.
                     if let author = authorFirstName {
                         Text("Recomendado por ")
-                            .font(BT.caption2)
+                            .font(.system(size: 8.5))
                             .foregroundStyle(Color.inkMuted)
                         + Text(author)
-                            .font(BT.caption2.weight(.semibold))
+                            .font(.system(size: 8.5, weight: .semibold))
                             .foregroundStyle(Color.inkMuted)
                     } else {
                         Text("Recomendado por la comunidad")
-                            .font(BT.caption2)
+                            .font(.system(size: 8.5))
                             .foregroundStyle(Color.inkMuted)
                     }
                 }
