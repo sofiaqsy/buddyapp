@@ -587,6 +587,16 @@ struct CategoryPickerView: View {
     /// esto en true la Home muestra las fotos de la comunidad y, si todavía no
     /// hay fotos para este lugar, solo el CTA — nunca la grilla.
     var hidesCategoryGrid: Bool = false
+    /// Último mensaje del hilo con el buddy asignado, para que el CTA cuente
+    /// en qué quedó la conversación y no solo con quién es.
+    var activeBuddySubtitle: String? = nil
+    var activeBuddyHasUnread: Bool = false
+    /// Categoría de una solicitud propia todavía sin atender. Con esto el CTA
+    /// dice que la búsqueda sigue viva en vez de invitar a empezar otra.
+    var searchingCategoryKey: String? = nil
+    /// Abre el hilo con el buddy asignado. Sin esto el CTA seguiría llevando a
+    /// iniciar una conversación que ya existe.
+    var onOpenBuddyChat: (() -> Void)? = nil
     var isLoading: Bool = false
     /// El CTA del carrusel ya no dispara una búsqueda: abre la conversación.
     /// Ese cambio de verbo es todo el rediseño — la ayuda deja de ser una
@@ -876,22 +886,24 @@ struct CategoryPickerView: View {
     private var consultCTA: some View {
         Button {
             Haptic.medium()
-            onStartConversation?()
+            if activeBuddyName != nil { onOpenBuddyChat?() } else { onStartConversation?() }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "bubble.left.fill")
-                    .foregroundStyle(Color.ink)
-                Text("Consultar en \(destinationName ?? "este lugar")")
-                    .font(BT.footnoteBold)
-                    .foregroundStyle(Color.ink)
-                    .lineLimit(1)
-                Spacer()
-                ZStack {
-                    Circle().fill(Color.brand).frame(width: 30, height: 30)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
+                ctaLeading
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ctaTitle)
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+                    if let sub = ctaSubtitle {
+                        Text(sub)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
                 }
+                Spacer(minLength: 8)
+                ctaTrailing
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -899,6 +911,75 @@ struct CategoryPickerView: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.sm).strokeBorder(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
+    }
+
+    /// Un solo control para los tres momentos: nadie todavía, buscando, y buddy
+    /// asignado. Comparten forma a propósito — el botón se va llenando a medida
+    /// que avanza la historia en vez de ser reemplazado por otra cosa.
+    private var ctaTitle: String {
+        if let name = activeBuddyName { return name }
+        if searchingCategoryKey != nil { return "Buscando buddy…" }
+        return "Consultar en \(destinationName ?? "este lugar")"
+    }
+
+    private var ctaSubtitle: String? {
+        if activeBuddyName != nil {
+            return activeBuddySubtitle ?? "Tu buddy en \(destinationName ?? "este lugar")"
+        }
+        if let key = searchingCategoryKey { return CategoryCardBubble.meta(key).label }
+        return nil
+    }
+
+    @ViewBuilder private var ctaLeading: some View {
+        if activeBuddyName != nil {
+            ZStack(alignment: .topTrailing) {
+                Circle()
+                    .fill(Color.surfaceRaised)
+                    .frame(width: 34, height: 34)
+                    .overlay {
+                        if let urlStr = activeBuddyAvatarUrl, let url = URL(string: urlStr) {
+                            AsyncImage(url: url) { img in
+                                img.resizable().scaledToFill()
+                            } placeholder: { Color.surfaceRaised }
+                            .frame(width: 34, height: 34)
+                            .clipShape(Circle())
+                        } else {
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 17))
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                    }
+                if activeBuddyHasUnread {
+                    Circle()
+                        .fill(Color.errorRed)
+                        .frame(width: 10, height: 10)
+                        .overlay(Circle().strokeBorder(Color.surface, lineWidth: 1.5))
+                        .offset(x: 2, y: -2)
+                }
+            }
+        } else if searchingCategoryKey != nil {
+            Image(systemName: "bubble.left.fill")
+                .foregroundStyle(Color.inkMuted)
+        } else {
+            Image(systemName: "bubble.left.fill")
+                .foregroundStyle(Color.ink)
+        }
+    }
+
+    @ViewBuilder private var ctaTrailing: some View {
+        if searchingCategoryKey != nil && activeBuddyName == nil {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .scaleEffect(0.8)
+                .tint(Color.inkMuted)
+        } else {
+            ZStack {
+                Circle().fill(Color.brand).frame(width: 30, height: 30)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        }
     }
 
     // MARK: – Explora {ciudad} (carrusel de fotos reales)

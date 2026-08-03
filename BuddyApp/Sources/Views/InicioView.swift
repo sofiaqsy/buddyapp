@@ -752,6 +752,32 @@ struct InicioView: View {
         }
     }
 
+    /// El match visible en el CTA — el mismo criterio que activeBuddyFirstName,
+    /// resuelto una vez para no repetir la lista de estados en cada helper.
+    private var ctaMatch: APIMatch? {
+        activeMatch.flatMap { ["accepted", "active", "pending"].contains($0.status) ? $0 : nil }
+    }
+
+    private var ctaConnection: ChatStore.ConnectionItem? {
+        ctaMatch.flatMap { m in chatStore.connections.first { $0.id == m.id } }
+    }
+
+    private var activeBuddyLastMessage: String? {
+        guard let conn = ctaConnection, conn.lastMessage != nil else { return nil }
+        return conn.isLastFromMe ? "Tú: \(conn.lastText)" : conn.lastText
+    }
+
+    /// Pendiente de respuesta — misma regla que el badge del tab Conexiones.
+    private var activeBuddyHasUnread: Bool { ctaConnection?.pendingReply == true }
+
+    /// El chat abre SIEMPRE, directo: ConnectionItem solo necesita el match, así
+    /// que no hace falta esperar a que chatStore haya sincronizado este hilo.
+    private func openAssignedBuddyChat() {
+        guard let match = ctaMatch else { return }
+        homeChatTarget = ctaConnection
+            ?? ChatStore.ConnectionItem(match: match, lastMessage: nil, unreadCount: 0)
+    }
+
     @ViewBuilder private var homeComposer: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             if let context = effectiveHomeContext, homeContextOptionCount > 1 {
@@ -784,6 +810,10 @@ struct InicioView: View {
                     communityContext: homeCommunityContext,
                     placeCards: exploreCards,
                     hidesCategoryGrid: true,
+                    activeBuddySubtitle: activeBuddyLastMessage,
+                    activeBuddyHasUnread: activeBuddyHasUnread,
+                    searchingCategoryKey: openRequest?.category,
+                    onOpenBuddyChat: openAssignedBuddyChat,
                     isLoading: isFindingBuddy,
                     onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
@@ -794,8 +824,6 @@ struct InicioView: View {
                 // La card de buddy asignado es del trip ACTIVO con match — si el
                 // trip elegido en el selector es otro (ej: Villa Rica, planning,
                 // sin match), no aplica acá.
-                assignedBuddyCard
-                searchingRequestCard
                 // "¿Vas a viajar?" solo aplica sin trip — se omite en este contexto.
             } else {
                 if effectiveHomeContext == nil {
@@ -811,15 +839,16 @@ struct InicioView: View {
                     placeCards: exploreCards,
                     pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
                     hidesCategoryGrid: true,
+                    activeBuddySubtitle: activeBuddyLastMessage,
+                    activeBuddyHasUnread: activeBuddyHasUnread,
+                    searchingCategoryKey: openRequest?.category,
+                    onOpenBuddyChat: openAssignedBuddyChat,
                     isLoading: isFindingBuddy,
                     onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
                 .padding(.horizontal, -Spacing.edge)
                 .opacity(isFindingBuddy ? 0.5 : 1)
                 .disabled(isFindingBuddy)
-
-                assignedBuddyCard
-                searchingRequestCard
 
                 // "¿Vas a viajar?" oculto por ahora en todos los casos.
             }
@@ -856,142 +885,7 @@ struct InicioView: View {
 
     // MARK: – Assigned buddy card (paridad con AssignedBuddyCard de Android)
 
-    /// Card "Tu buddy asignado" bajo el composer: avatar + badge de no leídos,
-    /// último mensaje con prefijo "Tú:" y tap → chat directo. Mismas reglas que
-    /// Android: visible solo con match del viajero en accepted/active/pending.
-    @ViewBuilder private var assignedBuddyCard: some View {
-        if let match = activeMatch,
-           ["accepted", "active", "pending"].contains(match.status) {
-            let conn = chatStore.connections.first { $0.id == match.id }
-            let name = TravelerAlias.shortDisplayName(realName: match.buddy?.fullName,
-                                                      id: match.buddy?.id ?? match.buddyId)
-            Button {
-                // El chat abre SIEMPRE, directo — ConnectionItem solo necesita
-                // el match, así que no hace falta esperar a que chatStore ya
-                // lo tenga cargado. Antes, si chatStore aún no había sincronizado
-                // este match (ventana común justo después de aceptar), el tap
-                // solo cambiaba al tab Conexiones sin abrir el chat.
-                homeChatTarget = conn ?? ChatStore.ConnectionItem(match: match, lastMessage: nil, unreadCount: 0)
-            } label: {
-                HStack(spacing: Spacing.md) {
-                    ZStack(alignment: .topTrailing) {
-                        Circle()
-                            .fill(Color.surfaceRaised)
-                            .frame(width: 44, height: 44)
-                            .overlay {
-                                if let urlStr = match.buddy?.avatarUrl, let url = URL(string: urlStr) {
-                                    AsyncImage(url: url) { img in
-                                        img.resizable().scaledToFill()
-                                    } placeholder: { Color.surfaceRaised }
-                                    .frame(width: 44, height: 44)
-                                    .clipShape(Circle())
-                                } else {
-                                    Image(systemName: "person.fill")
-                                        .font(.system(size: 22))
-                                        .foregroundStyle(Color.inkMuted)
-                                }
-                            }
-                        // Punto rojo = pendiente de respuesta — misma regla que
-                        // el badge del tab Conexiones (pendingReply), no read_at.
-                        if conn?.pendingReply == true {
-                            Text("1")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 20, height: 20)
-                                .background(Color.errorRed, in: Circle())
-                                .offset(x: 4, y: -4)
-                        }
-                    }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        (Text("Tu buddy asignado ")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.inkMuted)
-                         + Text(name)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.ink))
-                            .lineLimit(1)
-                        if let conn, conn.lastMessage != nil {
-                            Text(conn.isLastFromMe ? "Tú: \(conn.lastText)" : conn.lastText)
-                                .font(BT.caption1)
-                                .foregroundStyle(Color.inkMuted)
-                                .lineLimit(1)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 18))
-                        .foregroundStyle(Color.brand)
-                }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 10)
-                .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Radius.md)
-                        .strokeBorder(Color.brand.opacity(0.25), lineWidth: 1.5)
-                )
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    /// Mismo lugar y mismo formato que assignedBuddyCard, un paso antes en la
-    /// historia: la solicitud existe y sigue viva, pero todavía no tiene cara.
-    /// Es deliberado que compartan la forma — cuando el buddy llegue, la card se
-    /// llena en vez de aparecer una nueva.
-    @ViewBuilder private var searchingRequestCard: some View {
-        if let req = openRequest {
-            let meta = CategoryCardBubble.meta(req.category)
-            let city = effectiveTripJourney?.destination?.name
-                ?? resolvedLocation?.destinationName
-                ?? locationService.currentCity
-            Button {
-                startConversationFromHome()
-            } label: {
-                HStack(spacing: Spacing.md) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.surfaceRaised)
-                            .frame(width: 44, height: 44)
-                        Image(systemName: meta.icon)
-                            .font(.system(size: 19))
-                            .foregroundStyle(Color.brand)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        (Text("Buscando buddy ")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.inkMuted)
-                         + Text(city.map { "en \($0)" } ?? "cerca")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.ink))
-                            .lineLimit(1)
-                        Text(meta.label)
-                            .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .scaleEffect(0.8)
-                        .tint(Color.inkMuted)
-                }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 10)
-                .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Radius.md)
-                        .strokeBorder(Color.brand.opacity(0.25), lineWidth: 1.5)
-                )
-            }
-            .buttonStyle(.plain)
-        }
-    }
 
     /// Busca una solicitud propia todavía sin atender en el destino vigente.
     /// Con match ya no aplica: ese mismo pedido dejó de estar en búsqueda.
