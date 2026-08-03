@@ -1016,7 +1016,10 @@ struct CategoryPickerView: View {
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
     private let exploreCardWidth: CGFloat = 178
-    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 95
+    // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
+    // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
+    // al pie, no entre las líneas.
+    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 78
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
