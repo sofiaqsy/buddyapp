@@ -90,9 +90,6 @@ struct ContactarBuddyView: View {
     /// `chosenCategory`, que es nil para "general" porque ese caso no manda
     /// tarjeta al hilo real.
     @State private var pendingCategoryKey: String? = nil
-    /// Se llena solo cuando el match llega EN VIVO (no al reabrir un chat que
-    /// ya existía), para poder anunciar "X se unió a la conversación" una vez.
-    @State private var justJoinedName: String? = nil
 
     enum Phase: Equatable {
         /// La conversación ya empezó pero todavía no se eligió tema. No es una
@@ -219,7 +216,7 @@ struct ContactarBuddyView: View {
 
     private var chatView: some View {
         Group {
-            if let match { BuddyChatView(match: match, journey: journey, initialCategory: chosenCategory, joinedBuddyName: justJoinedName).equatable() }
+            if let match { BuddyChatView(match: match, journey: journey, initialCategory: chosenCategory).equatable() }
             else { loadingView }
         }
     }
@@ -476,9 +473,6 @@ struct ContactarBuddyView: View {
         }) else { return }
         pollTask?.cancel()
         match = active
-        // Solo cuando la llegada ocurre EN VIVO. Al reabrir un chat que ya
-        // existía no corresponde anunciar que alguien se unió recién.
-        if phase == .searching { justJoinedName = active.buddy?.fullName }
         withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
         UIAccessibility.post(notification: .announcement,
             argument: "¡Encontramos tu buddy! Conectando al chat.")
@@ -523,7 +517,6 @@ struct ContactarBuddyView: View {
                     pollTask?.cancel()
                     stopSSEMatch()
                     match = active
-                    if phase == .searching { justJoinedName = active.buddy?.fullName }
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
                     UIAccessibility.post(notification: .announcement,
                         argument: "¡Encontramos tu buddy! Conectando al chat.")
@@ -1699,12 +1692,6 @@ struct BuddyChatView: View {
     let match: APIMatch
     var journey: APIJourney? = nil
     var initialCategory: String? = nil
-    /// Nombre del buddy que acaba de entrar, solo cuando la llegada ocurrió en
-    /// vivo. Anuncia "X se unió a la conversación" al pie del hilo, al estilo
-    /// Telegram: el chat no cambia de pantalla, solo registra que llegó
-    /// alguien. Es local y efímero — al reabrir el hilo ya no aparece, porque
-    /// para entonces dejó de ser noticia.
-    var joinedBuddyName: String? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -1713,6 +1700,13 @@ struct BuddyChatView: View {
     // prevents the whole chat view from re-rendering on every GPS fix.
 
     private var effectiveUserId: String? { Session.travelerId }
+
+    /// El `category_card:` real ya llegó (por carga inicial, POST o SSE), así
+    /// que la copia optimista debe apagarse para no duplicar la tarjeta.
+    private var hasCategoryCardMessage: Bool {
+        messages.contains { $0.content?.hasPrefix("category_card:") == true }
+    }
+
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var matchStatus:   String = ""
@@ -1941,14 +1935,24 @@ struct BuddyChatView: View {
                                     Task { await loadMoreMessages() }
                                 }
                         }
-                        if messages.isEmpty {
+                        if messages.isEmpty && initialCategory == nil {
                             welcomeMessage.padding(.top, Spacing.xl)
+                        }
+                        // La tarjeta de tema ya estaba en pantalla en la vista
+                        // de espera. Si aquí esperáramos al POST, el hilo se
+                        // vería vacío ~500ms y la conversación parecería
+                        // empezar de cero justo cuando llega el buddy. Se pinta
+                        // localmente hasta que el mensaje real ocupa su lugar.
+                        if let cat = initialCategory, !hasCategoryCardMessage {
+                            HStack {
+                                Spacer(minLength: 40)
+                                CategoryCardBubble(key: cat, isMe: true)
+                            }
+                            .padding(.horizontal, Spacing.edge)
+                            .padding(.top, Spacing.xl)
                         }
                         ForEach(Array(messages.enumerated()), id: \.element.id) { i, msg in
                             messageRow(msg: msg, index: i)
-                        }
-                        if let joined = joinedBuddyName, !joined.isEmpty {
-                            SystemLine(text: "\(joined.components(separatedBy: " ").first ?? joined) se unió a la conversación")
                         }
                         // Card de cierre de ciclo
                         if shouldShowCloseCard {
@@ -2991,7 +2995,6 @@ extension BuddyChatView: Equatable {
         lhs.match.id == rhs.match.id &&
         lhs.journey?.id == rhs.journey?.id &&
         lhs.initialCategory == rhs.initialCategory
-            && lhs.joinedBuddyName == rhs.joinedBuddyName
     }
 }
 

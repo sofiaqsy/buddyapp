@@ -46,6 +46,11 @@ struct InicioView: View {
     @State private var liveJourneys: [APIJourney] = []   // active + planning, para swipe
     @State private var currentTripPage = 0
     @State private var activeMatch: APIMatch? = nil
+    /// Solicitud propia todavía sin buddy. Es el otro estado que el Home tiene
+    /// que saber contar: no hay match que mostrar, pero hay algo en curso y
+    /// abandonar la pantalla no lo cancela. Sin esto el Home se dibuja como si
+    /// el viajero no hubiera pedido nada.
+    @State private var openRequest: APIHelpRequest? = nil
     @State private var pioneerConfirmation: String? = nil   // banner tras auto-crear request en lugar sin buddies
     /// Chat abierto desde la card "Tu buddy asignado" (paridad con Android).
     @State private var homeChatTarget: ChatStore.ConnectionItem? = nil
@@ -732,6 +737,21 @@ struct InicioView: View {
     /// elección explícita del usuario (effectiveHomeContext). Sin selección
     /// posible (Case 4: sin GPS y sin trip) se mantiene el flujo de permisos/
     /// registro existente, sin cambios.
+    /// Un match activo del viajero es SU buddy, exista o no un trip para él.
+    private var activeBuddyFirstName: String? {
+        activeMatch.flatMap { m in
+            ["accepted", "active", "pending"].contains(m.status)
+                ? m.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
+                : nil
+        }
+    }
+
+    private var activeBuddyAvatarUrl: String? {
+        activeMatch.flatMap { m in
+            ["accepted", "active", "pending"].contains(m.status) ? m.buddy?.avatarUrl : nil
+        }
+    }
+
     @ViewBuilder private var homeComposer: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             if let context = effectiveHomeContext, homeContextOptionCount > 1 {
@@ -759,14 +779,8 @@ struct InicioView: View {
                     buddyCount: homeBuddyCount,
                     destinationName: activeDest,
                     onDestinationTap: { navPath.append(activeJrn) },
-                    activeBuddyName: activeJrn.id == activeJourney?.id ? activeMatch.flatMap { m in
-                        ["accepted", "active", "pending"].contains(m.status)
-                            ? m.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
-                            : nil
-                    } : nil,
-                    activeBuddyAvatarUrl: activeJrn.id == activeJourney?.id ? activeMatch.flatMap { m in
-                        ["accepted", "active", "pending"].contains(m.status) ? m.buddy?.avatarUrl : nil
-                    } : nil,
+                    activeBuddyName: activeBuddyFirstName,
+                    activeBuddyAvatarUrl: activeBuddyAvatarUrl,
                     communityContext: homeCommunityContext,
                     isLoading: isFindingBuddy,
                     onStartConversation: startConversationFromHome
@@ -778,9 +792,8 @@ struct InicioView: View {
                 // La card de buddy asignado es del trip ACTIVO con match — si el
                 // trip elegido en el selector es otro (ej: Villa Rica, planning,
                 // sin match), no aplica acá.
-                if activeJrn.id == activeJourney?.id {
-                    assignedBuddyCard
-                }
+                assignedBuddyCard
+                searchingRequestCard
                 // "¿Vas a viajar?" solo aplica sin trip — se omite en este contexto.
             } else {
                 if effectiveHomeContext == nil {
@@ -790,6 +803,8 @@ struct InicioView: View {
                 CategoryPickerView(
                     buddyCount: homeBuddyCount,
                     destinationName: resolvedLocation?.destinationName ?? locationService.currentCity,
+                    activeBuddyName: activeBuddyFirstName,
+                    activeBuddyAvatarUrl: activeBuddyAvatarUrl,
                     communityContext: homeCommunityContext,
                     placeCards: exploreCards,
                     pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
@@ -799,6 +814,9 @@ struct InicioView: View {
                 .padding(.horizontal, -Spacing.edge)
                 .opacity(isFindingBuddy ? 0.5 : 1)
                 .disabled(isFindingBuddy)
+
+                assignedBuddyCard
+                searchingRequestCard
 
                 // "¿Vas a viajar?" oculto por ahora en todos los casos.
             }
@@ -914,6 +932,82 @@ struct InicioView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// Mismo lugar y mismo formato que assignedBuddyCard, un paso antes en la
+    /// historia: la solicitud existe y sigue viva, pero todavía no tiene cara.
+    /// Es deliberado que compartan la forma — cuando el buddy llegue, la card se
+    /// llena en vez de aparecer una nueva.
+    @ViewBuilder private var searchingRequestCard: some View {
+        if let req = openRequest {
+            let meta = CategoryCardBubble.meta(req.category)
+            let city = effectiveTripJourney?.destination?.name
+                ?? resolvedLocation?.destinationName
+                ?? locationService.currentCity
+            Button {
+                startConversationFromHome()
+            } label: {
+                HStack(spacing: Spacing.md) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.surfaceRaised)
+                            .frame(width: 44, height: 44)
+                        Image(systemName: meta.icon)
+                            .font(.system(size: 19))
+                            .foregroundStyle(Color.brand)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        (Text("Buscando buddy ")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.inkMuted)
+                         + Text(city.map { "en \($0)" } ?? "cerca")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.ink))
+                            .lineLimit(1)
+                        Text(meta.label)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .scaleEffect(0.8)
+                        .tint(Color.inkMuted)
+                }
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, 10)
+                .background(Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.md)
+                        .strokeBorder(Color.brand.opacity(0.25), lineWidth: 1.5)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Busca una solicitud propia todavía sin atender en el destino vigente.
+    /// Con match ya no aplica: ese mismo pedido dejó de estar en búsqueda.
+    private func refreshOpenRequest(hasMatch: Bool) async {
+        guard Session.hasSession, !hasMatch else {
+            await MainActor.run { openRequest = nil }
+            return
+        }
+        let destId = effectiveTripJourney.flatMap { $0.destination?.id ?? $0.destinationId }
+            ?? resolvedLocation?.destinationId
+        guard let destId else {
+            await MainActor.run { openRequest = nil }
+            return
+        }
+        let myId = Session.travelerId
+        let requests = (try? await APIClient.shared.fetchOpenRequests(destinationId: destId)) ?? []
+        let mine = requests.first { $0.travelerId == myId && $0.isActive }
+        await MainActor.run { openRequest = mine }
+        print("🏠 [refreshOpenRequest] destId=\(destId.prefix(8)) → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
     }
 
     private func refreshHomeCommunityContext() async {
@@ -1042,14 +1136,14 @@ struct InicioView: View {
 
         // Recalcular el match activo — al cerrar un apoyo el match deja de estar
         // en estados activos, así el card vuelve a mostrar el ícono (no la foto).
-        var resolvedMatch: APIMatch? = nil
-        if active != nil {
-            let matches = (try? await APIClient.shared.fetchMatches()) ?? []
-            let myId = Session.travelerId
-            resolvedMatch = matches.first(where: {
-                ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
-            })
-        }
+        // Sin condicionar a `active`: desde el flujo conversacional el match
+        // nace ANTES que el trip (el trip se crea al aceptar), así que exigir
+        // trip primero dejaba al Home ciego justo en el caso nuevo.
+        let matches = (try? await APIClient.shared.fetchMatches()) ?? []
+        let myId = Session.travelerId
+        let resolvedMatch = matches.first(where: {
+            ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
+        })
 
         await MainActor.run {
             activeJourney  = active
@@ -1064,6 +1158,7 @@ struct InicioView: View {
         // depende effectiveHomeContext — loadRecentHelp necesita ese valor fresco
         // para decidir si mostrar actividad local o caer al pulso global.
         await refreshHomeCommunityContext()
+        await refreshOpenRequest(hasMatch: resolvedMatch != nil)
         await loadRecentHelp()
         await loadRecentHelpPerTrip()
         await loadCommunityPulseIfNeeded()
