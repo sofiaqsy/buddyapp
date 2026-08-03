@@ -1688,7 +1688,14 @@ private struct ExploreCarouselCard: View {
             // Una sola composición, sin reglas ni divisores: la jerarquía la
             // hacen el color y el aire —etiqueta tenue, nombre en ink, autor
             // apagado— que es como separan Apple Photos o Arc.
+            // Los tres datos caben exactos en la banda de 70: 7 de aire arriba,
+            // 8 (categoría) + 3 + 20 (nombre) + 3 + 20 (autor) = 54, y 7 abajo.
+            // Antes sumaban 78 y además el bloque salía 15pt hacia la foto, así
+            // que los tres se leían encimados. Los Spacer centran lo que sobre
+            // cuando falta la categoría.
             VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
                 if let category = place.category, !category.isEmpty {
                     Text(category.uppercased())
                         .font(.system(size: 8, weight: .semibold))
@@ -1696,15 +1703,15 @@ private struct ExploreCarouselCard: View {
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                        .padding(.bottom, 6)
+                        .padding(.bottom, 3)
                 }
 
                 Text(place.name)
                     .font(BT.footnoteBold)
                     .foregroundStyle(Color.ink)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let author = place.coverAuthorName {
@@ -1746,13 +1753,12 @@ private struct ExploreCarouselCard: View {
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .padding(.top, 6)
+                .padding(.top, 3)
 
                 Spacer(minLength: 0)
             }
-            .offset(y: -15)
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // La ficha toma el mismo color que cierra el degradado. Antes moría
             // en canvas y la banda volvía al fondo de la app, así que el color
