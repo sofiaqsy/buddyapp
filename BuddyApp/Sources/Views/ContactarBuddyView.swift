@@ -1335,9 +1335,6 @@ private struct PendingConversationView: View {
     private var statusBar: some View {
         HStack(spacing: 8) {
             if chosenCategory == nil {
-                Image(systemName: "hand.tap.fill")
-                    .foregroundStyle(Color.sand)
-                    .font(.system(size: 15))
                 Text("Elige un tema para empezar")
                     .font(BT.footnote)
                     .foregroundStyle(Color.inkMuted)
