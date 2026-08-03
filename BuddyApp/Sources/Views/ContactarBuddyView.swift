@@ -81,8 +81,38 @@ struct ContactarBuddyView: View {
     /// Evita que el timer y el SSE disparen pollForMatch() simultáneamente.
     @State private var isPollInFlight: Bool = false
 
+    /// Tema elegido para PINTAR la conversación pendiente. Distinto de
+    /// `chosenCategory`, que es nil para "general" porque ese caso no manda
+    /// tarjeta al hilo real.
+    @State private var pendingCategoryKey: String? = nil
+    /// Se llena solo cuando el match llega EN VIVO (no al reabrir un chat que
+    /// ya existía), para poder anunciar "X se unió a la conversación" una vez.
+    @State private var justJoinedName: String? = nil
+
     enum Phase: Equatable {
-        case loading, selectCategory, searching, matched, error(String)
+        /// La conversación ya empezó pero todavía no se eligió tema. No es una
+        /// pantalla nueva: es el mismo chat, con el sistema guiando.
+        case loading, selectCategory, composing, searching, matched, error(String)
+    }
+
+    /// Eventos de la conversación pendiente. No son estados de una máquina:
+    /// son cosas que fueron pasando y quedan acumuladas en el hilo.
+    private var pendingItems: [ChatItem] {
+        guard let key = pendingCategoryKey else {
+            return [.system(id: "pick", text: "Selecciona el tema de tu consulta")]
+        }
+        var out: [ChatItem] = [.pendingCategory(key)]
+        let city = resolvedDestinationName ?? "la zona"
+        out.append(.system(
+            id: "contacting",
+            text: "Estamos contactando buddies en \(city)…",
+            footnote: "Normalmente toma menos de 1 minuto."))
+        // Se cuelga de una señal real del backend (el worker de escalado), no
+        // de un temporizador inventado en el cliente.
+        if isExpandingSearch {
+            out.append(.system(id: "expanding", text: "Avisamos a más buddies cercanos…"))
+        }
+        return out
     }
 
     var body: some View {
@@ -92,8 +122,17 @@ struct ContactarBuddyView: View {
                 Color.canvas.ignoresSafeArea()
                 switch phase {
                 case .loading:        loadingView
-                case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, destinationName: resolvedDestinationName, onRequest: handleRequest)
-                case .searching:      SearchingView(buddyCount: buddyCount, isExpandingSearch: isExpandingSearch, category: chosenCategory, onCancel: cancelSearch)
+                case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, destinationName: resolvedDestinationName, onRequest: handleRequest, onStartConversation: { withAnimation(.easeOut(duration: 0.25)) { phase = .composing } })
+                // Misma vista para las dos: la conversación no cambia de
+                // pantalla cuando se elige el tema, solo acumula un evento más.
+                case .composing, .searching:
+                    PendingConversationView(
+                        destinationName: resolvedDestinationName,
+                        items: pendingItems,
+                        chosenCategory: pendingCategoryKey,
+                        onPickCategory: { key in Task { await handleRequest(category: key, description: nil) } },
+                        onBack: { dismiss() },
+                        onCancelRequest: pendingCategoryKey == nil ? nil : cancelSearch)
                 case .matched:        chatView
                 case .error(let m):   errorView(m)
                 }
@@ -117,18 +156,23 @@ struct ContactarBuddyView: View {
         .task { await checkStatus() }
         .task { await loadBuddyCount() }
         .onDisappear {
-            // Cerrar el modal — de la forma que sea (swipe-dismiss, cambiar de
-            // tab, back) — cancela la búsqueda de verdad, igual que el botón
-            // explícito de cancelar. No queda nada corriendo en segundo plano
-            // sin que el usuario lo vea.
-            if phase == .searching {
-                print("🚪 [onDisappear] phase=searching requestId=\(activeRequestId ?? "nil") → CANCELANDO búsqueda")
-                cancelActiveRequestOnServer()
-            } else {
-                print("🚪 [onDisappear] phase=\(phase) → cancelando poll+SSE (nada útil que rastrear)")
-                pollTask?.cancel()
-                stopSSEMatch()
-            }
+            // PRINCIPIO DE PRODUCTO: una solicitud de ayuda es persistente
+            // hasta que el usuario la cierra explícitamente o un buddy la
+            // atiende. Navegar entre pantallas no modifica su estado.
+            //
+            // Antes, salir de acá con la búsqueda en curso la cancelaba en el
+            // servidor. Con la conversación como modelo mental eso es
+            // inaceptable: abandonar un chat nunca puede equivaler a abandonar
+            // la conversación. Salir ahora solo suelta el tracking local; la
+            // solicitud sigue viva y se retoma al volver (el camino de
+            // recuperación por 409 active_request_exists ya existía y es
+            // justamente el que la reengancha).
+            //
+            // Cancelar es ahora una acción consciente: el menú ⋯ de la
+            // conversación.
+            print("🚪 [onDisappear] phase=\(phase) → soltando poll+SSE; la solicitud sigue viva")
+            pollTask?.cancel()
+            stopSSEMatch()
         }
         // Reconexión tras volver al primer plano: el SSE del matching cae cuando iOS
         // suspende la app. Reiniciamos el SSE y consultamos el estado de inmediato
@@ -162,7 +206,7 @@ struct ContactarBuddyView: View {
 
     private var chatView: some View {
         Group {
-            if let match { BuddyChatView(match: match, journey: journey, initialCategory: chosenCategory).equatable() }
+            if let match { BuddyChatView(match: match, journey: journey, initialCategory: chosenCategory, joinedBuddyName: justJoinedName).equatable() }
             else { loadingView }
         }
     }
@@ -230,9 +274,16 @@ struct ContactarBuddyView: View {
             guard let destId = destIdOpt else { phase = .selectCategory; return }
             let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
             if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
-                print("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) → searching")
+                print("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) cat=\(open.category) → retomando conversación")
                 activeRequestId = open.id
                 isExpandingSearch = false
+                // Reconstruir la conversación al volver. Sin esto la solicitud
+                // seguía viva (bien) pero el hilo se dibujaba otra vez con el
+                // selector de tema, como si no hubieras pedido nada — que es
+                // exactamente la frustración que el principio de persistencia
+                // busca evitar.
+                pendingCategoryKey = open.category
+                chosenCategory = open.category == "general" ? nil : open.category
                 phase = .searching; startPolling(); startSSEMatch(requestId: open.id)
             } else if let seed = initialRequest {
                 // La Home ya eligió → crear la solicitud directamente.
@@ -249,7 +300,7 @@ struct ContactarBuddyView: View {
 
     func handleRequest(category: String, description: String?) async {
         print("📤 [handleRequest] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL") category=\(category)")
-        guard phase == .selectCategory else {
+        guard phase == .selectCategory || phase == .composing else {
             print("⚠️ [handleRequest] ignorado — phase ya es \(phase)")
             return
         }
@@ -260,7 +311,8 @@ struct ContactarBuddyView: View {
         let destIdOpt2: String? = resolvedDestinationId
         guard let destId = destIdOpt2 else { return }
         chosenCategory = category == "general" ? nil : category
-        phase = .searching
+        pendingCategoryKey = category
+        withAnimation(.easeOut(duration: 0.25)) { phase = .searching }
         do {
             // Activate the journey so the home hero card shows it and
             // loadData can load the associated match.
@@ -285,6 +337,7 @@ struct ContactarBuddyView: View {
             print("🔁 [handleRequest] 409 active_request_exists → retomando request \(requestId)")
             activeRequestId = requestId
             isExpandingSearch = false
+            pendingCategoryKey = category
             phase = .searching
             startPolling(); startSSEMatch(requestId: requestId)
         } catch { phase = .error(error.localizedDescription) }
@@ -410,6 +463,9 @@ struct ContactarBuddyView: View {
         }) else { return }
         pollTask?.cancel()
         match = active
+        // Solo cuando la llegada ocurre EN VIVO. Al reabrir un chat que ya
+        // existía no corresponde anunciar que alguien se unió recién.
+        if phase == .searching { justJoinedName = active.buddy?.fullName }
         withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
         UIAccessibility.post(notification: .announcement,
             argument: "¡Encontramos tu buddy! Conectando al chat.")
@@ -454,6 +510,7 @@ struct ContactarBuddyView: View {
                     pollTask?.cancel()
                     stopSSEMatch()
                     match = active
+                    if phase == .searching { justJoinedName = active.buddy?.fullName }
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) { phase = .matched }
                     UIAccessibility.post(notification: .announcement,
                         argument: "¡Encontramos tu buddy! Conectando al chat.")
@@ -521,6 +578,10 @@ struct CategoryPickerView: View {
     var pioneerRequiresCategory: Bool = false
     var isLoading: Bool = false
     let onRequest: (String, String?) async -> Void
+    /// El CTA del carrusel ya no dispara una búsqueda: abre la conversación.
+    /// Ese cambio de verbo es todo el rediseño — la ayuda deja de ser una
+    /// pantalla que se completa y pasa a ser un hilo que se inicia.
+    var onStartConversation: (() -> Void)? = nil
 
     @State private var selected: BuddyCategory? = nil
     /// scrollPosition(id:) actualiza esto EN VIVO mientras el dedo arrastra
@@ -1047,7 +1108,10 @@ struct CategoryPickerView: View {
             // Atarlo a la foto del medio haría que el texto cambiara al
             // deslizar, y eso le enseñaría al usuario que las fotos SÍ son un
             // selector — justo lo contrario de lo que el carrusel comunica.
-            Button {} label: {
+            Button {
+                Haptic.medium()
+                onStartConversation?()
+            } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "bubble.left.fill")
                         .foregroundStyle(Color.ink)
@@ -1079,6 +1143,275 @@ private struct ExplorePhoto: Identifiable {
     let id: String
     let url: String
     let place: APIPlaceCard
+}
+
+// MARK: – Conversación pendiente (antes de que exista un match)
+
+/// Lo que se ve en el hilo antes de que haya un buddy asignado.
+///
+/// El backend no tiene dónde guardar nada todavía —los mensajes se piden por
+/// `GET /messages/{matchId}` y no hay match—, así que estos elementos son
+/// locales y efímeros: son el andamiaje del momento de espera, no historial.
+/// Al llegar el match, el hilo real los reemplaza.
+///
+/// Deliberadamente NO es una lista de "estados" sino de eventos: la
+/// conversación no cambia de modo, va acumulando cosas que pasaron.
+enum ChatItem: Identifiable {
+    /// Línea del sistema: sin remitente, sin avatar, sin burbuja. La app guía
+    /// el proceso; nunca simula ser una persona conversando.
+    case system(id: String, text: String, footnote: String? = nil)
+    /// Lo que el usuario ya "dijo" pero todavía no se pudo enviar porque no
+    /// existe el hilo. Se renderiza igual que el mensaje real que lo va a
+    /// reemplazar, para que la llegada del match no mute nada en pantalla.
+    case pendingCategory(String)
+
+    var id: String {
+        switch self {
+        case .system(let id, _, _): return "sys-\(id)"
+        case .pendingCategory(let key): return "pending-cat-\(key)"
+        }
+    }
+}
+
+/// Línea de sistema al estilo de los avisos de iMessage ("Fulano empezó a
+/// compartir su ubicación"): centrada y discreta. No es alguien hablando.
+private struct SystemLine: View {
+    let text: String
+    var footnote: String? = nil
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Text(text)
+                .font(BT.caption1)
+                .foregroundStyle(Color.inkMuted)
+            if let footnote {
+                // La ansiedad de esperar viene de no saber cuánto.
+                Text(footnote)
+                    .font(BT.caption2)
+                    .foregroundStyle(Color.inkMuted.opacity(0.7))
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Spacing.edge)
+        .padding(.vertical, 10)
+    }
+}
+
+/// Extraída de BuddyChatView para que la tarjeta optimista de la conversación
+/// pendiente y el mensaje `category_card:` real sean literalmente el mismo
+/// componente. Así, cuando llega el match y el servidor devuelve el mensaje de
+/// verdad, no hay ni un pixel de diferencia: el reemplazo es invisible.
+struct CategoryCardBubble: View {
+    let key: String
+    var isMe: Bool = true
+
+    static func meta(_ key: String) -> (icon: String, label: String, subtitle: String) {
+        switch key {
+        case "transport":       return ("car.fill",            "Transporte",  "Rutas y movilidad")
+        case "food":            return ("cup.and.saucer.fill", "Comer",       "Restaurantes y sabores locales")
+        case "shopping":        return ("bag.fill",            "Compras",     "Productos locales")
+        case "translation":     return ("bubble.left.fill",    "Traducir",    "Frases, señales y más")
+        case "activities":      return ("figure.hiking",       "Actividades", "Tours y experiencias")
+        case "accommodation":   return ("bed.double.fill",     "Alojamiento", "Hoteles y hospedajes")
+        case "emergency":       return ("shield.fill",         "Seguridad",   "Emergencias y consejos")
+        case "recommendations": return ("lightbulb.fill",      "Consejos",    "Recomendaciones y ayuda")
+        default:                return ("questionmark",        key,           "Solicitud de ayuda")
+        }
+    }
+
+    var body: some View {
+        let info = Self.meta(key)
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.brand.opacity(0.12))
+                    .frame(width: 42, height: 42)
+                Image(systemName: info.icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.brand)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isMe ? "Necesito ayuda con" : "Necesita ayuda con")
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
+                Text(info.label)
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.ink)
+                Text(info.subtitle)
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+        .frame(maxWidth: 260, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(isMe ? "Pedí ayuda con" : "Pide ayuda con") \(info.label): \(info.subtitle)")
+    }
+}
+
+/// La conversación antes de que exista un buddy. No es una pantalla de
+/// búsqueda con aspecto de chat: es el mismo chat, con el sistema guiando.
+///
+/// El header dice DÓNDE estás, no qué está pasando — por eso muestra la marca
+/// y la ciudad y no "buscando...". Lo que está ocurriendo se cuenta dentro de
+/// la conversación, que es donde ocurren las cosas.
+private struct PendingConversationView: View {
+    let destinationName: String?
+    let items: [ChatItem]
+    /// nil mientras el usuario todavía no eligió tema — entonces el composer se
+    /// reemplaza por las categorías.
+    let chosenCategory: String?
+    let onPickCategory: (String) -> Void
+    let onBack: () -> Void
+    /// Cancelar es una intención consciente y vive en el menú, no como una
+    /// acción suelta bajo el estado de búsqueda: ahí generaba la pregunta
+    /// "¿cancelar qué, exactamente?" — ¿ya no quiero ayuda, me equivoqué,
+    /// vuelvo al Home? Desde el menú la intención es inequívoca.
+    var onCancelRequest: (() -> Void)? = nil
+
+    private let categories: [(icon: String, label: String, key: String)] = [
+        ("car.fill",       "Transporte",  "transport"),
+        ("cup.and.saucer", "Comer",       "food"),
+        ("bag.fill",       "Compras",     "shopping"),
+        ("figure.hiking",  "Actividades", "activities"),
+        ("bed.double",     "Alojamiento", "accommodation"),
+        ("lightbulb.fill", "Consejos",    "recommendations"),
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 10) {
+                    ForEach(items) { item in
+                        switch item {
+                        case .system(_, let text, let footnote):
+                            SystemLine(text: text, footnote: footnote)
+                        case .pendingCategory(let key):
+                            HStack {
+                                Spacer(minLength: 40)
+                                CategoryCardBubble(key: key, isMe: true)
+                            }
+                            .padding(.horizontal, Spacing.edge)
+                        }
+                    }
+
+                    if chosenCategory != nil {
+                        ProgressView()
+                            .tint(Color.inkMuted)
+                            .padding(.top, 4)
+                    }
+                }
+                .padding(.top, Spacing.lg)
+                .frame(maxWidth: .infinity)
+            }
+
+            // Las categorías ocupan EXACTAMENTE el lugar del campo de texto.
+            // No es un TextField deshabilitado ni botones flotando: es que en
+            // este momento de la conversación lo que se puede "decir" es elegir
+            // un tema. Cuando ya eligió, el área se vacía en vez de mostrar un
+            // input que no tendría a dónde enviar (no hay match todavía).
+            if chosenCategory == nil {
+                categoryComposer
+            }
+        }
+        .background(Color.canvas)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button { Haptic.light(); onBack() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+            .padding(.leading, -10)
+
+            // La marca, no un círculo gris con silueta: todavía estás hablando
+            // con la aplicación, y fingir un hueco con forma de persona sería
+            // prometer a alguien que no está.
+            ZStack {
+                Circle().fill(Color.brand.opacity(0.12))
+                    .frame(width: 38, height: 38)
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.brand)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Buddy")
+                    .font(BT.headline)
+                    .foregroundStyle(Color.ink)
+                if let city = destinationName {
+                    Text(city)
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            if let onCancelRequest {
+                Menu {
+                    Button(role: .destructive, action: onCancelRequest) {
+                        Label("Cancelar solicitud", systemImage: "xmark.circle")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Opciones de la solicitud")
+            }
+        }
+        .padding(.horizontal, Spacing.edge)
+        .padding(.vertical, 12)
+        .background(Color.surface)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var categoryComposer: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(categories, id: \.key) { cat in
+                    Button {
+                        Haptic.medium()
+                        onPickCategory(cat.key)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: cat.icon)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color.brand)
+                            Text(cat.label)
+                                .font(BT.footnote)
+                                .foregroundStyle(Color.ink)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.surface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                    }
+                    .buttonStyle(.pressable)
+                }
+            }
+            .padding(.horizontal, Spacing.edge)
+            .padding(.vertical, 12)
+        }
+        .background(Color.surface.opacity(0.6))
+        .overlay(alignment: .top) { Divider() }
+    }
 }
 
 private struct ExploreCarouselCard: View {
@@ -1291,6 +1624,12 @@ struct BuddyChatView: View {
     let match: APIMatch
     var journey: APIJourney? = nil
     var initialCategory: String? = nil
+    /// Nombre del buddy que acaba de entrar, solo cuando la llegada ocurrió en
+    /// vivo. Anuncia "X se unió a la conversación" al pie del hilo, al estilo
+    /// Telegram: el chat no cambia de pantalla, solo registra que llegó
+    /// alguien. Es local y efímero — al reabrir el hilo ya no aparece, porque
+    /// para entonces dejó de ser noticia.
+    var joinedBuddyName: String? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -1532,6 +1871,9 @@ struct BuddyChatView: View {
                         }
                         ForEach(Array(messages.enumerated()), id: \.element.id) { i, msg in
                             messageRow(msg: msg, index: i)
+                        }
+                        if let joined = joinedBuddyName, !joined.isEmpty {
+                            SystemLine(text: "\(joined.components(separatedBy: " ").first ?? joined) se unió a la conversación")
                         }
                         // Card de cierre de ciclo
                         if shouldShowCloseCard {
@@ -2574,6 +2916,7 @@ extension BuddyChatView: Equatable {
         lhs.match.id == rhs.match.id &&
         lhs.journey?.id == rhs.journey?.id &&
         lhs.initialCategory == rhs.initialCategory
+            && lhs.joinedBuddyName == rhs.joinedBuddyName
     }
 }
 
