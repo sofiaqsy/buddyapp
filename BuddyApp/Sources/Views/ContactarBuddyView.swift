@@ -872,6 +872,15 @@ struct CategoryPickerView: View {
                                     withAnimation(.snappy(duration: 0.35)) {
                                         proxy.scrollTo(photo.id, anchor: .center)
                                     }
+                                    // scrollTo mueve el scroll pero NO actualiza
+                                    // el binding de scrollPosition: los logs
+                                    // mostraron carouselCenterId clavado en la
+                                    // card 0 después de tocar la 1 y la 2. Con
+                                    // el estado desfasado, el zIndex seguía
+                                    // adelantando la 0 — que tras el scroll
+                                    // quedaba a la izquierda. Acá el destino se
+                                    // conoce con certeza, así que se escribe.
+                                    carouselCenterId = photo.id
                                 }
                         }
                     }
