@@ -31,7 +31,36 @@ final class RouteStore: ObservableObject {
     private var fetchingTask: Task<MapLoadState, Never>? = nil
     private var fetchingKey: String? = nil
 
-    init() { load() }
+    private var photoObserver: NSObjectProtocol?
+
+    init() {
+        load()
+        // Las portadas de los spots del mapa las arma el servidor con la última
+        // foto de la comunidad, así que borrar o publicar una las cambia. Sin
+        // esto el caché sobrevive —solo se invalida al cambiar de destino— y el
+        // mapa seguía pidiendo la URL de una foto que ya no existe.
+        photoObserver = NotificationCenter.default.addObserver(
+            forName: .placePhotosChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.invalidateCache()
+        }
+    }
+
+    deinit {
+        if let photoObserver { NotificationCenter.default.removeObserver(photoObserver) }
+    }
+
+    /// Fuerza que el próximo `ensureLoaded` vuelva a pedir la guía.
+    ///
+    /// No limpia `route`: la ruta que ya está en pantalla sigue siendo válida
+    /// —los spots no cambiaron, solo sus fotos— y borrarla dejaría el mapa en
+    /// blanco hasta que llegue el fetch.
+    @MainActor
+    func invalidateCache() {
+        guard loadedKey != nil else { return }
+        print("🗺️ [RouteStore] fotos cambiaron — invalidando caché de \(loadedKey ?? "nil")")
+        loadedKey = nil
+    }
 
     func buildRouteIfNeeded(near origin: CLLocationCoordinate2D) {
         guard !routeBuilt else { return }
