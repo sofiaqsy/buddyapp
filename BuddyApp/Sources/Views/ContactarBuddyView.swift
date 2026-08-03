@@ -875,10 +875,20 @@ struct CategoryPickerView: View {
                                 }
                         }
                     }
+                    // scrollTargetLayout debe quedar SIN envolver. Antes tenía
+                    // dos .padding() aplicados después, que lo metían dentro de
+                    // otros contenedores: el ScrollView dejaba de ver este
+                    // layout como su contenido directo de targets. Leer seguía
+                    // andando (reporta los ids del ForEach) pero resolver "a
+                    // qué offset corresponde este id" no, y por eso NINGUNA
+                    // API programática scrolleaba — ni scrollTo ni escribir
+                    // scrollPosition — mientras el arrastre con el dedo sí.
+                    // El inset lateral ahora va por contentMargins, que no
+                    // envuelve nada.
                     .scrollTargetLayout()
-                    .padding(.horizontal, (geo.size.width - exploreCardWidth) / 2)
-                    .padding(.vertical, exploreVerticalSlack)
                 }
+                .contentMargins(.horizontal, (geo.size.width - exploreCardWidth) / 2, for: .scrollContent)
+                .contentMargins(.vertical, exploreVerticalSlack, for: .scrollContent)
                 .coordinateSpace(name: "explore")
                 // limitBehavior: .never deja que la velocidad del swipe
                 // decida (permite avanzar más de una card en un flick fuerte
