@@ -1650,44 +1650,19 @@ private struct ExploreCarouselCard: View {
             .frame(maxWidth: .infinity)
             .frame(height: exploreCardPhotoHeight)
             .clipped()
-            // La transición ocupa el tercio inferior de la foto y llega a blanco
-            // pleno ANTES del borde: así la ficha no empieza en una línea sino
-            // en un color que ya venía formándose. La rampa es cóncava —tramos
-            // largos abajo del 30%, cortos arriba del 70%— porque el ojo detecta
-            // un blanco que aparece de golpe, no uno que crece despacio.
+            // Una línea y no un degradado: la foto termina donde termina, y la
+            // ficha empieza donde empieza. Es la misma línea del borde de la
+            // card, así el corte se lee como parte del recuadro y no como un
+            // elemento nuevo.
             .overlay(alignment: .bottom) {
-                LinearGradient(
-                    stops: [
-                        // El tinte manda mientras la foto todavía se ve, y cede
-                        // a papel antes del borde: así la transición sale del
-                        // color real de la imagen —se siente continua— pero
-                        // TERMINA siempre en canvas. Si el color llegara hasta
-                        // el final, cada card cerraría en un tono distinto y el
-                        // carrusel se volvería un mosaico contra la página.
-                        // El tinte se queda con TODA la rampa y cede a papel
-                        // solo al final. Antes soltaba en 24% de opacidad, y a
-                        // esa densidad la diferencia contra canvas es de ~12/255
-                        // en el mejor canal: matemáticamente invisible sobre una
-                        // foto. Lo que mantiene el color discreto es su propia
-                        // saturación (tope 0.15), no velarlo a medias.
-                        .init(color: fadeTint.opacity(0),            location: 0),
-                        .init(color: fadeTint.opacity(0.10),         location: 0.34),
-                        .init(color: fadeTint.opacity(0.28),         location: 0.54),
-                        .init(color: fadeTint.opacity(0.55),         location: 0.70),
-                        .init(color: fadeTint.opacity(0.85),         location: 0.83),
-                        .init(color: fadeTint.opacity(0.97),         location: 0.92),
-                        .init(color: fadeTint,                       location: 0.97),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 96)
-                .allowsHitTesting(false)
+                Rectangle()
+                    .fill(Color.border)
+                    .frame(height: 0.5)
             }
 
-            // Una sola composición, sin reglas ni divisores: la jerarquía la
-            // hacen el color y el aire —etiqueta tenue, nombre en ink, autor
-            // apagado— que es como separan Apple Photos o Arc.
+            // Dentro de la ficha la jerarquía la siguen haciendo el color y el
+            // aire —etiqueta tenue, nombre en ink, autor apagado—, sin más
+            // reglas que la que la separa de la foto.
             // Los tres datos caben exactos en la banda de 70: 7 de aire arriba,
             // 8 (categoría) + 3 + 20 (nombre) + 3 + 20 (autor) = 54, y 7 abajo.
             // Antes sumaban 78 y además el bloque salía 15pt hacia la foto, así
