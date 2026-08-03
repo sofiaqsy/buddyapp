@@ -870,6 +870,16 @@ struct CategoryPickerView: View {
                 // defaultScrollAnchor(.center) no cubre esto: solo fija dónde
                 // arranca el scroll, no cómo se resuelve este binding.
                 .scrollPosition(id: $carouselCenterId, anchor: .center)
+                // Es quien REALMENTE deja el scroll centrado al arrancar.
+                // Escribir carouselCenterId no alcanza: cuando ese write ocurre
+                // en el mismo update en que el ScrollView recién recibe sus
+                // items (las fotos llegan por red, no existen al montar la
+                // vista), no reposiciona nada. Los logs lo mostraron: el estado
+                // decía centerIndex=1 de forma estable mientras el scroll
+                // seguía en el borde leading con la card 0 en el medio, así que
+                // el zIndex adelantaba la 1 — la de la derecha. No compite con
+                // scrollPosition: ambos apuntan a la card del medio.
+                .defaultScrollAnchor(.center)
             }
             // Coincide exactamente con el alto del contenido (card + el slack
             // de arriba y abajo), para que no sobre ni falte espacio.
