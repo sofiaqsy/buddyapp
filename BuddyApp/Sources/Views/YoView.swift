@@ -15,6 +15,11 @@ struct YoView: View {
     @State private var journeys: [APIJourney] = []
     /// Lugares que recomienda — sección aparte de los viajes propios.
     @State private var shares: [APIPlaceCard] = []
+    @State private var showCompartirLugar = false
+    /// Journey creado por la sheet, en espera del onDismiss para recargar. El
+    /// perfil no puede refrescar antes: la sheet sigue arriba y el usuario
+    /// vería la lista moverse debajo.
+    @State private var pendingShareJourney: APIJourney? = nil
     @State private var tripsNextCursor: String? = nil
     @State private var tripsHasMore: Bool = false
     @State private var isLoadingMoreTrips: Bool = false
@@ -139,12 +144,11 @@ struct YoView: View {
                             stickerSection
                                 .padding(.top, Spacing.xl)
 
-                            // Solo si aportó alguno: sin lugares compartidos la
-                            // sección sobra, no hay nada que invitar todavía.
-                            if !shares.isEmpty {
-                                sharesSection
-                                    .padding(.top, Spacing.xl)
-                            }
+                            // Siempre visible: antes se escondía sin aportes,
+                            // pero ahora es el único lugar desde donde se añade
+                            // uno — esconderla dejaba al usuario sin entrada.
+                            sharesSection
+                                .padding(.top, Spacing.xl)
 
                             tripsSection
                                 .padding(.top, Spacing.xl)
@@ -238,6 +242,19 @@ struct YoView: View {
             }
             .navigationDestination(for: APIPlaceCard.self) { place in
                 PlaceGuideMapSheet(place: place)
+            }
+            .sheet(isPresented: $showCompartirLugar, onDismiss: {
+                // El journey nace con trip_id=null y sin publicar; acá solo se
+                // recarga para que el lugar aparezca en la sección. Publicarlo
+                // sigue siendo cosa del editor, igual que desde Tu trip.
+                guard pendingShareJourney != nil else { return }
+                pendingShareJourney = nil
+                Task { await loadProfile(forceRefresh: true) }
+            }) {
+                CompartirLugarSheet { journey in
+                    print("🌍 [YoView] compartido creado journey=\(journey.id)")
+                    pendingShareJourney = journey
+                }
             }
         }
         .task { await loadProfile() }
@@ -569,6 +586,11 @@ struct YoView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.md) {
+                    // Siempre primero: es la acción, no un elemento más de la
+                    // colección. Al final habría que arrastrar toda la lista
+                    // para encontrarla, y crece con cada lugar que se suma.
+                    addPlaceCard
+
                     ForEach(shares, id: \.id) { place in
                         // En el perfil el pie es cuántas fotos aportó a ese
                         // lugar; los buddies del destino no vienen al caso aquí.
@@ -580,6 +602,34 @@ struct YoView: View {
                 .padding(.horizontal, Spacing.edge)
             }
         }
+    }
+
+    /// Card de alta, con las medidas de NearbyPlaceCard para que la fila no se
+    /// desnivele. Blanca y con borde punteado: se lee como un hueco por llenar
+    /// y no como un lugar más ya aportado.
+    private var addPlaceCard: some View {
+        Button {
+            Haptic.medium()
+            showCompartirLugar = true
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Color.brand)
+                Text("Añadir lugar")
+                    .font(BT.caption1)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            .frame(width: 132, height: 158)
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .strokeBorder(Color.border, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: – Trips grid
