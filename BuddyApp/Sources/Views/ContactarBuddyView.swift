@@ -64,6 +64,11 @@ struct ContactarBuddyView: View {
         journey?.destination?.name ?? destinationName
     }
 
+    /// Abrir ya en la conversación (CTA del carrusel) en vez del selector
+    /// clásico. Solo aplica cuando no hay match ni solicitud en curso: esos dos
+    /// casos mandan siempre, porque retomar lo que existe le gana a empezar.
+    var startsConversation: Bool = false
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var router: AppRouter
@@ -122,7 +127,7 @@ struct ContactarBuddyView: View {
                 Color.canvas.ignoresSafeArea()
                 switch phase {
                 case .loading:        loadingView
-                case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, destinationName: resolvedDestinationName, onRequest: handleRequest, onStartConversation: { withAnimation(.easeOut(duration: 0.25)) { phase = .composing } })
+                case .selectCategory: CategoryPickerView(buddyCount: buddyCount, preselectedCategory: preselectedCategory, destinationName: resolvedDestinationName, onStartConversation: { withAnimation(.easeOut(duration: 0.25)) { phase = .composing } }, onRequest: handleRequest)
                 // Misma vista para las dos: la conversación no cambia de
                 // pantalla cuando se elige el tema, solo acumula un evento más.
                 case .composing, .searching:
@@ -292,8 +297,8 @@ struct ContactarBuddyView: View {
                 phase = .selectCategory
                 await handleRequest(category: seed.category, description: seed.description)
             } else {
-                print("📋 [checkStatus] sin match ni solicitud → mostrando selector de categoría")
-                phase = .selectCategory
+                print("📋 [checkStatus] sin match ni solicitud → \(startsConversation ? "conversación" : "selector de categoría")")
+                phase = startsConversation ? .composing : .selectCategory
             }
         } catch { phase = .error(error.localizedDescription) }
     }
@@ -577,11 +582,13 @@ struct CategoryPickerView: View {
     /// Pasar true desde noTripComposer cuando no hay buddies en la zona.
     var pioneerRequiresCategory: Bool = false
     var isLoading: Bool = false
-    let onRequest: (String, String?) async -> Void
     /// El CTA del carrusel ya no dispara una búsqueda: abre la conversación.
     /// Ese cambio de verbo es todo el rediseño — la ayuda deja de ser una
     /// pantalla que se completa y pasa a ser un hilo que se inicia.
+    /// Va ANTES de onRequest para que este último siga siendo el parámetro
+    /// final y los call sites conserven la trailing closure.
     var onStartConversation: (() -> Void)? = nil
+    let onRequest: (String, String?) async -> Void
 
     @State private var selected: BuddyCategory? = nil
     /// scrollPosition(id:) actualiza esto EN VIVO mientras el dedo arrastra

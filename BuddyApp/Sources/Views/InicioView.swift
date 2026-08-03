@@ -203,7 +203,8 @@ struct InicioView: View {
                 journey: item.journey,
                 destinationId: item.destinationId,
                 destinationName: destName,
-                initialRequest: item.seed
+                initialRequest: item.seed,
+                startsConversation: item.startsConversation
             )
         }
         .sheet(isPresented: $showPendingContactSheet) {
@@ -452,6 +453,29 @@ struct InicioView: View {
         } catch {
             print("❌ [pioneerHelpFlow dest] error: \(error)")
             await MainActor.run { navPath.append("register") }
+        }
+    }
+
+    /// El CTA "Consultar en {ciudad}" del carrusel. No dispara una búsqueda:
+    /// abre la conversación. Reutiliza la misma resolución de destino que el
+    /// resto del Home (trip elegido → GPS resuelto) para no duplicar reglas.
+    private func startConversationFromHome() {
+        requireIdentity {
+            guard !isFindingBuddy else { return }
+            if let trip = effectiveTripJourney,
+               let destId = trip.destination?.id ?? trip.destinationId {
+                homeHelpSheet = HomeHelpItem(destinationId: destId, seed: nil,
+                                             journey: trip, startsConversation: true)
+                return
+            }
+            guard let dest = resolvedLocation else {
+                print("🔵 [startConversationFromHome] sin destino resuelto → registro")
+                navPath.append("register")
+                return
+            }
+            print("🔵 [startConversationFromHome] destId=\(dest.destinationId)")
+            homeHelpSheet = HomeHelpItem(destinationId: dest.destinationId, seed: nil,
+                                         startsConversation: true)
         }
     }
 
@@ -744,7 +768,8 @@ struct InicioView: View {
                         ["accepted", "active", "pending"].contains(m.status) ? m.buddy?.avatarUrl : nil
                     } : nil,
                     communityContext: homeCommunityContext,
-                    isLoading: isFindingBuddy
+                    isLoading: isFindingBuddy,
+                    onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
                 .padding(.horizontal, -Spacing.edge)
                 .opacity(isFindingBuddy ? 0.5 : 1)
@@ -768,7 +793,8 @@ struct InicioView: View {
                     communityContext: homeCommunityContext,
                     placeCards: exploreCards,
                     pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
-                    isLoading: isFindingBuddy
+                    isLoading: isFindingBuddy,
+                    onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
                 .padding(.horizontal, -Spacing.edge)
                 .opacity(isFindingBuddy ? 0.5 : 1)
@@ -2106,6 +2132,9 @@ struct HomeHelpItem: Identifiable {
     let destinationId: String
     let seed: (category: String, description: String?)?
     var journey: APIJourney? = nil
+    /// El CTA del carrusel abre la conversación directamente (sin categoría
+    /// todavía); el resto de entradas siguen cayendo en el selector clásico.
+    var startsConversation: Bool = false
 }
 
 // Tarjeta SECUNDARIA: planear un viaje es opcional, no compite con pedir ayuda.
