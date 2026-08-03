@@ -675,12 +675,14 @@ struct InicioView: View {
                         // almost always resolves to), so when data arrives there's no
                         // layout jump: placeholder bars just turn into real text/icons
                         // in place.
-                        VStack(alignment: .leading, spacing: Spacing.xs) {
-                            SkeletonBox(cornerRadius: 4).frame(width: 130, height: 14)
-                            CategoryPickerView(isSkeleton: true, hidesCategoryGrid: true) { _, _ in }
-                                .padding(.horizontal, -Spacing.edge)
-                        }
-                        .skeletonPulse()
+                        // Sin la barra suelta que había arriba: imitaba una fila
+                        // de encabezado que en el estado resuelto no existe —el
+                        // título vive DENTRO del picker— así que al llegar los
+                        // datos desaparecía y todo subía 18pt. El picker ya trae
+                        // su propio esqueleto con la silueta del carrusel.
+                        CategoryPickerView(isSkeleton: true, hidesCategoryGrid: true) { _, _ in }
+                            .padding(.horizontal, -Spacing.edge)
+                            .skeletonPulse()
                     } else {
                         homeComposer
                     }

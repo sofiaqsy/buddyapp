@@ -805,7 +805,14 @@ struct CategoryPickerView: View {
             .padding(.top, Spacing.md)
             .padding(.bottom, Spacing.lg / 2)
 
-            if !placeCards.isEmpty {
+            if isSkeleton && hidesCategoryGrid {
+                // El esqueleto imita el carrusel y no el CTA suelto: mientras
+                // cargaba, la Home prometía un botón y entregaba fotos, así que
+                // el layout saltaba entero al llegar los datos. Con las mismas
+                // medidas y la misma card central agrandada, lo que aparece
+                // después ocupa exactamente el lugar que ya estaba reservado.
+                exploreSkeleton
+            } else if !placeCards.isEmpty {
                 exploreCarousel
             } else if hidesCategoryGrid {
                 consultCTA
@@ -994,6 +1001,61 @@ struct CategoryPickerView: View {
                     .foregroundStyle(.white)
             }
         }
+    }
+
+    /// Tres cards vacías con la geometría real del carrusel: mismo ancho, alto,
+    /// separación y el mismo salto de escala en la del medio. No es una barra
+    /// gris genérica — la silueta ya dice "acá van a aparecer fotos".
+    private var exploreSkeleton: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: exploreCardSpacing) {
+                ForEach(0..<3, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                        .fill(Color.groupedBg)
+                        .frame(width: exploreCardWidth, height: exploreCardHeight)
+                        .overlay(alignment: .bottom) {
+                            // La banda de la ficha, con sus tres líneas: es lo
+                            // que distingue esta silueta de un rectángulo.
+                            VStack(spacing: 5) {
+                                SkeletonBox(cornerRadius: 2).frame(width: 34, height: 5)
+                                SkeletonBox(cornerRadius: 3).frame(width: 78, height: 9)
+                                SkeletonBox(cornerRadius: 3).frame(width: 96, height: 7)
+                            }
+                            .padding(.bottom, 14)
+                        }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                                .strokeBorder(Color.border, lineWidth: 0.5)
+                        )
+                        // La del medio agrandada como la centrada real, para que
+                        // el peek lateral sea el mismo antes y después.
+                        .scaleEffect(index == 1 ? 1 + exploreScaleDelta : 1)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
+
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(index == 1 ? Color.brand.opacity(0.55) : Color.border.opacity(0.5))
+                        .frame(width: 5, height: 5)
+                }
+            }
+            .padding(.top, 8)
+
+            HStack(spacing: 6) {
+                Circle().fill(Color.border).frame(width: 6, height: 6)
+                SkeletonBox(cornerRadius: 3).frame(width: 180, height: 9)
+            }
+            .padding(.top, 12)
+
+            consultCTA
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, 14)
+                .disabled(true)
+        }
+        .redacted(reason: .placeholder)
     }
 
     // MARK: – Explora {ciudad} (carrusel de fotos reales)
