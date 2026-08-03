@@ -863,24 +863,28 @@ struct CategoryPickerView: View {
                 // defaultScrollAnchor(.center) no cubre esto: solo fija dónde
                 // arranca el scroll, no cómo se resuelve este binding.
                 .scrollPosition(id: $carouselCenterId, anchor: .center)
-                // Arranca centrado en el contenido — con padding simétrico eso
-                // deja la foto del medio exactamente en el centro del viewport,
-                // sin depender de asignar scrollPosition a mano (que no tenía
-                // efecto en el primer frame, cuando el ScrollView aún no tiene
-                // geometría, y dejaba la #0 centrada sin vecina a la izquierda).
-                .defaultScrollAnchor(.center)
             }
             // Coincide exactamente con el alto del contenido (card + el slack
             // de arriba y abajo), para que no sobre ni falte espacio.
             .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
-            .task(id: explorePhotos.map(\.id)) {
-                // El CTA/dots siguen a la foto centrada; en el primer render
-                // defaultScrollAnchor ya la dejó en el medio, acá solo se
-                // sincroniza el id con esa posición inicial.
-                guard carouselCenterId == nil, explorePhotos.count > 1 else { return }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard !Task.isCancelled, carouselCenterId == nil else { return }
-                carouselCenterId = explorePhotos[1].id
+            // initial: true corre en la misma pasada de update que el primer
+            // layout, así que el ScrollView ya arranca posicionado acá y el
+            // zIndex/dots coinciden con la geometría desde el frame uno.
+            // Antes esto era un .task con sleep(100ms) que ADIVINABA que la
+            // centrada era la [1]: llegaba después del primer layout, no
+            // siempre arrastraba el scroll, y dejaba una ventana en la que el
+            // estado decía "centro = 1" mientras el scroll seguía al inicio —
+            // por eso la segunda foto se dibujaba encima al cargar.
+            // Fijar el id explícitamente también hace innecesario
+            // defaultScrollAnchor(.center): dos mecanismos definiendo la
+            // posición inicial solo pueden discrepar.
+            .onChange(of: explorePhotos.map(\.id), initial: true) { _, ids in
+                guard !ids.isEmpty else { carouselCenterId = nil; return }
+                // Solo (re)centrar si el id actual ya no existe en la tanda
+                // nueva — si no, un refresh del feed movería el carrusel bajo
+                // el dedo del usuario.
+                guard carouselCenterId == nil || !ids.contains(carouselCenterId!) else { return }
+                carouselCenterId = ids[ids.count / 2]
             }
 
             if explorePhotos.count > 1 {
