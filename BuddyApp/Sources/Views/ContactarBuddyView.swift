@@ -1043,15 +1043,6 @@ struct CategoryPickerView: View {
             .frame(maxWidth: .infinity)
             .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
 
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle()
-                        .fill(index == 1 ? Color.brand.opacity(0.55) : Color.border.opacity(0.5))
-                        .frame(width: 5, height: 5)
-                }
-            }
-            .padding(.top, 8)
-
             HStack(spacing: 6) {
                 Circle().fill(Color.border).frame(width: 6, height: 6)
                 SkeletonBox(cornerRadius: 3).frame(width: 180, height: 9)
@@ -1293,22 +1284,10 @@ struct CategoryPickerView: View {
                 carouselCenterId = ids[0]
             }
 
-            // Se quedan porque avisan que hay más fotos, pero atenuados: a
-            // tamaño y contraste plenos leían como paginación de un selector
-            // ("estás en la 2 de 3, confirmá abajo"). Como textura sí, como
-            // control no. El peek lateral hace el resto del trabajo.
-            if explorePhotos.count > 1 {
-                HStack(spacing: 5) {
-                    ForEach(explorePhotos) { photo in
-                        Circle()
-                            .fill(photo.id == (carouselCenterId ?? explorePhotos.first?.id)
-                                  ? Color.brand.opacity(0.55)
-                                  : Color.border.opacity(0.5))
-                            .frame(width: 5, height: 5)
-                    }
-                }
-                .padding(.top, 8)
-            }
+            // Sin dots: contaban un total fijo, y el carrusel crece a medida que
+            // la comunidad documenta lugares. Un contador que dice "3" mientras
+            // el usuario sigue arrastrando y aparecen más se contradice solo.
+            // El peek lateral ya avisa que hay más, y sin depender de cuántos.
 
             // El puente: encadena lo que se ve (lugares) con quién lo conoce y
             // con la acción. Antes vivía arriba del carrusel, donde era un dato
