@@ -1628,14 +1628,14 @@ private struct ExploreCarouselCard: View {
                 LinearGradient(
                     stops: [
                         .init(color: Color.surface.opacity(0),    location: 0),
-                        .init(color: Color.surface.opacity(0.25), location: 0.55),
-                        .init(color: Color.surface.opacity(0.75), location: 0.82),
+                        .init(color: Color.surface.opacity(0.06), location: 0.62),
+                        .init(color: Color.surface.opacity(0.35), location: 0.86),
                         .init(color: Color.surface,               location: 1),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 44)
+                .frame(height: 40)
             }
 
             // Una sola composición, no tres bloques: sin reglas ni divisores.
@@ -1643,16 +1643,18 @@ private struct ExploreCarouselCard: View {
             // en ink, autor apagado— que es como separan Apple Photos o Arc.
             // Las líneas que había antes dibujaban cajas y peleaban con eso.
             VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
                 if let category = place.category, !category.isEmpty {
                     // Caption regular y no eyebrow semibold: es contexto, no
                     // título. El tracking abierto la mantiene legible en tenue.
                     Text(category.uppercased())
-                        .font(BT.caption2)
-                        .tracking(1.6)
+                        .font(.system(size: 9))
+                        .tracking(1.4)
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                        .padding(.bottom, 7)
+                        .padding(.bottom, 6)
                 }
 
                 Text(place.name)
@@ -1661,8 +1663,6 @@ private struct ExploreCarouselCard: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
-
-                Spacer(minLength: 10)
 
                 HStack(spacing: 6) {
                     if let author = place.coverAuthorName {
@@ -1700,10 +1700,12 @@ private struct ExploreCarouselCard: View {
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .padding(.top, 7)
+
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 12)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.surface)
         }
