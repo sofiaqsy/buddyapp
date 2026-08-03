@@ -1636,7 +1636,7 @@ private struct ExploreCarouselCard: View {
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 36)
+                .frame(height: 52)
                 .allowsHitTesting(false)
             }
 
@@ -1705,6 +1705,7 @@ private struct ExploreCarouselCard: View {
 
                 Spacer(minLength: 0)
             }
+            .offset(y: -15)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
