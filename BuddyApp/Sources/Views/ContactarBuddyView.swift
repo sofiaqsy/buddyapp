@@ -1016,7 +1016,7 @@ struct CategoryPickerView: View {
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
     private let exploreCardWidth: CGFloat = 178
-    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 80
+    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 95
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1594,7 +1594,7 @@ private struct PendingConversationView: View {
 /// Alto de la foto, compartido por la card y por el carrusel que la mide: la
 /// ficha de abajo suma su banda a este valor, así el aire del texto nunca sale
 /// del espacio de la imagen.
-private let exploreCardPhotoHeight: CGFloat = 245
+private let exploreCardPhotoHeight: CGFloat = 230
 
 private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
@@ -1644,8 +1644,6 @@ private struct ExploreCarouselCard: View {
             // hacen el color y el aire —etiqueta tenue, nombre en ink, autor
             // apagado— que es como separan Apple Photos o Arc.
             VStack(spacing: 0) {
-                Spacer(minLength: 0)
-
                 if let category = place.category, !category.isEmpty {
                     Text(category.uppercased())
                         .font(.system(size: 8, weight: .semibold))
