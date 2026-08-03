@@ -1013,11 +1013,17 @@ struct PlaceGuideDetailSheet: View {
             // trip" — la foto se suma a algo que YA está publicado, así que el
             // único gesto disponible tiene que dejarla visible.
             TripEditorSheet(journey: journey, initialPage: -1, publishesOnSave: true) {}
-                .onDisappear {
-                    Task {
-                        gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
-                    }
-                }
+        }
+        // Recargar con .journeyPublished y no con onDisappear del editor: el
+        // cover se cierra apenas termina la edición, mientras la subida de las
+        // páginas sigue en vuelo. La recarga salía antes que el POST y traía la
+        // galería vieja —la foto estaba guardada pero no se veía—. La
+        // notificación se emite recién cuando publishJourney terminó de subir y
+        // marcar el journey.
+        .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
+            Task {
+                gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
+            }
         }
     }
 
