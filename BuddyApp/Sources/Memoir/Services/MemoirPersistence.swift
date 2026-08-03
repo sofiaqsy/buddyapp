@@ -64,6 +64,24 @@ final class MemoirPersistence {
         try? data.write(to: bookFile(for: journeyId), options: .atomic)
     }
 
+    /// Quita la página en esa posición del libro local.
+    ///
+    /// El índice es el mismo page_index que usa el servidor: las páginas se
+    /// suben con `page_N` según su posición en este arreglo. Sin esto, borrar
+    /// una foto desde la ficha del lugar la quitaría del server pero la próxima
+    /// publicación desde este teléfono la volvería a subir — el libro local es
+    /// la fuente de verdad al publicar.
+    func removePage(at index: Int, journeyId: String) {
+        var pages = load(journeyId: journeyId)
+        guard pages.indices.contains(index) else {
+            print("📓 [removePage] journeyId=\(journeyId) index=\(index) fuera de rango (pages=\(pages.count))")
+            return
+        }
+        pages.remove(at: index)
+        save(pages, journeyId: journeyId)
+        print("📓 [removePage] journeyId=\(journeyId) index=\(index) → quedan \(pages.count) página(s)")
+    }
+
     func load(journeyId: String) -> [CollagePage] {
         let url = bookFile(for: journeyId)
         guard let data = try? Data(contentsOf: url) else {

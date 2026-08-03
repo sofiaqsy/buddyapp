@@ -418,6 +418,13 @@ final class APIClient {
         return gallery
     }
 
+    /// Borra UNA foto del memoir. El server valida que seas el dueño del
+    /// journey; acá no se chequea nada porque el cliente no es la autoridad.
+    func deleteJourneyPage(journeyId: String, pageIndex: Int) async throws {
+        try await requestVoid(path: "/journeys/\(journeyId)/pages/\(pageIndex)", method: "DELETE")
+        print("🗑️ [APIClient] deleteJourneyPage journey=\(journeyId.prefix(8)) page=\(pageIndex)")
+    }
+
     /// Categorías del catálogo, para clasificar un lugar al proponerlo.
     func fetchSpotCategories() async throws -> [APISpotCategory] {
         let res: APISpotCategoriesResponse = try await request(path: "/places/categories")

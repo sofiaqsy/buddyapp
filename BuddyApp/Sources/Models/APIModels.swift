@@ -465,8 +465,20 @@ struct APIPlaceVisit: Decodable, Identifiable {
     let placeName: String?
     let createdAt: Date?
     let photos: [String]
+    /// Las mismas fotos, con su página. Opcional porque el server viejo no la
+    /// manda: sin ella la galería se ve igual, solo que no se puede borrar.
+    let photoPages: [APIPlacePhoto]?
 
     var id: String { journeyId }
+}
+
+/// Una foto del memoir con su identidad. page_index es lo único que identifica
+/// una foto dentro de un journey — la URL en Storage se deriva de él.
+struct APIPlacePhoto: Decodable, Identifiable, Hashable {
+    let url: String
+    let pageIndex: Int
+
+    var id: String { "\(url)#\(pageIndex)" }
 }
 
 struct APIVisitAuthor: Decodable {

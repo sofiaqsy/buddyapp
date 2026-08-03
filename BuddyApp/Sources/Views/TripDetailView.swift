@@ -948,9 +948,42 @@ struct PlaceGuideDetailSheet: View {
     @State private var isLoadingBuddies = true
     @State private var showFullGallery = false
 
-    /// Todas las fotos del lugar, sin importar quién las subió — aplanadas
-    /// desde las visitas de la galería.
-    private var allPhotos: [String] { gallery?.visits.flatMap(\.photos) ?? [] }
+    /// Una foto en la fila, sabiendo de quién es y qué página ocupa. La fila
+    /// necesita las tres cosas juntas: la URL para pintarla, el dueño para
+    /// ordenar y decidir si se puede borrar, y la página para pedir el borrado.
+    struct GalleryPhoto: Identifiable {
+        let url: String
+        let journeyId: String
+        let pageIndex: Int?
+        let isMine: Bool
+        var id: String { "\(journeyId)#\(pageIndex.map(String.init) ?? url)" }
+    }
+
+    /// Fotos del lugar con LAS MÍAS PRIMERO. Un buddy entra a esta ficha a ver
+    /// cómo quedó lo que aportó, y con orden estricto por recencia lo suyo se
+    /// pierde entre lo de todos. El resto conserva el orden que trae el server.
+    private var galleryPhotos: [GalleryPhoto] {
+        let me = Session.travelerId
+        let visits = gallery?.visits ?? []
+        let flatten: (APIPlaceVisit) -> [GalleryPhoto] = { visit in
+            let mine = visit.travelerId != nil && visit.travelerId == me
+            // photoPages cuando el server la manda; si no, las URLs sueltas y
+            // sin página — se ven igual, solo que no se pueden borrar.
+            if let pages = visit.photoPages, !pages.isEmpty {
+                return pages.map { GalleryPhoto(url: $0.url, journeyId: visit.journeyId,
+                                                pageIndex: $0.pageIndex, isMine: mine) }
+            }
+            return visit.photos.map { GalleryPhoto(url: $0, journeyId: visit.journeyId,
+                                                   pageIndex: nil, isMine: mine) }
+        }
+        return visits.filter { $0.travelerId == me }.flatMap(flatten)
+             + visits.filter { $0.travelerId != me }.flatMap(flatten)
+    }
+
+    private var allPhotos: [String] { galleryPhotos.map(\.url) }
+
+    @State private var photoPendingDeletion: GalleryPhoto? = nil
+    @State private var isDeletingPhoto = false
 
     /// Mi propia recomendación de este lugar, si soy buddy aprobado.
     ///
@@ -1020,6 +1053,17 @@ struct PlaceGuideDetailSheet: View {
         // galería vieja —la foto estaba guardada pero no se veía—. La
         // notificación se emite recién cuando publishJourney terminó de subir y
         // marcar el journey.
+        .confirmationDialog("¿Eliminar esta foto?",
+                            isPresented: Binding(get: { photoPendingDeletion != nil },
+                                                 set: { if !$0 { photoPendingDeletion = nil } }),
+                            titleVisibility: .visible) {
+            Button("Eliminar", role: .destructive) {
+                if let photo = photoPendingDeletion { deletePhoto(photo) }
+            }
+            Button("Cancelar", role: .cancel) { photoPendingDeletion = nil }
+        } message: {
+            Text("Se quitará de este lugar para siempre.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
             Task {
                 gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
@@ -1152,6 +1196,26 @@ struct PlaceGuideDetailSheet: View {
         }
     }
 
+    private func deletePhoto(_ photo: GalleryPhoto) {
+        guard let pageIndex = photo.pageIndex, !isDeletingPhoto else { return }
+        photoPendingDeletion = nil
+        isDeletingPhoto = true
+        Task {
+            do {
+                try await APIClient.shared.deleteJourneyPage(journeyId: photo.journeyId, pageIndex: pageIndex)
+                // El libro local también: es la fuente de verdad al publicar, así
+                // que si la página sigue en disco la próxima publicación desde
+                // este teléfono volvería a subir la foto recién borrada.
+                await MainActor.run { MemoirPersistence.shared.removePage(at: pageIndex, journeyId: photo.journeyId) }
+                gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
+                await MainActor.run { Haptic.success() }
+            } catch {
+                print("❌ [deletePhoto] journey=\(photo.journeyId) page=\(pageIndex): \(error)")
+            }
+            await MainActor.run { isDeletingPhoto = false }
+        }
+    }
+
     @ViewBuilder
     private var fotosTab: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1183,9 +1247,9 @@ struct PlaceGuideDetailSheet: View {
                     HStack(spacing: 8) {
                         addPhotoTile
 
-                        ForEach(Array(allPhotos.prefix(12).enumerated()), id: \.offset) { _, url in
+                        ForEach(galleryPhotos.prefix(12)) { photo in
                             Button { showFullGallery = true } label: {
-                                CachedImage(urlString: url) { img in
+                                CachedImage(urlString: photo.url) { img in
                                     img.resizable().scaledToFill()
                                 } placeholder: {
                                     Rectangle().fill(Color.sandLight)
@@ -1194,6 +1258,19 @@ struct PlaceGuideDetailSheet: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
                             .buttonStyle(.plain)
+                            // Solo sobre las propias: el menú de una foto ajena
+                            // no tendría ninguna acción que ofrecer. El
+                            // long-press y no un botón visible porque borrar es
+                            // excepcional y no debe competir con mirar.
+                            .contextMenu {
+                                if photo.isMine, photo.pageIndex != nil {
+                                    Button(role: .destructive) {
+                                        photoPendingDeletion = photo
+                                    } label: {
+                                        Label("Eliminar foto", systemImage: "trash")
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
