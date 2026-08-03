@@ -42,22 +42,17 @@ final class ImageCache {
         }
     }
 
-    /// Vacía memoria y disco.
+    /// Saca UNA imagen de memoria y disco.
     ///
-    /// Hace falta porque las fotos del memoir viven en rutas recicladas
-    /// —page_0.jpg, page_1.jpg…— reescritas con upsert: al borrar una foto, la
-    /// que queda en ese índice cambia de contenido sin cambiar de URL, y el
-    /// cache seguiría sirviendo la anterior. Es a todo o nada porque NSCache no
-    /// se puede recorrer para borrar por prefijo; se llama solo cuando las
-    /// fotos de un lugar cambiaron, que es raro, y el costo es volver a bajar
-    /// unas miniaturas.
-    func clear() {
-        memory.removeAllObjects()
-        Task(priority: .utility) {
-            let files = (try? FileManager.default.contentsOfDirectory(at: diskURL, includingPropertiesForKeys: nil)) ?? []
-            for file in files { try? FileManager.default.removeItem(at: file) }
-            print("🧹 [ImageCache] limpiado — \(files.count) archivo(s)")
-        }
+    /// Puntual y no un vaciado completo: cuando se borra una foto se conoce su
+    /// URL exacta, así que no hay razón para tirar las del resto del Home y del
+    /// perfil y volver a bajarlas. NSCache no se puede recorrer, pero sí se le
+    /// puede pedir una clave concreta.
+    func remove(_ url: URL) {
+        let key = cacheKey(url)
+        memory.removeObject(forKey: key as NSString)
+        let file = diskURL.appendingPathComponent(key)
+        Task(priority: .utility) { try? FileManager.default.removeItem(at: file) }
     }
 
     func load(_ url: URL) async -> UIImage? {
