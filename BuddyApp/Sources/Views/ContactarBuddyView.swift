@@ -833,6 +833,14 @@ struct CategoryPickerView: View {
                 // primer layout ya sea el definitivo.
                 if geo.size.width > 0 {
                     let _ = print("🎯 [geo] width=\(geo.size.width) padding=\((geo.size.width - exploreCardWidth) / 2)")
+                    // ScrollViewReader porque escribir el binding de
+                    // scrollPosition NO desplaza el scroll: al tocar una card
+                    // lateral el estado cambiaba (el zIndex la traía adelante)
+                    // pero la card no crecía, porque el scaleEffect depende de
+                    // la posición real y esa no se movía. scrollTo(_:anchor:)
+                    // es la API que efectivamente scrollea; scrollPosition
+                    // queda solo como LECTURA de dónde está el scroll.
+                    ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: exploreCardSpacing) {
                         ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
@@ -861,7 +869,7 @@ struct CategoryPickerView: View {
                                 .onTapGesture {
                                     guard photo.id != carouselCenterId else { return }
                                     withAnimation(.snappy(duration: 0.35)) {
-                                        carouselCenterId = photo.id
+                                        proxy.scrollTo(photo.id, anchor: .center)
                                     }
                                 }
                                 .id(photo.id)
@@ -889,6 +897,7 @@ struct CategoryPickerView: View {
                 // card 0 centrada gracias al padding simétrico, así que no hay
                 // nada que forzar. Cualquier anchor acá solo podría discrepar
                 // con el centro inicial que fija el onChange de abajo.
+                }
                 }
             }
             // Coincide exactamente con el alto del contenido (card + el slack
