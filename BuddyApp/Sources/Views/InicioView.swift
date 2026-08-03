@@ -1419,11 +1419,13 @@ struct InicioView: View {
         // distancias eran iguales y el header se leía como un cuarto ítem de la
         // lista. Separar la estructura del contenido agrupa las filas entre sí.
         VStack(alignment: .leading, spacing: 16) {
-            // El título va al 75%: la sección acompaña al carrusel, no compite
-            // con él, y un eyebrow a intensidad plena lo contradecía.
+            // Mismo tratamiento que "HISTORIAS DE VIAJEROS": son secciones
+            // hermanas y deben pesar igual. El 75% que tenía antes venía de
+            // cuando el punto verde acompañaba al título — sin el punto, la
+            // línea quedaba atenuada y corta, y se leía como una nota al pie.
             Text("COMUNIDAD VIVA")
                 .font(BT.eyebrow).tracking(1.5)
-                .foregroundStyle(Color.ink.opacity(0.75))
+                .foregroundStyle(Color.ink)
 
             VStack(spacing: 10) {
                 ForEach(communityPulse.filter { $0.type == "helped" }.prefix(3)) { item in
