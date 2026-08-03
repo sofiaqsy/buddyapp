@@ -803,8 +803,11 @@ struct CategoryPickerView: View {
     /// el patrón de escritura por-frame de GeometryReader+PreferenceKey
     /// que causó el rebote original — usarlo acá no reintroduce ese bug.
     private func exploreZIndex(for photo: ExplorePhoto, index: Int) -> Double {
+        // El fallback es 0 para coincidir con dónde descansa el scroll en
+        // offset 0 (ver nota del centro inicial), así los frames previos a que
+        // carouselCenterId se fije ya dibujan el orden correcto.
         let resolved = explorePhotos.firstIndex { $0.id == carouselCenterId }
-        let centerIndex = resolved ?? explorePhotos.count / 2
+        let centerIndex = resolved ?? 0
         // DIAGNÓSTICO (temporal): solo en la card 0 para tener una línea por
         // pasada de layout en vez de una por card. Muestra si el id centrado
         // resolvió a un índice real o cayó al fallback, que es la diferencia
@@ -882,11 +885,10 @@ struct CategoryPickerView: View {
                 // defaultScrollAnchor(.center) no cubre esto: solo fija dónde
                 // arranca el scroll, no cómo se resuelve este binding.
                 .scrollPosition(id: $carouselCenterId, anchor: .center)
-                // Fija dónde arranca el scroll. Solo funciona si en ese primer
-                // layout la geometría ya es la definitiva — de ahí el guard de
-                // ancho de arriba. No compite con scrollPosition: ambos apuntan
-                // a la card del medio.
-                .defaultScrollAnchor(.center)
+                // Sin defaultScrollAnchor a propósito: el offset 0 ya deja la
+                // card 0 centrada gracias al padding simétrico, así que no hay
+                // nada que forzar. Cualquier anchor acá solo podría discrepar
+                // con el centro inicial que fija el onChange de abajo.
                 }
             }
             // Coincide exactamente con el alto del contenido (card + el slack
@@ -916,8 +918,15 @@ struct CategoryPickerView: View {
                     print("🎯 [initialCenter] skip — carouselCenterId=\(carouselCenterId?.suffix(8) ?? "nil") sigue presente en ids(\(ids.count))")
                     return
                 }
-                print("🎯 [initialCenter] fijando idx=\(ids.count / 2) de \(ids.count) → \(ids[ids.count / 2].suffix(8))")
-                carouselCenterId = ids[ids.count / 2]
+                // La PRIMERA, no la del medio. Con padding simétrico
+                // (width - cardWidth)/2, en offset 0 el centro de la card 0
+                // cae justo en el centro del viewport (121 + 80 = 201 = 402/2),
+                // así que ese es el estado natural de reposo del scroll.
+                // Insistir en centrar la del medio obligaba a mover el scroll
+                // con mecanismos que no se aplicaban a tiempo, y mientras tanto
+                // el zIndex adelantaba una card que no era la centrada.
+                print("🎯 [initialCenter] fijando idx=0 de \(ids.count) → \(ids[0].suffix(8))")
+                carouselCenterId = ids[0]
             }
 
             if explorePhotos.count > 1 {
