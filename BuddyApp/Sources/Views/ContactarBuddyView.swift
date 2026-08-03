@@ -1596,6 +1596,13 @@ private struct PendingConversationView: View {
 /// del espacio de la imagen.
 private let exploreCardPhotoHeight: CGFloat = 230
 
+/// El papel de la ficha. Va acá y no inline porque el degradado tiene que
+/// terminar EXACTAMENTE en este color: si se separan, aparece una costura entre
+/// la foto y la banda. canvas y no surface — es el fondo de la app, así la foto
+/// se disuelve en la pantalla en vez de contra un blanco que no existe en
+/// ningún otro lado del Home.
+private let exploreCardPaper: Color = .canvas
+
 private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
@@ -1631,13 +1638,13 @@ private struct ExploreCarouselCard: View {
             .overlay(alignment: .bottom) {
                 LinearGradient(
                     stops: [
-                        .init(color: Color.surface.opacity(0),    location: 0),
-                        .init(color: Color.surface.opacity(0.04), location: 0.30),
-                        .init(color: Color.surface.opacity(0.14), location: 0.50),
-                        .init(color: Color.surface.opacity(0.34), location: 0.66),
-                        .init(color: Color.surface.opacity(0.62), location: 0.79),
-                        .init(color: Color.surface.opacity(0.88), location: 0.90),
-                        .init(color: Color.surface,               location: 0.97),
+                        .init(color: exploreCardPaper.opacity(0),    location: 0),
+                        .init(color: exploreCardPaper.opacity(0.04), location: 0.30),
+                        .init(color: exploreCardPaper.opacity(0.14), location: 0.50),
+                        .init(color: exploreCardPaper.opacity(0.34), location: 0.66),
+                        .init(color: exploreCardPaper.opacity(0.62), location: 0.79),
+                        .init(color: exploreCardPaper.opacity(0.88), location: 0.90),
+                        .init(color: exploreCardPaper,               location: 0.97),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -1715,7 +1722,7 @@ private struct ExploreCarouselCard: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.surface)
+            .background(exploreCardPaper)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
