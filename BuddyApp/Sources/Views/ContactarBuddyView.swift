@@ -102,10 +102,13 @@ struct ContactarBuddyView: View {
 
     /// Eventos de la conversación pendiente. No son estados de una máquina:
     /// son cosas que fueron pasando y quedan acumuladas en el hilo.
+    private var isConversation: Bool {
+        phase == .composing || phase == .searching || phase == .matched
+    }
+
     private var pendingItems: [ChatItem] {
-        guard let key = pendingCategoryKey else {
-            return [.system(id: "pick", text: "Selecciona el tema de tu consulta")]
-        }
+        // Sin tema elegido todavía no hay hilo: lo que se ve es el selector.
+        guard let key = pendingCategoryKey else { return [] }
         var out: [ChatItem] = [.pendingCategory(key)]
         let city = resolvedDestinationName ?? "la zona"
         out.append(.system(
@@ -157,6 +160,11 @@ struct ContactarBuddyView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+            // El chat ocupa la pantalla entera. Sin esto quedaba una barra de
+            // navegación vacía robando ~44pt arriba del header propio del chat
+            // — algo que no pasa al abrirlo desde Conexiones, porque ahí no hay
+            // NavigationStack de por medio.
+            .toolbar(isConversation ? .hidden : .visible, for: .navigationBar)
         }
         .task { await checkStatus() }
         .task { await loadBuddyCount() }
@@ -1281,54 +1289,102 @@ private struct PendingConversationView: View {
     /// vuelvo al Home? Desde el menú la intención es inequívoca.
     var onCancelRequest: (() -> Void)? = nil
 
-    private let categories: [(icon: String, label: String, key: String)] = [
-        ("car.fill",       "Transporte",  "transport"),
-        ("cup.and.saucer", "Comer",       "food"),
-        ("bag.fill",       "Compras",     "shopping"),
-        ("figure.hiking",  "Actividades", "activities"),
-        ("bed.double",     "Alojamiento", "accommodation"),
-        ("lightbulb.fill", "Consejos",    "recommendations"),
-    ]
+    private let categoryKeys = ["transport", "food", "shopping",
+                               "activities", "accommodation", "recommendations"]
 
     var body: some View {
         VStack(spacing: 0) {
             header
 
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 10) {
-                    ForEach(items) { item in
-                        switch item {
-                        case .system(_, let text, let footnote):
-                            SystemLine(text: text, footnote: footnote)
-                        case .pendingCategory(let key):
-                            HStack {
-                                Spacer(minLength: 40)
-                                CategoryCardBubble(key: key, isMe: true)
-                            }
-                            .padding(.horizontal, Spacing.edge)
-                        }
-                    }
-
-                    if chosenCategory != nil {
-                        ProgressView()
-                            .tint(Color.inkMuted)
-                            .padding(.top, 4)
-                    }
-                }
-                .padding(.top, Spacing.lg)
-                .frame(maxWidth: .infinity)
-            }
-
-            // Las categorías ocupan EXACTAMENTE el lugar del campo de texto.
-            // No es un TextField deshabilitado ni botones flotando: es que en
-            // este momento de la conversación lo que se puede "decir" es elegir
-            // un tema. Cuando ya eligió, el área se vacía en vez de mostrar un
-            // input que no tendría a dónde enviar (no hay match todavía).
             if chosenCategory == nil {
-                categoryComposer
+                // El selector va al CENTRO del chat, no anclado abajo. Como
+                // fila de chips en el composer se leía como una barra de
+                // herramientas; al centro y con las mismas 6 cards de siempre
+                // se lee como lo único que hay que hacer ahora.
+                categoryPicker
+            } else {
+                thread
             }
         }
         .background(Color.canvas)
+    }
+
+    private var categoryPicker: some View {
+        VStack(spacing: Spacing.lg) {
+            Spacer(minLength: 0)
+
+            SystemLine(text: "Selecciona el tema de tu consulta")
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                ForEach(categoryKeys, id: \.self) { key in
+                    let info = CategoryCardBubble.meta(key)
+                    Button {
+                        Haptic.medium()
+                        onPickCategory(key)
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color.groupedBg)
+                                    .frame(width: 40, height: 40)
+                                Image(systemName: info.icon)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(Color.accent)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(info.label)
+                                    .font(BT.footnoteBold)
+                                    .foregroundStyle(Color.ink)
+                                    .multilineTextAlignment(.leading)
+                                Text(info.subtitle)
+                                    .font(BT.caption1)
+                                    .foregroundStyle(Color.inkMuted)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.border, lineWidth: 1))
+                    }
+                    .buttonStyle(.pressable)
+                }
+            }
+            .padding(.horizontal, Spacing.edge)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private var thread: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 10) {
+                ForEach(items) { item in
+                    switch item {
+                    case .system(_, let text, let footnote):
+                        SystemLine(text: text, footnote: footnote)
+                    case .pendingCategory(let key):
+                        HStack {
+                            Spacer(minLength: 40)
+                            CategoryCardBubble(key: key, isMe: true)
+                        }
+                        .padding(.horizontal, Spacing.edge)
+                    }
+                }
+
+                if chosenCategory != nil {
+                    ProgressView()
+                        .tint(Color.inkMuted)
+                        .padding(.top, 4)
+                }
+            }
+            .padding(.top, Spacing.lg)
+            .frame(maxWidth: .infinity)
+        }
     }
 
     private var header: some View {
@@ -1389,36 +1445,6 @@ private struct PendingConversationView: View {
         .overlay(alignment: .bottom) { Divider() }
     }
 
-    private var categoryComposer: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(categories, id: \.key) { cat in
-                    Button {
-                        Haptic.medium()
-                        onPickCategory(cat.key)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: cat.icon)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.brand)
-                            Text(cat.label)
-                                .font(BT.footnote)
-                                .foregroundStyle(Color.ink)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color.surface, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
-                    }
-                    .buttonStyle(.pressable)
-                }
-            }
-            .padding(.horizontal, Spacing.edge)
-            .padding(.vertical, 12)
-        }
-        .background(Color.surface.opacity(0.6))
-        .overlay(alignment: .top) { Divider() }
-    }
 }
 
 private struct ExploreCarouselCard: View {
