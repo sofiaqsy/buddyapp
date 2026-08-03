@@ -1019,7 +1019,7 @@ struct CategoryPickerView: View {
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
-    private let exploreCardHeight: CGFloat = 277
+    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 70
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1594,14 +1594,31 @@ private struct PendingConversationView: View {
 
 }
 
-/// Color en el que cierra la card. canvas y no surface — es el fondo de la app,
-/// así la foto termina de disolverse contra la pantalla y no contra un blanco
-/// que no existe en ningún otro lado del Home.
+/// Alto de la foto, compartido por la card y por el carrusel que la mide: la
+/// ficha de abajo suma su banda a este valor, así el aire del texto nunca sale
+/// del espacio de la imagen.
+private let exploreCardPhotoHeight: CGFloat = 207
+
+/// El papel de la ficha. Va acá y no inline porque el degradado tiene que
+/// terminar EXACTAMENTE en este color: si se separan, aparece una costura entre
+/// la foto y la banda. canvas y no surface — es el fondo de la app, así la foto
+/// se disuelve en la pantalla en vez de contra un blanco que no existe en
+/// ningún otro lado del Home.
 private let exploreCardPaper: Color = .canvas
 
 private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
+
+    /// Tinte tomado del pie de la propia foto. Arranca con el valor cacheado
+    /// —si esta foto ya pasó por el carrusel, el color entra en el primer
+    /// frame— y si no, llega con la imagen.
+    @State private var edgeTint: Color? = nil
+
+    /// El tramo medio del degradado. Sin muestra todavía es el papel: la card se
+    /// ve exactamente como antes y el color aparece cuando está listo, nunca al
+    /// revés.
+    private var fadeTint: Color { edgeTint ?? exploreCardPaper }
 
     /// Quien recomienda el lugar, no cuánta gente lo conoce: la recomendación
     /// de una persona concreta pesa más como prueba social que un conteo, y
@@ -1613,77 +1630,60 @@ private struct ExploreCarouselCard: View {
         return full.components(separatedBy: " ").first ?? full
     }
 
-    /// La foto sin recorte propio: las tres capas usan EXACTAMENTE el mismo
-    /// encuadre, así las desenfocadas son la continuación de la nítida y no
-    /// otra parte de la imagen.
-    @ViewBuilder private var photoLayer: some View {
-        CachedImage(urlString: photo.url) { img in
-            img.resizable().scaledToFill()
-        } placeholder: {
-            Rectangle().fill(Color.sandLight)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// Desvanece una capa dentro de una franja vertical. Las tres capas se
-    /// encadenan por máscara en vez de apilarse con opacidad: así en ningún
-    /// punto se ven dos versiones de la foto a la vez, que es lo que produciría
-    /// un fantasma alrededor de los bordes con contraste.
-    private func bandMask(from: CGFloat, to: CGFloat, fadeIn: CGFloat = 0.06) -> some View {
-        LinearGradient(
-            stops: [
-                .init(color: .black.opacity(0), location: max(0, from - fadeIn)),
-                .init(color: .black,            location: from),
-                .init(color: .black,            location: to),
-                .init(color: .black.opacity(0), location: min(1, to + fadeIn)),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
     var body: some View {
-        // El pie de la card no es un color: es la misma foto, cada vez más
-        // desenfocada. Un color extraído siempre es una INTERPRETACIÓN de la
-        // imagen —por eso el beige se leía como filtro sepia: un solo tono
-        // cubriendo una zona que en la foto tiene muchos—. Desenfocar no
-        // interpreta nada. Conserva la luz y la variación reales del lugar y
-        // solo les quita el detalle, hasta que dejan de competir con el texto.
-        ZStack {
-            // La más desenfocada abajo del todo, sin máscara: es el piso sobre
-            // el que se apoyan las otras dos y llega hasta el borde inferior.
-            photoLayer
-                .blur(radius: 80)
-                .scaleEffect(1.25)
-
-            photoLayer
-                .blur(radius: 40)
-                .scaleEffect(1.12)
-                .mask(bandMask(from: 0, to: 0.88, fadeIn: 0.10))
-
-            // Nítida hasta el 74%: la disolución vuelve a ocupar solo el cuarto
-            // inferior, la misma franja que tenía la ficha cuando era una banda
-            // aparte. Cortando en la mitad, el desenfoque se comía la foto —
-            // que es lo que la card viene a mostrar.
-            photoLayer
-                .mask(bandMask(from: 0, to: 0.74, fadeIn: 0.09))
-
-            // Único color de la composición, y solo al final: el desenfoque
-            // esconde el detalle pero no baja el contraste, y el texto necesita
-            // un piso estable. Arranca pasada la mitad para que la disolución
-            // sea de la foto, no de una veladura.
-            LinearGradient(
-                stops: [
-                    .init(color: exploreCardPaper.opacity(0),    location: 0.70),
-                    .init(color: exploreCardPaper.opacity(0.24), location: 0.82),
-                    .init(color: exploreCardPaper.opacity(0.66), location: 0.90),
-                    .init(color: exploreCardPaper.opacity(0.92), location: 0.96),
-                    .init(color: exploreCardPaper,               location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .allowsHitTesting(false)
+        // Foto arriba, ficha abajo. Con el texto sobre la imagen hacía falta
+        // oscurecerla justo donde suele estar el lugar; con la ficha aparte la
+        // foto se ve entera y el texto no depende de lo que haya detrás.
+        VStack(spacing: 0) {
+            CachedImage(urlString: photo.url) { image in
+                Task {
+                    guard let sampled = await EdgeColorSampler.sample(image, for: photo.url) else { return }
+                    // Animado: el color entra cuando la foto ya se está viendo,
+                    // y un cambio de fondo instantáneo se lee como parpadeo.
+                    withAnimation(.easeOut(duration: 0.4)) { edgeTint = sampled }
+                }
+            } content: { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                Rectangle().fill(Color.sandLight)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: exploreCardPhotoHeight)
+            .clipped()
+            // La transición ocupa el tercio inferior de la foto y llega a blanco
+            // pleno ANTES del borde: así la ficha no empieza en una línea sino
+            // en un color que ya venía formándose. La rampa es cóncava —tramos
+            // largos abajo del 30%, cortos arriba del 70%— porque el ojo detecta
+            // un blanco que aparece de golpe, no uno que crece despacio.
+            .overlay(alignment: .bottom) {
+                LinearGradient(
+                    stops: [
+                        // El tinte manda mientras la foto todavía se ve, y cede
+                        // a papel antes del borde: así la transición sale del
+                        // color real de la imagen —se siente continua— pero
+                        // TERMINA siempre en canvas. Si el color llegara hasta
+                        // el final, cada card cerraría en un tono distinto y el
+                        // carrusel se volvería un mosaico contra la página.
+                        // El tinte se queda con TODA la rampa y cede a papel
+                        // solo al final. Antes soltaba en 24% de opacidad, y a
+                        // esa densidad la diferencia contra canvas es de ~12/255
+                        // en el mejor canal: matemáticamente invisible sobre una
+                        // foto. Lo que mantiene el color discreto es su propia
+                        // saturación (tope 0.15), no velarlo a medias.
+                        .init(color: fadeTint.opacity(0),            location: 0),
+                        .init(color: fadeTint.opacity(0.10),         location: 0.34),
+                        .init(color: fadeTint.opacity(0.28),         location: 0.54),
+                        .init(color: fadeTint.opacity(0.55),         location: 0.70),
+                        .init(color: fadeTint.opacity(0.85),         location: 0.83),
+                        .init(color: fadeTint.opacity(0.97),         location: 0.92),
+                        .init(color: fadeTint,                       location: 0.97),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 96)
+                .allowsHitTesting(false)
+            }
 
             // Una sola composición, sin reglas ni divisores: la jerarquía la
             // hacen el color y el aire —etiqueta tenue, nombre en ink, autor
@@ -1747,16 +1747,25 @@ private struct ExploreCarouselCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .padding(.top, 6)
+
+                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .offset(y: -15)
             .padding(.horizontal, 10)
-            .padding(.bottom, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // La ficha toma el mismo color que cierra el degradado. Antes moría
+            // en canvas y la banda volvía al fondo de la app, así que el color
+            // de la foto se cortaba justo donde empieza el texto.
+            .background(fadeTint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { if edgeTint == nil { edgeTint = EdgeColorSampler.cached(photo.url) } }
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        // Borde en vez de sombra: con el pie del color de la página, la sombra
+        // Borde en vez de sombra: con la ficha del color de la página, la sombra
         // era lo único que insinuaba el recipiente y lo hacía por debajo, como
-        // un objeto levantado.
+        // un objeto levantado. Una línea de 0.5 en border lo cierra sin peso —
+        // se ve dónde termina la card sin que parezca apoyada encima.
         .overlay(
             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .strokeBorder(Color.border, lineWidth: 0.5)
