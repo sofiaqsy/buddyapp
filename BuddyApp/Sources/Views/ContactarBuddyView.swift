@@ -867,12 +867,12 @@ struct CategoryPickerView: View {
                                 // NO están centradas, así el tap sobre la del
                                 // medio queda libre para su acción propia.
                                 .onTapGesture {
+                                    print("🎯 [tap] idx=\(index) id=\(photo.id.suffix(8)) centerActual=\(carouselCenterId?.suffix(8) ?? "nil")")
                                     guard photo.id != carouselCenterId else { return }
                                     withAnimation(.snappy(duration: 0.35)) {
                                         proxy.scrollTo(photo.id, anchor: .center)
                                     }
                                 }
-                                .id(photo.id)
                         }
                     }
                     .scrollTargetLayout()
