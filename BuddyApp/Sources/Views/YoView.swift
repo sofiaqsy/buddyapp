@@ -597,7 +597,11 @@ struct YoView: View {
             sectionHeader("LUGARES QUE RECOMIENDAS", count: shares.count)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Spacing.md) {
+                // 3 como la grilla de TRIPS, y no solo entre el "+" y su vecino:
+                // una separación distinta en un único hueco se lee como error de
+                // maquetado, no como intención. Con el mismo valor las dos
+                // secciones del perfil se leen como una sola colección.
+                HStack(spacing: 3) {
                     // Siempre primero: es la acción, no un elemento más de la
                     // colección. Al final habría que arrastrar toda la lista
                     // para encontrarla, y crece con cada lugar que se suma.
