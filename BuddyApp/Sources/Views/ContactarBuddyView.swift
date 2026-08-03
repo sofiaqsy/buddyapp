@@ -1659,10 +1659,14 @@ private struct ExploreCarouselCard: View {
             photoLayer
                 .blur(radius: 40)
                 .scaleEffect(1.12)
-                .mask(bandMask(from: 0, to: 0.72, fadeIn: 0.14))
+                .mask(bandMask(from: 0, to: 0.88, fadeIn: 0.10))
 
+            // Nítida hasta el 74%: la disolución vuelve a ocupar solo el cuarto
+            // inferior, la misma franja que tenía la ficha cuando era una banda
+            // aparte. Cortando en la mitad, el desenfoque se comía la foto —
+            // que es lo que la card viene a mostrar.
             photoLayer
-                .mask(bandMask(from: 0, to: 0.50, fadeIn: 0.12))
+                .mask(bandMask(from: 0, to: 0.74, fadeIn: 0.09))
 
             // Único color de la composición, y solo al final: el desenfoque
             // esconde el detalle pero no baja el contraste, y el texto necesita
@@ -1670,10 +1674,10 @@ private struct ExploreCarouselCard: View {
             // sea de la foto, no de una veladura.
             LinearGradient(
                 stops: [
-                    .init(color: exploreCardPaper.opacity(0),    location: 0.52),
-                    .init(color: exploreCardPaper.opacity(0.22), location: 0.70),
-                    .init(color: exploreCardPaper.opacity(0.62), location: 0.84),
-                    .init(color: exploreCardPaper.opacity(0.90), location: 0.94),
+                    .init(color: exploreCardPaper.opacity(0),    location: 0.70),
+                    .init(color: exploreCardPaper.opacity(0.24), location: 0.82),
+                    .init(color: exploreCardPaper.opacity(0.66), location: 0.90),
+                    .init(color: exploreCardPaper.opacity(0.92), location: 0.96),
                     .init(color: exploreCardPaper,               location: 1),
                 ],
                 startPoint: .top,
