@@ -1015,11 +1015,11 @@ struct CategoryPickerView: View {
     /// zIndex dibujan la del centro invadiendo el espacio de sus vecinas, como
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
-    private let exploreCardWidth: CGFloat = 178
+    private let exploreCardWidth: CGFloat = 160
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
-    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 78
+    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 70
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1597,7 +1597,7 @@ private struct PendingConversationView: View {
 /// Alto de la foto, compartido por la card y por el carrusel que la mide: la
 /// ficha de abajo suma su banda a este valor, así el aire del texto nunca sale
 /// del espacio de la imagen.
-private let exploreCardPhotoHeight: CGFloat = 230
+private let exploreCardPhotoHeight: CGFloat = 207
 
 /// El papel de la ficha. Va acá y no inline porque el degradado tiene que
 /// terminar EXACTAMENTE en este color: si se separan, aparece una costura entre
@@ -1722,8 +1722,8 @@ private struct ExploreCarouselCard: View {
                 Spacer(minLength: 0)
             }
             .offset(y: -15)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(exploreCardPaper)
         }
