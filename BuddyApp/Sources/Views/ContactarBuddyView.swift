@@ -563,7 +563,14 @@ struct CategoryPickerView: View {
             || (!pioneerRequiresCategory && communityContext != nil && communityContext!.totalBuddies == 0)
     }
 
+    /// El carrusel ocupa el hueco donde antes iba la grilla de 6 categorías,
+    /// pero NO es un selector: las fotos inspiran, no se eligen. Por eso el
+    /// subtítulo y la línea de disponibilidad cambian de forma y de lugar
+    /// según qué se esté mostrando.
+    private var showsExploreCarousel: Bool { !placeCards.isEmpty }
+
     private var subtitleAttributed: AttributedString {
+        guard !showsExploreCarousel else { return exploreSubtitleAttributed }
         if let city = destinationName {
             var prefix = AttributedString("Elige el tema de tu consulta. Te conectaremos con una persona que conozca ")
             prefix.foregroundColor = UIColor(Color.inkMuted)
@@ -585,6 +592,47 @@ struct CategoryPickerView: View {
             str.foregroundColor = UIColor(Color.inkMuted)
             return str
         }
+    }
+
+    /// Describe lo que el usuario está viendo, sin pedirle que elija nada. El
+    /// subtítulo viejo ("Elige el tema de tu consulta") venía del flujo de 6
+    /// categorías: al quedar sobre el carrusel, mandaba a elegir y lo único
+    /// elegible a la vista eran las fotos.
+    private var exploreSubtitleAttributed: AttributedString {
+        var prefix = AttributedString("Lugares reales que comparten los buddies de ")
+        prefix.foregroundColor = UIColor(Color.inkMuted)
+
+        guard let city = destinationName else {
+            var str = AttributedString("Lugares reales que comparte la comunidad por acá.")
+            str.foregroundColor = UIColor(Color.inkMuted)
+            return str
+        }
+
+        var cityStr = AttributedString(city)
+        cityStr.foregroundColor = UIColor(Color.brand)
+        cityStr.inlinePresentationIntent = .stronglyEmphasized
+        if onDestinationTap != nil {
+            cityStr.underlineStyle = .single
+            cityStr.link = URL(string: "buddy://destination")
+        }
+
+        var dot = AttributedString(".")
+        dot.foregroundColor = UIColor(Color.inkMuted)
+
+        return prefix + cityStr + dot
+    }
+
+    /// La bisagra entre las fotos y el CTA: nombra la ciudad y la disponibilidad
+    /// en la misma frase, para encadenar lugar → persona → consulta. Va DEBAJO
+    /// del carrusel, no arriba: ahí deja de ser una estadística suelta y pasa a
+    /// explicar qué son esas fotos y por qué llevan al botón.
+    private var exploreAvailabilityText: String {
+        let city = destinationName ?? "este lugar"
+        let n = communityContext?.buddies ?? buddyCount
+        guard n > 0 else { return "Buscando buddies que conozcan \(city)" }
+        return n == 1
+            ? "1 buddy conoce \(city) y está disponible ahora"
+            : "\(n) buddies conocen \(city) y están disponibles ahora"
     }
 
     private var noBuddies: Bool {
@@ -649,8 +697,10 @@ struct CategoryPickerView: View {
                     .redacted(reason: isSkeleton ? .placeholder : [])
 
                 // Disponibilidad de la comunidad — junto al contexto del lugar,
-                // antes de que el usuario elija su necesidad.
-                if activeBuddyName == nil {
+                // antes de que el usuario elija su necesidad. Con carrusel se
+                // muestra DEBAJO de las fotos (ver exploreAvailabilityText), no
+                // acá: ahí hace de puente entre lo que se ve y el botón.
+                if activeBuddyName == nil && !showsExploreCarousel {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(noBuddies ? Color.sand : Color.onlineGreen)
@@ -765,7 +815,12 @@ struct CategoryPickerView: View {
     /// para que la card quede más vertical sin comerse el peek lateral.
     private let exploreCardWidth: CGFloat = 160
     private let exploreCardHeight: CGFloat = 230
-    private let exploreScaleDelta: CGFloat = 0.32
+    /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
+    /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
+    /// menos, porque el efecto App Store vive justamente de ese contraste.
+    /// Bajarlo además destapa ~9pt más de las vecinas: la card central escalada
+    /// mide 195pt en vez de 211, así que invade menos el espacio de al lado.
+    private let exploreScaleDelta: CGFloat = 0.22
     /// Espacio entre cards — junto con exploreCardWidth define el "paso" que
     /// viewAligned necesita cruzar para saltar a la siguiente. Más chico que
     /// antes (20) para que un swipe corto, como uno que arranca cerca del
@@ -811,7 +866,12 @@ struct CategoryPickerView: View {
     }
 
     private var exploreCarousel: some View {
-        VStack(spacing: 14) {
+        // spacing: 0 con paddings explícitos. Con un spacing uniforme de 14 los
+        // tres elementos quedaban equidistantes y el cerebro los leía como
+        // hermanos sueltos — de ahí que el carrusel pareciera un componente
+        // aparte del botón. Escalonar 8 / 12 / 16 los agrupa en un solo bloque
+        // donde el CTA es el final del recorrido, no un vecino.
+        VStack(spacing: 0) {
             GeometryReader { geo in
                 // El padding horizontal de abajo depende de geo.size.width, que
                 // en la PRIMERA pasada del GeometryReader es 0 → el padding se
@@ -948,24 +1008,50 @@ struct CategoryPickerView: View {
                 carouselCenterId = ids[0]
             }
 
+            // Se quedan porque avisan que hay más fotos, pero atenuados: a
+            // tamaño y contraste plenos leían como paginación de un selector
+            // ("estás en la 2 de 3, confirmá abajo"). Como textura sí, como
+            // control no. El peek lateral hace el resto del trabajo.
             if explorePhotos.count > 1 {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     ForEach(explorePhotos) { photo in
                         Circle()
-                            .fill(photo.id == (carouselCenterId ?? explorePhotos.first?.id) ? Color.brand : Color.border)
-                            .frame(width: 6, height: 6)
+                            .fill(photo.id == (carouselCenterId ?? explorePhotos.first?.id)
+                                  ? Color.brand.opacity(0.55)
+                                  : Color.border.opacity(0.5))
+                            .frame(width: 5, height: 5)
                     }
                 }
+                .padding(.top, 8)
+            }
+
+            // El puente: encadena lo que se ve (lugares) con quién lo conoce y
+            // con la acción. Antes vivía arriba del carrusel, donde era un dato
+            // suelto que no explicaba nada de las fotos.
+            if activeBuddyName == nil {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(noBuddies ? Color.sand : Color.onlineGreen)
+                        .frame(width: 6, height: 6)
+                    Text(exploreAvailabilityText)
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                .padding(.top, 12)
+                .redacted(reason: isSkeleton ? .placeholder : [])
             }
 
             // Sin acción todavía — se conecta cuando el flujo de "consultar
-            // sobre este lugar" quede definido. El nombre sigue a la foto
-            // centrada para que quede claro a qué lugar corresponde el CTA.
+            // sobre este lugar" quede definido. Dice la CIUDAD del contexto, no
+            // la de la card centrada: la consulta es sobre el destino completo.
+            // Atarlo a la foto del medio haría que el texto cambiara al
+            // deslizar, y eso le enseñaría al usuario que las fotos SÍ son un
+            // selector — justo lo contrario de lo que el carrusel comunica.
             Button {} label: {
                 HStack(spacing: 10) {
                     Image(systemName: "bubble.left.fill")
                         .foregroundStyle(Color.ink)
-                    Text("Consultar en \(centeredExplorePlace?.destinationName ?? "este lugar")")
+                    Text("Consultar en \(destinationName ?? "este lugar")")
                         .font(BT.footnoteBold)
                         .foregroundStyle(Color.ink)
                         .lineLimit(1)
@@ -984,7 +1070,7 @@ struct CategoryPickerView: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, Spacing.edge)
-            .animation(.easeInOut(duration: 0.2), value: carouselCenterId)
+            .padding(.top, 16)
         }
     }
 }
@@ -998,6 +1084,19 @@ private struct ExplorePhoto: Identifiable {
 private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
+
+    /// El LUGAR sigue siendo el protagonista de la card y la persona pasa a ser
+    /// el medio: el usuario no quiere hablar con Keyla, quiere resolver una
+    /// duda sobre la ciudad. Por eso el pie dejó de decir "Recomendado por
+    /// {nombre}" — eso convertía la card en la ficha de una persona. El avatar
+    /// se queda igual: es la prueba de que hay gente real detrás, sin robarle
+    /// el protagonismo al lugar.
+    private var footerText: String {
+        guard place.buddyCount > 0 else { return "Compartido por buddies locales" }
+        return place.buddyCount == 1
+            ? "1 buddy conoce este lugar"
+            : "\(place.buddyCount) buddies conocen este lugar"
+    }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -1021,8 +1120,8 @@ private struct ExploreCarouselCard: View {
                     .foregroundStyle(.white)
                     .lineLimit(2)
 
-                if let author = place.coverAuthorName {
-                    HStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    if let author = place.coverAuthorName {
                         Group {
                             if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
                                 AsyncImage(url: url) { img in
@@ -1036,16 +1135,13 @@ private struct ExploreCarouselCard: View {
                         .frame(width: 20, height: 20)
                         .clipShape(Circle())
                         .overlay(Circle().strokeBorder(.white, lineWidth: 1))
-
-                        Text("Recomendado por ")
-                            .font(BT.caption2)
-                            .foregroundStyle(.white.opacity(0.9))
-                        + Text(author.components(separatedBy: " ").first ?? author)
-                            .font(BT.caption2.weight(.bold))
-                            .foregroundStyle(.white)
                     }
-                    .lineLimit(1)
+
+                    Text(footerText)
+                        .font(BT.caption2)
+                        .foregroundStyle(.white.opacity(0.92))
                 }
+                .lineLimit(1)
             }
             .padding(10)
         }
