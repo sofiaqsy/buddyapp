@@ -501,6 +501,8 @@ struct APIPulseItem: Decodable, Identifiable {
     let city: String
     let count: Int?
     let at: Date?
+    /// Enum crudo de help_request.category — el texto lo arma la vista.
+    let category: String?
     let buddyName: String?
     let buddyAvatarUrl: String?
     var id: String { "\(type)-\(city)-\(at?.timeIntervalSince1970 ?? 0)" }

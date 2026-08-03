@@ -1419,68 +1419,83 @@ struct InicioView: View {
         .padding(.horizontal, Spacing.edge)
     }
 
-    /// Avatar 24pt (era 56): deja de ser un retrato y pasa a ser una viñeta con
-    /// cara — confirma que hay una persona real sin reclamar la atención que
-    /// corresponde a la acción. El tiempo va trailing formando columna: en iOS,
-    /// texto a la izquierda + timestamp a la derecha ya significa "actividad
-    /// reciente" (Mail, Mensajes), así que el patrón explica la sección sola.
+    /// Dos líneas: la acción arriba, el contexto abajo. Cada fila responde las
+    /// tres preguntas sin una palabra de más — quién (nombre), en qué
+    /// (categoría) y dónde/cuándo (línea 2).
+    ///
+    /// Avatar 28pt (era 56): sigue siendo viñeta y no retrato, apenas lo justo
+    /// para equilibrar un bloque de texto de dos líneas.
     @ViewBuilder
     private func communityRow(_ item: APIPulseItem) -> some View {
         let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Circle()
                 .fill(Color.sandLight)
-                .frame(width: 24, height: 24)
+                .frame(width: 28, height: 28)
                 .overlay {
                     if let urlStr = item.buddyAvatarUrl, let url = URL(string: urlStr) {
                         AsyncImage(url: url) { img in
                             img.resizable().scaledToFill()
                         } placeholder: { Color.sandLight }
-                        .frame(width: 24, height: 24)
+                        .frame(width: 28, height: 28)
                         .clipShape(Circle())
                     } else {
                         Image(systemName: "person.fill")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(Color.sand)
                     }
                 }
 
-            (Text(name).font(BT.footnoteBold).foregroundStyle(Color.ink)
-             + Text(pulseAction(item)).font(BT.caption1).foregroundStyle(Color.inkMuted))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                (Text(name).font(BT.footnoteBold).foregroundStyle(Color.ink)
+                 + Text(" \(pulseAction(item))").font(BT.caption1).foregroundStyle(Color.ink))
+                    .lineLimit(1)
 
-            Spacer(minLength: 8)
-
-            if let t = pulseTimeCompact(item) {
-                Text(t)
+                // La ciudad vuelve a mostrarse siempre, al revés de lo que
+                // hacía la versión de una línea. Antes iba DENTRO de la frase y
+                // repetirla en cada fila era ruido; acá vive en una línea de
+                // metadatos apagada, donde el costo de repetición es mínimo y a
+                // cambio responde el "¿dónde ocurrió?".
+                Text("\(item.city) · \(pulseTimeAgo(item))")
                     .font(BT.caption2)
                     .foregroundStyle(Color.inkMuted)
                     .lineLimit(1)
             }
+
+            Spacer(minLength: 0)
         }
     }
 
-    /// La ciudad solo cuando aporta. Si la actividad es del mismo lugar donde
-    /// está el usuario, nombrarla en cada fila es repetir un dato constante —
-    /// en el pulso real las 10 ayudas eran de la misma ciudad, así que la
-    /// sección decía "en Lima" diez veces. Cuando difiere sí informa.
+    /// Frase natural por categoría. El verbo cambia con el tipo de ayuda para
+    /// que tres filas seguidas se lean como tres hechos distintos y no como una
+    /// plantilla rellenada. `general` y los casos sin categoría caen en formas
+    /// genéricas — nunca se inventa un detalle que el dato no tiene.
     private func pulseAction(_ item: APIPulseItem) -> String {
-        let here = resolvedLocation?.destinationName ?? locationService.currentCity
-        let sameCity = here?.caseInsensitiveCompare(item.city) == .orderedSame
-        return sameCity ? " ayudó a un viajero" : " ayudó a un viajero en \(item.city)"
+        switch item.category {
+        case "transport":       return "resolvió una consulta sobre transporte"
+        case "food", "food_recs": return "recomendó dónde comer"
+        case "accommodation":   return "ayudó con alojamiento"
+        case "activities":      return "recomendó qué hacer"
+        case "shopping":        return "ayudó con compras"
+        case "translation":     return "ayudó con una traducción"
+        case "emergency":       return "asistió una urgencia"
+        case "recommendations": return "compartió recomendaciones"
+        case "airport_pickup":  return "recibió a un viajero en el aeropuerto"
+        case "city_tour":       return "acompañó a recorrer la ciudad"
+        default:                return "resolvió una consulta"
+        }
     }
 
-    /// Sin el "hace": en una columna de timestamps alineada a la derecha el
-    /// prefijo es redundante y solo ensancha la columna, robándole ancho a la
-    /// frase, que es lo que carga el mensaje.
-    private func pulseTimeCompact(_ item: APIPulseItem) -> String? {
-        guard item.type == "helped", let d = item.at else { return nil }
+    /// Con "hace" porque acá va inline tras la ciudad, no en una columna de
+    /// timestamps donde el prefijo sobraría. "ayer" en vez de "hace 1 d".
+    private func pulseTimeAgo(_ item: APIPulseItem) -> String {
+        guard let d = item.at else { return "hace poco" }
         let s = max(0, Date().timeIntervalSince(d))
-        if s < 90     { return "ahora" }
-        if s < 3600   { return "\(Int(s / 60)) min" }
-        if s < 86400  { return "\(Int(s / 3600)) h" }
+        if s < 90     { return "hace un momento" }
+        if s < 3600   { return "hace \(Int(s / 60)) min" }
+        if s < 86400  { return "hace \(Int(s / 3600)) h" }
         if s < 172800 { return "ayer" }
-        return "\(Int(s / 86400)) d"
+        return "hace \(Int(s / 86400)) d"
     }
 
     /// Comunidad viva ahora siempre muestra el pulso global (últimas ayudas
