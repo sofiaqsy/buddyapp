@@ -1295,6 +1295,10 @@ private struct PendingConversationView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            // Mismo banner que el chat real usa bajo el header para explicar el
+            // rol de cada uno. Acá anticipa lo que va a pasar, que es lo que el
+            // usuario necesita saber en este punto.
+            banner
 
             if chosenCategory == nil {
                 // El selector va al CENTRO del chat, no anclado abajo. Como
@@ -1305,8 +1309,49 @@ private struct PendingConversationView: View {
             } else {
                 thread
             }
+
+            // Ocupa el lugar del input bar, con el mismo tratamiento que la
+            // barra de "Conexión cerrada": el área inferior del chat nunca
+            // queda vacía, y dice por qué todavía no se puede escribir.
+            statusBar
         }
         .background(Color.canvas)
+    }
+
+    private var banner: some View {
+        Text(chosenCategory == nil
+             ? "Cuéntanos sobre qué necesitas ayuda y buscamos a alguien que conozca \(destinationName ?? "la zona")."
+             : "Estamos avisando a buddies de \(destinationName ?? "la zona"). En cuanto alguien acepte, se une a esta conversación.")
+            .font(BT.caption1)
+            .foregroundStyle(Color.inkMuted)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Spacing.edge)
+            .padding(.vertical, 10)
+            .background(Color.canvas)
+            .overlay(alignment: .bottom) { Divider().opacity(0.5) }
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 8) {
+            if chosenCategory == nil {
+                Image(systemName: "hand.tap.fill")
+                    .foregroundStyle(Color.sand)
+                    .font(.system(size: 15))
+                Text("Elige un tema para empezar")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            } else {
+                ProgressView().scaleEffect(0.8).tint(Color.inkMuted)
+                Text("Podrás escribir cuando un buddy se una")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .background(Color.surface)
+        .overlay(alignment: .top) { Divider() }
     }
 
     private var categoryPicker: some View {
@@ -1375,12 +1420,6 @@ private struct PendingConversationView: View {
                         .padding(.horizontal, Spacing.edge)
                     }
                 }
-
-                if chosenCategory != nil {
-                    ProgressView()
-                        .tint(Color.inkMuted)
-                        .padding(.top, 4)
-                }
             }
             .padding(.top, Spacing.lg)
             .frame(maxWidth: .infinity)
@@ -1399,45 +1438,51 @@ private struct PendingConversationView: View {
             .buttonStyle(.pressable)
             .padding(.leading, -10)
 
-            // La marca, no un círculo gris con silueta: todavía estás hablando
-            // con la aplicación, y fingir un hueco con forma de persona sería
-            // prometer a alguien que no está.
-            ZStack {
-                Circle().fill(Color.brand.opacity(0.12))
-                    .frame(width: 38, height: 38)
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.brand)
-            }
+            // Mismas medidas y tratamiento que el avatar del chat real: acá va
+            // la inicial de la marca en vez de la de una persona, porque
+            // todavía estás hablando con la aplicación.
+            Circle()
+                .fill(Color.sandLight)
+                .frame(width: 38, height: 38)
+                .overlay(
+                    Text("B")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.sand)
+                )
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Buddy")
+                Text("BuddyApp")
                     .font(BT.headline)
                     .foregroundStyle(Color.ink)
-                if let city = destinationName {
-                    Text(city)
+                HStack(spacing: 4) {
+                    Text("Tu buddy")
                         .font(BT.caption1)
                         .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
+                    if let city = destinationName {
+                        Text("·").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                        Text(city)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
                 }
             }
 
             Spacer()
 
-            if let onCancelRequest {
-                Menu {
-                    Button(role: .destructive, action: onCancelRequest) {
-                        Label("Cancelar solicitud", systemImage: "xmark.circle")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(Color.ink)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
+            Menu {
+                Button(role: .destructive) { onCancelRequest?() } label: {
+                    Label("Cancelar solicitud", systemImage: "xmark.circle")
                 }
-                .accessibilityLabel("Opciones de la solicitud")
+                .disabled(onCancelRequest == nil)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel("Opciones de la solicitud")
         }
         .padding(.horizontal, Spacing.edge)
         .padding(.vertical, 12)
