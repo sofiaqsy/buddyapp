@@ -1206,7 +1206,7 @@ struct PlaceGuideDetailSheet: View {
                 // El libro local también: es la fuente de verdad al publicar, así
                 // que si la página sigue en disco la próxima publicación desde
                 // este teléfono volvería a subir la foto recién borrada.
-                await MainActor.run { MemoirPersistence.shared.removePage(at: pageIndex, journeyId: photo.journeyId) }
+                await MainActor.run { MemoirPersistence.shared.removePublishedPage(at: pageIndex, journeyId: photo.journeyId) }
                 gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
                 await MainActor.run {
                     Haptic.success()

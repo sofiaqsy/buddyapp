@@ -71,15 +71,28 @@ final class MemoirPersistence {
     /// una foto desde la ficha del lugar la quitaría del server pero la próxima
     /// publicación desde este teléfono la volvería a subir — el libro local es
     /// la fuente de verdad al publicar.
-    func removePage(at index: Int, journeyId: String) {
+    /// El índice que llega es el `page_index` del SERVIDOR, que no es el del
+    /// libro: al publicar se filtran las páginas vacías, así que basta una
+    /// página sin contenido antes para que los dos se desfasen. Traducirlo es
+    /// obligatorio — sin esto se borraba la página equivocada, la foto real
+    /// sobrevivía en el libro y la siguiente publicación la resucitaba.
+    func removePublishedPage(at publishedIndex: Int, journeyId: String) {
         var pages = load(journeyId: journeyId)
-        guard pages.indices.contains(index) else {
-            print("📓 [removePage] journeyId=\(journeyId) index=\(index) fuera de rango (pages=\(pages.count))")
+        let published = pages.indices.filter { MemoirPersistence.isPublishable(pages[$0]) }
+        guard published.indices.contains(publishedIndex) else {
+            print("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) fuera de rango (publicables=\(published.count) de \(pages.count))")
             return
         }
+        let index = published[publishedIndex]
         pages.remove(at: index)
         save(pages, journeyId: journeyId)
-        print("📓 [removePage] journeyId=\(journeyId) index=\(index) → quedan \(pages.count) página(s)")
+        print("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) → local[\(index)] → quedan \(pages.count) página(s)")
+    }
+
+    /// Qué páginas llegan al servidor. Vive acá para que el mapeo de índices y
+    /// el filtro de publicación no puedan divergir.
+    static func isPublishable(_ page: CollagePage) -> Bool {
+        !page.itemSnapshots.isEmpty || page.backgroundImageFile != nil
     }
 
     func load(journeyId: String) -> [CollagePage] {

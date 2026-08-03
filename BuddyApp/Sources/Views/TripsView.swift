@@ -1169,10 +1169,10 @@ struct TripFeedCard: View {
         do {
             print("📤 [publishTrip] BEFORE filter: \(pages.count) page(s)")
             for (i, p) in pages.enumerated() {
-                let kept = !p.itemSnapshots.isEmpty || p.backgroundImageFile != nil
+                let kept = MemoirPersistence.isPublishable(p)
                 print("📤 [publishTrip]   page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumb=\(p.thumbnailFileName ?? "nil") → \(kept ? "KEPT" : "DISCARDED")")
             }
-            currentPages = pages.filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+            currentPages = pages.filter(MemoirPersistence.isPublishable)
             print("📤 [publishTrip] AFTER filter: \(currentPages.count) page(s)")
         }
         isPublishing = true
@@ -1311,7 +1311,7 @@ struct TripEditorSheet: View {
     private func publish() {
         // Mismo filtro que el resto de las publicaciones: las páginas vacías no
         // llegan al servidor.
-        let pages = bookVM.pages.filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+        let pages = bookVM.pages.filter(MemoirPersistence.isPublishable)
         let jId = journey.id
         Task {
             try? await APIClient.shared.publishJourney(journeyId: jId, tripId: journey.tripId, pages: pages)
