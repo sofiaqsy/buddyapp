@@ -830,6 +830,18 @@ struct CategoryPickerView: View {
                                     return content.scaleEffect(scale)
                                 }
                                 .zIndex(exploreZIndex(for: photo, index: index))
+                                // Tocar una card lateral la trae al centro, para
+                                // no obligar a arrastrar de a una. El binding de
+                                // scrollPosition es bidireccional: escribirlo
+                                // hace scroll al item. Solo actúa sobre las que
+                                // NO están centradas, así el tap sobre la del
+                                // medio queda libre para su acción propia.
+                                .onTapGesture {
+                                    guard photo.id != carouselCenterId else { return }
+                                    withAnimation(.snappy(duration: 0.35)) {
+                                        carouselCenterId = photo.id
+                                    }
+                                }
                                 .id(photo.id)
                         }
                     }
