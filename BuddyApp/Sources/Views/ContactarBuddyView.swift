@@ -1016,7 +1016,7 @@ struct CategoryPickerView: View {
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
     private let exploreCardWidth: CGFloat = 178
-    private let exploreCardHeight: CGFloat = 300
+    private let exploreCardHeight: CGFloat = 272
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1627,7 +1627,7 @@ private struct ExploreCarouselCard: View {
                     HStack(spacing: 6) {
                         rule
                         Text(category.uppercased())
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(BT.eyebrow)
                             .tracking(1.1)
                             .foregroundStyle(Color.brand)
                             .lineLimit(1)
@@ -1637,11 +1637,11 @@ private struct ExploreCarouselCard: View {
                     .padding(.bottom, 8)
                 }
 
-                // Serif: la única desviación deliberada del sistema, que es todo
-                // sans. Es lo que separa "una foto con su rótulo" de una ficha
-                // que alguien redactó — y el lugar es el protagonista.
+                // Tokens del sistema, no tipografía propia: la composición de la
+                // ficha (categoría, remates, regla, autor) ya la distingue, y
+                // no hace falta un tamaño ni una familia que la app no usa.
                 Text(place.name)
-                    .font(.system(size: 19, weight: .semibold, design: .serif))
+                    .font(BT.footnoteBold)
                     .foregroundStyle(Color.ink)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
