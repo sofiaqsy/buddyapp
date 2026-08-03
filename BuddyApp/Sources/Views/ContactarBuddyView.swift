@@ -848,14 +848,6 @@ struct CategoryPickerView: View {
                                     let distance = abs(cardMidX - viewportCenter)
                                     let normalized = min(distance / 160, 1)
                                     let scale = 1.0 + (1 - normalized) * exploreScaleDelta
-                                    // DIAGNÓSTICO (temporal): una sola card para
-                                    // no inundar. Si al tocar aparecen muchos
-                                    // valores intermedios, el scroll SÍ se anima
-                                    // y visualEffect muestrea el trayecto; si
-                                    // aparece uno solo, el scroll salta.
-                                    if index == 1 {
-                                        print("📐 [scale] midX=\(Int(cardMidX)) scale=\(String(format: "%.3f", scale))")
-                                    }
                                     return content.scaleEffect(scale)
                                 }
                                 .zIndex(exploreZIndex(for: photo, index: index))
