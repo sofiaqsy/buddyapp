@@ -1685,7 +1685,7 @@ private struct ExploreCarouselCard: View {
 
                 if let category = place.category, !category.isEmpty {
                     Text(category.uppercased())
-                        .font(.system(size: 6, weight: .semibold))
+                        .font(.system(size: 6.5, weight: .semibold))
                         .tracking(0.6)
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
@@ -1697,7 +1697,7 @@ private struct ExploreCarouselCard: View {
                 // sistema, y mezclar footnoteBold con dos textos ya escalados
                 // rompería la proporción entre los tres.
                 Text(place.name)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.ink)
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
@@ -1713,11 +1713,11 @@ private struct ExploreCarouselCard: View {
                             } else {
                                 Circle().fill(Color.sandLight)
                                     .overlay(Text(String(author.prefix(1)))
-                                        .font(.system(size: 6, weight: .bold))
+                                        .font(.system(size: 7, weight: .bold))
                                         .foregroundStyle(Color.ink))
                             }
                         }
-                        .frame(width: 14, height: 14)
+                        .frame(width: 15, height: 15)
                         .clipShape(Circle())
                         // Un círculo no tiene línea base, así que en un HStack
                         // por baseline se iría al fondo. Se le declara una a
@@ -1730,14 +1730,14 @@ private struct ExploreCarouselCard: View {
                     // de igual a igual con el del lugar.
                     if let author = authorFirstName {
                         Text("Recomendado por ")
-                            .font(.system(size: 8.5))
+                            .font(.system(size: 9.5))
                             .foregroundStyle(Color.inkMuted)
                         + Text(author)
-                            .font(.system(size: 8.5, weight: .semibold))
+                            .font(.system(size: 9.5, weight: .semibold))
                             .foregroundStyle(Color.inkMuted)
                     } else {
                         Text("Recomendado por la comunidad")
-                            .font(.system(size: 8.5))
+                            .font(.system(size: 9.5))
                             .foregroundStyle(Color.inkMuted)
                     }
                 }
@@ -3486,7 +3486,7 @@ struct BuddyMessageBubble: View {
 
                 HStack(spacing: 6) {
                     Image(systemName: "location.fill")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.teal)
                     Text("Mi ubicación actual")
                         .font(BT.footnoteBold)
