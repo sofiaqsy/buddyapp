@@ -430,6 +430,9 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
     /// carrusel de exploración.
     let coverAuthorName: String?
     let coverAuthorAvatarUrl: String?
+    /// Nombre de la categoría del spot ("Alojamiento", "Café"…). Viene del
+    /// catálogo curado, no de las categorías de ayuda: dice qué ES el lugar.
+    let category: String?
     let photoCount: Int
     let isNew: Bool
     let buddyCount: Int

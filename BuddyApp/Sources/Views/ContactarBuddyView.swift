@@ -1015,8 +1015,8 @@ struct CategoryPickerView: View {
     /// zIndex dibujan la del centro invadiendo el espacio de sus vecinas, como
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
-    private let exploreCardWidth: CGFloat = 160
-    private let exploreCardHeight: CGFloat = 230
+    private let exploreCardWidth: CGFloat = 178
+    private let exploreCardHeight: CGFloat = 300
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1606,26 +1606,53 @@ private struct ExploreCarouselCard: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        // Foto arriba, ficha abajo — no un overlay sobre la imagen. Con el texto
+        // encima hacía falta un degradado que oscurecía justo la parte baja de
+        // la foto, que es donde suele estar el lugar. Separarlos deja la imagen
+        // entera y le da a la ficha el contraste de una etiqueta impresa.
+        VStack(spacing: 0) {
             CachedImage(urlString: photo.url) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .frame(height: 178)
             .clipped()
 
-            LinearGradient(
-                colors: [.black.opacity(0), .black.opacity(0.75)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
 
-            VStack(alignment: .leading, spacing: 6) {
+                if let category = place.category, !category.isEmpty {
+                    HStack(spacing: 6) {
+                        rule
+                        Text(category.uppercased())
+                            .font(.system(size: 9, weight: .semibold))
+                            .tracking(1.1)
+                            .foregroundStyle(Color.brand)
+                            .lineLimit(1)
+                            .fixedSize()
+                        rule
+                    }
+                    .padding(.bottom, 8)
+                }
+
+                // Serif: la única desviación deliberada del sistema, que es todo
+                // sans. Es lo que separa "una foto con su rótulo" de una ficha
+                // que alguien redactó — y el lugar es el protagonista.
                 Text(place.name)
-                    .font(BT.footnoteBold)
-                    .foregroundStyle(.white)
+                    .font(.system(size: 19, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.ink)
+                    .multilineTextAlignment(.center)
                     .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+
+                Spacer(minLength: 0)
+
+                Rectangle()
+                    .fill(Color.border)
+                    .frame(height: 1)
+                    .padding(.bottom, 8)
 
                 HStack(spacing: 6) {
                     if let author = place.coverAuthorName {
@@ -1636,33 +1663,47 @@ private struct ExploreCarouselCard: View {
                                 } placeholder: { Color.sandLight }
                             } else {
                                 Circle().fill(Color.sandLight)
-                                    .overlay(Text(String(author.prefix(1))).font(.system(size: 9, weight: .bold)).foregroundStyle(Color.ink))
+                                    .overlay(Text(String(author.prefix(1)))
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(Color.ink))
                             }
                         }
                         .frame(width: 20, height: 20)
                         .clipShape(Circle())
-                        .overlay(Circle().strokeBorder(.white, lineWidth: 1))
                     }
 
                     if let author = authorFirstName {
                         Text("Recomendado por ")
                             .font(BT.caption2)
-                            .foregroundStyle(.white.opacity(0.9))
+                            .foregroundStyle(Color.inkMuted)
                         + Text(author)
-                            .font(BT.caption2.weight(.bold))
-                            .foregroundStyle(.white)
+                            .font(BT.caption2.weight(.semibold))
+                            .foregroundStyle(Color.brand)
                     } else {
                         Text("Recomendado por la comunidad")
                             .font(BT.caption2)
-                            .foregroundStyle(.white.opacity(0.9))
+                            .foregroundStyle(Color.inkMuted)
                     }
                 }
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.surface)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.border, lineWidth: 1))
+    }
+
+    /// Las líneas que flanquean la categoría. Sin ellas el eyebrow flotaba sobre
+    /// el nombre; con ellas la ficha arranca con un remate y se lee compuesta.
+    private var rule: some View {
+        Rectangle()
+            .fill(Color.border)
+            .frame(height: 1)
     }
 }
 
