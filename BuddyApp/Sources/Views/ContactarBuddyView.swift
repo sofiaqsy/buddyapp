@@ -806,15 +806,7 @@ struct CategoryPickerView: View {
         // El fallback es 0 para coincidir con dónde descansa el scroll en
         // offset 0 (ver nota del centro inicial), así los frames previos a que
         // carouselCenterId se fije ya dibujan el orden correcto.
-        let resolved = explorePhotos.firstIndex { $0.id == carouselCenterId }
-        let centerIndex = resolved ?? 0
-        // DIAGNÓSTICO (temporal): solo en la card 0 para tener una línea por
-        // pasada de layout en vez de una por card. Muestra si el id centrado
-        // resolvió a un índice real o cayó al fallback, que es la diferencia
-        // entre "el estado sabe dónde está el scroll" y "está adivinando".
-        if index == 0 {
-            print("🎯 [zIndex] carouselCenterId=\(carouselCenterId?.suffix(8) ?? "nil") resolved=\(resolved.map(String.init) ?? "FALLBACK") centerIndex=\(centerIndex) total=\(explorePhotos.count)")
-        }
+        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId } ?? 0
         return -Double(abs(index - centerIndex))
     }
 
@@ -832,7 +824,6 @@ struct CategoryPickerView: View {
                 // Construir el ScrollView recién con ancho real hace que su
                 // primer layout ya sea el definitivo.
                 if geo.size.width > 0 {
-                    let _ = print("🎯 [geo] width=\(geo.size.width) padding=\((geo.size.width - exploreCardWidth) / 2)")
                     // ScrollViewReader porque escribir el binding de
                     // scrollPosition NO desplaza el scroll: al tocar una card
                     // lateral el estado cambiaba (el zIndex la traía adelante)
@@ -867,7 +858,6 @@ struct CategoryPickerView: View {
                                 // NO están centradas, así el tap sobre la del
                                 // medio queda libre para su acción propia.
                                 .onTapGesture {
-                                    print("🎯 [tap] idx=\(index) id=\(photo.id.suffix(8)) centerActual=\(carouselCenterId?.suffix(8) ?? "nil")")
                                     guard photo.id != carouselCenterId else { return }
                                     // spring en vez de .snappy: esa curva frena
                                     // en seco y el salto se siente rígido. Con
@@ -941,17 +931,13 @@ struct CategoryPickerView: View {
             // posición inicial solo pueden discrepar.
             .onChange(of: explorePhotos.map(\.id), initial: true) { _, ids in
                 guard !ids.isEmpty else {
-                    print("🎯 [initialCenter] ids vacío → carouselCenterId=nil")
                     carouselCenterId = nil
                     return
                 }
                 // Solo (re)centrar si el id actual ya no existe en la tanda
                 // nueva — si no, un refresh del feed movería el carrusel bajo
                 // el dedo del usuario.
-                guard carouselCenterId == nil || !ids.contains(carouselCenterId!) else {
-                    print("🎯 [initialCenter] skip — carouselCenterId=\(carouselCenterId?.suffix(8) ?? "nil") sigue presente en ids(\(ids.count))")
-                    return
-                }
+                guard carouselCenterId == nil || !ids.contains(carouselCenterId!) else { return }
                 // La PRIMERA, no la del medio. Con padding simétrico
                 // (width - cardWidth)/2, en offset 0 el centro de la card 0
                 // cae justo en el centro del viewport (121 + 80 = 201 = 402/2),
@@ -959,7 +945,6 @@ struct CategoryPickerView: View {
                 // Insistir en centrar la del medio obligaba a mover el scroll
                 // con mecanismos que no se aplicaban a tiempo, y mientras tanto
                 // el zIndex adelantaba una card que no era la centrada.
-                print("🎯 [initialCenter] fijando idx=0 de \(ids.count) → \(ids[0].suffix(8))")
                 carouselCenterId = ids[0]
             }
 
