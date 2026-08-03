@@ -655,7 +655,15 @@ struct CategoryPickerView: View {
     /// pero NO es un selector: las fotos inspiran, no se eligen. Por eso el
     /// subtítulo y la línea de disponibilidad cambian de forma y de lugar
     /// según qué se esté mostrando.
-    private var showsExploreCarousel: Bool { !placeCards.isEmpty }
+    /// El esqueleto cuenta como carrusel: sin esto la línea de disponibilidad
+    /// se dibujaba ARRIBA (su lugar cuando no hay fotos) y empujaba las cards
+    /// unos 20pt hacia abajo, así que al cargar todo el bloque saltaba. Es la
+    /// misma razón por la que el subtítulo también tiene que ser el de explorar
+    /// desde el primer frame: lo que se promete y lo que llega deben ocupar el
+    /// mismo espacio.
+    private var showsExploreCarousel: Bool {
+        !placeCards.isEmpty || (isSkeleton && hidesCategoryGrid)
+    }
 
     private var subtitleAttributed: AttributedString {
         guard !showsExploreCarousel else { return exploreSubtitleAttributed }
