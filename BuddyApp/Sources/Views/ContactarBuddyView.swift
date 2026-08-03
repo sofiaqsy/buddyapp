@@ -1610,11 +1610,11 @@ private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
 
-    /// Fondo de la ficha: el mismo pie de la foto, repetido y desenfocado. Es
-    /// la foto y no una interpretación de ella, así que no puede salir un tono
-    /// que la imagen no tenga —el problema que sí tenía el color extraído—. Y
-    /// como vive en la banda y no sobre la imagen, no le quita ni un pixel de
-    /// visibilidad a la foto de arriba.
+    /// Fondo de la ficha: el mismo pie de la foto, repetido y visto a través del
+    /// vidrio del sistema. Es la foto y no una interpretación de ella, así que
+    /// no puede salir un tono que la imagen no tenga —el problema que sí tenía
+    /// el color extraído—. Y como vive en la banda y no sobre la imagen, no le
+    /// quita ni un pixel de visibilidad a la foto de arriba.
     @ViewBuilder private var plateBackground: some View {
         Color.clear
             .overlay(alignment: .bottom) {
@@ -1627,17 +1627,15 @@ private struct ExploreCarouselCard: View {
                     Rectangle().fill(Color.sandLight)
                 }
                 .frame(height: exploreCardPhotoHeight)
-                .blur(radius: 18)
-                // El blur muestrea fuera del borde; sin sobredimensionar, los
-                // lados quedan lavados.
-                .scaleEffect(1.25)
             }
             .clipped()
-            // 0.18 y no 0.62: al 62% la veladura era casi un color plano y la
-            // foto no se leía debajo. Queda un piso mínimo porque el desenfoque
-            // quita detalle pero no contraste, y el nombre va en ink — sin nada
-            // encima, sobre una foto oscura desaparece.
-            .overlay(exploreCardPaper.opacity(0.18))
+            // El material del sistema en vez de blur + veladura a mano: hace el
+            // desenfoque y además aporta vibrancia, o sea levanta el contraste
+            // de lo que va encima en lugar de solo taparlo. Es exactamente el
+            // caso para el que existe —una superficie translúcida CON algo real
+            // detrás—, que es lo que no teníamos cuando la ficha era un color.
+            // Radio 0: las esquinas ya las redondea el clip de la card.
+            .overlay { Color.clear.glassRounded(0) }
             .allowsHitTesting(false)
     }
 
