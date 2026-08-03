@@ -1379,66 +1379,108 @@ struct InicioView: View {
     // Sin ella, el pulso global de la red: "Un viajero está en Villa Rica",
     // "Villa Rica · un buddy ayudó a un viajero · hace 2h",
     // "Villa Rica · 3 buddies listos para ayudar". Máx. 10 filas.
+    /// Lista vertical de 3 filas, no un scroller horizontal. Razones, en orden
+    /// de peso:
+    ///
+    /// 1. Desplazarse en horizontal es un gesto de EXPLORACIÓN — promete ítems
+    ///    que se recorren y se eligen. Estas filas no son tocables ni llevan a
+    ///    ningún lado: prometía un destino inexistente. Apilar en vertical es
+    ///    gesto de LECTURA, que es lo que corresponde a una señal ambiente.
+    /// 2. Con el carrusel de lugares justo encima había dos zonas de scroll
+    ///    horizontal contiguas; un arrastre cerca del límite no dejaba claro
+    ///    cuál se movía.
+    /// 3. A 150pt por ítem entraban 2,4 filas en pantalla gastando ~100pt de
+    ///    alto. Tres filas apiladas ocupan ~96pt y entregan tres mensajes
+    ///    completos.
+    ///
+    /// Tres y no diez porque esto es una SEÑAL, y las señales saturan: al
+    /// tercer evento el usuario ya concluyó "hay gente ayudando". Las siete
+    /// restantes solo agregan carga y convierten la sección en un feed.
     private var communityLiveSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("COMUNIDAD VIVA")
-                .font(BT.eyebrow).tracking(1.5)
-                .foregroundStyle(Color.ink)
-                .padding(.horizontal, Spacing.edge)
+        VStack(alignment: .leading, spacing: 12) {
+            // El punto verde — el mismo de la línea de disponibilidad del
+            // carrusel — dice "ahora" sin gastar una palabra, y reutiliza
+            // vocabulario que el usuario ya vio más arriba en la pantalla.
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.onlineGreen)
+                    .frame(width: 6, height: 6)
+                Text("COMUNIDAD VIVA")
+                    .font(BT.eyebrow).tracking(1.5)
+                    .foregroundStyle(Color.ink)
+            }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
-                    let helped = communityPulse.filter { $0.type == "helped" }.prefix(10)
-                    ForEach(Array(helped.enumerated()), id: \.element.id) { idx, item in
-                        if idx > 0 { Divider().frame(height: 40).padding(.horizontal, 14) }
-                        communityRow(avatarUrl: item.buddyAvatarUrl, buddyName: item.buddyName, cityText: item.city, timeText: pulseTime(item))
-                    }
+            VStack(spacing: 12) {
+                ForEach(communityPulse.filter { $0.type == "helped" }.prefix(3)) { item in
+                    communityRow(item)
                 }
-                .padding(.horizontal, Spacing.edge)
             }
         }
+        .padding(.horizontal, Spacing.edge)
     }
 
+    /// Avatar 24pt (era 56): deja de ser un retrato y pasa a ser una viñeta con
+    /// cara — confirma que hay una persona real sin reclamar la atención que
+    /// corresponde a la acción. El tiempo va trailing formando columna: en iOS,
+    /// texto a la izquierda + timestamp a la derecha ya significa "actividad
+    /// reciente" (Mail, Mensajes), así que el patrón explica la sección sola.
     @ViewBuilder
-    private func communityRow(avatarUrl: String?, buddyName: String?, cityText: String, timeText: String?) -> some View {
-        HStack(spacing: 10) {
+    private func communityRow(_ item: APIPulseItem) -> some View {
+        let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
+        HStack(spacing: 8) {
             Circle()
                 .fill(Color.sandLight)
-                .frame(width: 56, height: 56)
+                .frame(width: 24, height: 24)
                 .overlay {
-                    if let urlStr = avatarUrl, let url = URL(string: urlStr) {
+                    if let urlStr = item.buddyAvatarUrl, let url = URL(string: urlStr) {
                         AsyncImage(url: url) { img in
                             img.resizable().scaledToFill()
                         } placeholder: { Color.sandLight }
-                        .frame(width: 56, height: 56)
+                        .frame(width: 24, height: 24)
                         .clipShape(Circle())
                     } else {
                         Image(systemName: "person.fill")
-                            .font(.system(size: 20))
+                            .font(.system(size: 11))
                             .foregroundStyle(Color.sand)
                     }
                 }
 
-            VStack(alignment: .leading, spacing: 3) {
-                (Text(buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy")
-                    .font(BT.footnoteBold).foregroundStyle(Color.ink)
-                 + Text(" ayudó en \(cityText)")
-                    .font(BT.caption1).foregroundStyle(Color.inkMuted))
-                    .lineLimit(2)
-                if let timeText {
-                    Text(timeText)
-                        .font(BT.caption2)
-                        .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
-                }
+            (Text(name).font(BT.footnoteBold).foregroundStyle(Color.ink)
+             + Text(pulseAction(item)).font(BT.caption1).foregroundStyle(Color.inkMuted))
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            if let t = pulseTimeCompact(item) {
+                Text(t)
+                    .font(BT.caption2)
+                    .foregroundStyle(Color.inkMuted)
+                    .lineLimit(1)
             }
         }
-        .frame(width: 150, alignment: .leading)
     }
 
-    private func pulseTime(_ item: APIPulseItem) -> String? {
-        guard item.type == "helped", item.at != nil else { return nil }
-        return timeAgo(item.at)
+    /// La ciudad solo cuando aporta. Si la actividad es del mismo lugar donde
+    /// está el usuario, nombrarla en cada fila es repetir un dato constante —
+    /// en el pulso real las 10 ayudas eran de la misma ciudad, así que la
+    /// sección decía "en Lima" diez veces. Cuando difiere sí informa.
+    private func pulseAction(_ item: APIPulseItem) -> String {
+        let here = resolvedLocation?.destinationName ?? locationService.currentCity
+        let sameCity = here?.caseInsensitiveCompare(item.city) == .orderedSame
+        return sameCity ? " ayudó a un viajero" : " ayudó a un viajero en \(item.city)"
+    }
+
+    /// Sin el "hace": en una columna de timestamps alineada a la derecha el
+    /// prefijo es redundante y solo ensancha la columna, robándole ancho a la
+    /// frase, que es lo que carga el mensaje.
+    private func pulseTimeCompact(_ item: APIPulseItem) -> String? {
+        guard item.type == "helped", let d = item.at else { return nil }
+        let s = max(0, Date().timeIntervalSince(d))
+        if s < 90     { return "ahora" }
+        if s < 3600   { return "\(Int(s / 60)) min" }
+        if s < 86400  { return "\(Int(s / 3600)) h" }
+        if s < 172800 { return "ayer" }
+        return "\(Int(s / 86400)) d"
     }
 
     /// Comunidad viva ahora siempre muestra el pulso global (últimas ayudas
