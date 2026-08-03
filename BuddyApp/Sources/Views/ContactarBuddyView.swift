@@ -1726,7 +1726,14 @@ private struct ExploreCarouselCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        .cardShadow()
+        // Borde en vez de sombra: con la ficha del color de la página, la sombra
+        // era lo único que insinuaba el recipiente y lo hacía por debajo, como
+        // un objeto levantado. Una línea de 0.5 en border lo cierra sin peso —
+        // se ve dónde termina la card sin que parezca apoyada encima.
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .strokeBorder(Color.border, lineWidth: 0.5)
+        )
     }
 }
 
