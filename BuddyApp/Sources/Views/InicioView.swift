@@ -1397,20 +1397,25 @@ struct InicioView: View {
     /// tercer evento el usuario ya concluyó "hay gente ayudando". Las siete
     /// restantes solo agregan carga y convierten la sección en un feed.
     private var communityLiveSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // 16 entre el header y las filas, 10 entre filas: con ambos a 12 las
+        // distancias eran iguales y el header se leía como un cuarto ítem de la
+        // lista. Separar la estructura del contenido agrupa las filas entre sí.
+        VStack(alignment: .leading, spacing: 16) {
             // El punto verde — el mismo de la línea de disponibilidad del
             // carrusel — dice "ahora" sin gastar una palabra, y reutiliza
             // vocabulario que el usuario ya vio más arriba en la pantalla.
+            // El título va al 75%: la sección acompaña al carrusel, no compite
+            // con él, y un eyebrow a intensidad plena lo contradecía.
             HStack(spacing: 6) {
                 Circle()
                     .fill(Color.onlineGreen)
                     .frame(width: 6, height: 6)
                 Text("COMUNIDAD VIVA")
                     .font(BT.eyebrow).tracking(1.5)
-                    .foregroundStyle(Color.ink)
+                    .foregroundStyle(Color.ink.opacity(0.75))
             }
 
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 ForEach(communityPulse.filter { $0.type == "helped" }.prefix(3)) { item in
                     communityRow(item)
                 }
@@ -1423,40 +1428,46 @@ struct InicioView: View {
     /// tres preguntas sin una palabra de más — quién (nombre), en qué
     /// (categoría) y dónde/cuándo (línea 2).
     ///
-    /// Avatar 28pt (era 56): sigue siendo viñeta y no retrato, apenas lo justo
-    /// para equilibrar un bloque de texto de dos líneas.
+    /// Avatar 24pt (era 56, luego 28). Se queda porque Buddy vende personas
+    /// reales y una cara comunica eso en 100ms — ningún texto lo hace igual de
+    /// rápido, aunque a este tamaño no se distingan los rasgos. Solo baja lo
+    /// suficiente para no encabezar la fila.
     @ViewBuilder
     private func communityRow(_ item: APIPulseItem) -> some View {
         let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
         HStack(spacing: 10) {
             Circle()
                 .fill(Color.sandLight)
-                .frame(width: 28, height: 28)
+                .frame(width: 24, height: 24)
                 .overlay {
                     if let urlStr = item.buddyAvatarUrl, let url = URL(string: urlStr) {
                         AsyncImage(url: url) { img in
                             img.resizable().scaledToFill()
                         } placeholder: { Color.sandLight }
-                        .frame(width: 28, height: 28)
+                        .frame(width: 24, height: 24)
                         .clipShape(Circle())
                     } else {
                         Image(systemName: "person.fill")
-                            .font(.system(size: 12))
+                            .font(.system(size: 11))
                             .foregroundStyle(Color.sand)
                     }
                 }
 
-            VStack(alignment: .leading, spacing: 2) {
-                (Text(name).font(BT.footnoteBold).foregroundStyle(Color.ink)
+            VStack(alignment: .leading, spacing: 3) {
+                // Medium y no semibold: el ojo necesita encontrar el sujeto
+                // rápido, pero el nombre en negrita plena es la firma visual de
+                // una red social y hacía que la fila se leyera como el post de
+                // alguien en vez de como un hecho de actividad.
+                (Text(name).font(BT.footnote.weight(.medium)).foregroundStyle(Color.ink)
                  + Text(" \(pulseAction(item))").font(BT.caption1).foregroundStyle(Color.ink))
                     .lineLimit(1)
 
-                // La ciudad vuelve a mostrarse siempre, al revés de lo que
-                // hacía la versión de una línea. Antes iba DENTRO de la frase y
-                // repetirla en cada fila era ruido; acá vive en una línea de
-                // metadatos apagada, donde el costo de repetición es mínimo y a
-                // cambio responde el "¿dónde ocurrió?".
-                Text("\(item.city) · \(pulseTimeAgo(item))")
+                // Tiempo primero: es la señal de vitalidad, y además es el token
+                // que VARÍA entre filas. Con la ciudad al frente las tres decían
+                // "Lima ·" y ese borde izquierdo repetido se percibe como una
+                // plantilla; con el tiempo al frente se perciben tres eventos
+                // distintos. La ciudad queda igual de disponible, sin anclar.
+                Text("\(pulseTimeAgo(item)) · \(item.city)")
                     .font(BT.caption2)
                     .foregroundStyle(Color.inkMuted)
                     .lineLimit(1)
@@ -1466,23 +1477,31 @@ struct InicioView: View {
         }
     }
 
-    /// Frase natural por categoría. El verbo cambia con el tipo de ayuda para
-    /// que tres filas seguidas se lean como tres hechos distintos y no como una
-    /// plantilla rellenada. `general` y los casos sin categoría caen en formas
-    /// genéricas — nunca se inventa un detalle que el dato no tiene.
+    /// Verbo + complemento corto, SIEMPRE la misma forma. El paralelismo importa
+    /// más que la precisión: tres filas con la misma estructura gramatical se
+    /// procesan como un conjunto de un vistazo, mientras que tres formas
+    /// distintas obligan a re-parsear cada línea.
+    ///
+    /// Además cortas: "resolvió una consulta sobre transporte" era lenguaje de
+    /// mesa de ayuda —sonaba a ticket cerrado, no a alguien ayudando— y con
+    /// lineLimit(1) se truncaba justo la acción, que es lo que carga el mensaje,
+    /// en cuanto el usuario subía el Dynamic Type.
+    ///
+    /// `general` y los casos sin categoría caen en formas genéricas: nunca se
+    /// inventa un detalle que el dato no tiene.
     private func pulseAction(_ item: APIPulseItem) -> String {
         switch item.category {
-        case "transport":       return "resolvió una consulta sobre transporte"
+        case "transport":         return "ayudó con transporte"
         case "food", "food_recs": return "recomendó dónde comer"
-        case "accommodation":   return "ayudó con alojamiento"
-        case "activities":      return "recomendó qué hacer"
-        case "shopping":        return "ayudó con compras"
-        case "translation":     return "ayudó con una traducción"
-        case "emergency":       return "asistió una urgencia"
-        case "recommendations": return "compartió recomendaciones"
-        case "airport_pickup":  return "recibió a un viajero en el aeropuerto"
-        case "city_tour":       return "acompañó a recorrer la ciudad"
-        default:                return "resolvió una consulta"
+        case "accommodation":     return "ayudó con alojamiento"
+        case "activities":        return "recomendó qué hacer"
+        case "shopping":          return "ayudó con compras"
+        case "translation":       return "tradujo para un viajero"
+        case "emergency":         return "asistió una urgencia"
+        case "recommendations":   return "dio recomendaciones"
+        case "airport_pickup":    return "recibió en el aeropuerto"
+        case "city_tour":         return "acompañó por la ciudad"
+        default:                  return "ayudó a un viajero"
         }
     }
 
