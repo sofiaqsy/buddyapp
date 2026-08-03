@@ -1210,6 +1210,10 @@ struct PlaceGuideDetailSheet: View {
                 gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
                 await MainActor.run {
                     Haptic.success()
+                    // Antes de avisar: si el cache no se limpia, las pantallas
+                    // recargan la lista correcta pero pintan las miniaturas
+                    // viejas desde disco y parece que no pasó nada.
+                    ImageCache.shared.clear()
                     // El Home y el perfil muestran estas mismas fotos y no
                     // tienen forma de enterarse solos: sin este aviso la foto
                     // borrada seguía ahí hasta el próximo arranque.

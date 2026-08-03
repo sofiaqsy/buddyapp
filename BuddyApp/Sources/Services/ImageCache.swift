@@ -42,6 +42,24 @@ final class ImageCache {
         }
     }
 
+    /// Vacía memoria y disco.
+    ///
+    /// Hace falta porque las fotos del memoir viven en rutas recicladas
+    /// —page_0.jpg, page_1.jpg…— reescritas con upsert: al borrar una foto, la
+    /// que queda en ese índice cambia de contenido sin cambiar de URL, y el
+    /// cache seguiría sirviendo la anterior. Es a todo o nada porque NSCache no
+    /// se puede recorrer para borrar por prefijo; se llama solo cuando las
+    /// fotos de un lugar cambiaron, que es raro, y el costo es volver a bajar
+    /// unas miniaturas.
+    func clear() {
+        memory.removeAllObjects()
+        Task(priority: .utility) {
+            let files = (try? FileManager.default.contentsOfDirectory(at: diskURL, includingPropertiesForKeys: nil)) ?? []
+            for file in files { try? FileManager.default.removeItem(at: file) }
+            print("🧹 [ImageCache] limpiado — \(files.count) archivo(s)")
+        }
+    }
+
     func load(_ url: URL) async -> UIImage? {
         if let cached = get(url) { return cached }
         guard let (data, _) = try? await URLSession.shared.data(from: url),
