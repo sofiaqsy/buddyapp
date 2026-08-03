@@ -1610,6 +1610,16 @@ private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
 
+    /// Tinte tomado del pie de la propia foto. Arranca con el valor cacheado
+    /// —si esta foto ya pasó por el carrusel, el color entra en el primer
+    /// frame— y si no, llega con la imagen.
+    @State private var edgeTint: Color? = nil
+
+    /// El tramo medio del degradado. Sin muestra todavía es el papel: la card se
+    /// ve exactamente como antes y el color aparece cuando está listo, nunca al
+    /// revés.
+    private var fadeTint: Color { edgeTint ?? exploreCardPaper }
+
     /// Quien recomienda el lugar, no cuánta gente lo conoce: la recomendación
     /// de una persona concreta pesa más como prueba social que un conteo, y
     /// encadena con el subtítulo ("Lugares que recomiendan los buddies de
@@ -1625,7 +1635,14 @@ private struct ExploreCarouselCard: View {
         // oscurecerla justo donde suele estar el lugar; con la ficha aparte la
         // foto se ve entera y el texto no depende de lo que haya detrás.
         VStack(spacing: 0) {
-            CachedImage(urlString: photo.url) { img in
+            CachedImage(urlString: photo.url) { image in
+                Task {
+                    guard let sampled = await EdgeColorSampler.sample(image, for: photo.url) else { return }
+                    // Animado: el color entra cuando la foto ya se está viendo,
+                    // y un cambio de fondo instantáneo se lee como parpadeo.
+                    withAnimation(.easeOut(duration: 0.4)) { edgeTint = sampled }
+                }
+            } content: { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
@@ -1641,13 +1658,19 @@ private struct ExploreCarouselCard: View {
             .overlay(alignment: .bottom) {
                 LinearGradient(
                     stops: [
-                        .init(color: exploreCardPaper.opacity(0),    location: 0),
-                        .init(color: exploreCardPaper.opacity(0.04), location: 0.30),
-                        .init(color: exploreCardPaper.opacity(0.14), location: 0.50),
-                        .init(color: exploreCardPaper.opacity(0.34), location: 0.66),
-                        .init(color: exploreCardPaper.opacity(0.62), location: 0.79),
-                        .init(color: exploreCardPaper.opacity(0.88), location: 0.90),
-                        .init(color: exploreCardPaper,               location: 0.97),
+                        // El tinte manda mientras la foto todavía se ve, y cede
+                        // a papel antes del borde: así la transición sale del
+                        // color real de la imagen —se siente continua— pero
+                        // TERMINA siempre en canvas. Si el color llegara hasta
+                        // el final, cada card cerraría en un tono distinto y el
+                        // carrusel se volvería un mosaico contra la página.
+                        .init(color: fadeTint.opacity(0),          location: 0),
+                        .init(color: fadeTint.opacity(0.06),       location: 0.30),
+                        .init(color: fadeTint.opacity(0.20),       location: 0.50),
+                        .init(color: fadeTint.opacity(0.46),       location: 0.66),
+                        .init(color: fadeTint.opacity(0.74),       location: 0.79),
+                        .init(color: exploreCardPaper.opacity(0.92), location: 0.90),
+                        .init(color: exploreCardPaper,             location: 0.97),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -1728,6 +1751,7 @@ private struct ExploreCarouselCard: View {
             .background(exploreCardPaper)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { if edgeTint == nil { edgeTint = EdgeColorSampler.cached(photo.url) } }
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         // Borde en vez de sombra: con la ficha del color de la página, la sombra
         // era lo único que insinuaba el recipiente y lo hacía por debajo, como
