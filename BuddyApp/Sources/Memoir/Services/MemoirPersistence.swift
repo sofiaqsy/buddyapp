@@ -64,15 +64,13 @@ final class MemoirPersistence {
         try? data.write(to: bookFile(for: journeyId), options: .atomic)
     }
 
-    /// Quita la página en esa posición del libro local.
+    /// Quita del libro local la página que el servidor conoce como `page_N`.
     ///
-    /// El índice es el mismo page_index que usa el servidor: las páginas se
-    /// suben con `page_N` según su posición en este arreglo. Sin esto, borrar
-    /// una foto desde la ficha del lugar la quitaría del server pero la próxima
-    /// publicación desde este teléfono la volvería a subir — el libro local es
-    /// la fuente de verdad al publicar.
-    /// El índice que llega es el `page_index` del SERVIDOR, que no es el del
-    /// libro: al publicar se filtran las páginas vacías, así que basta una
+    /// ESTE ES EL ÚNICO PUNTO donde un índice del backend se traduce a un
+    /// índice del libro. Cualquier flujo nuevo que reciba un page_index del
+    /// servidor debe pasar por acá en vez de indexar `pages` directo.
+    ///
+    /// Hace falta porque el índice que llega NO es el del libro: al publicar se filtran las páginas vacías, así que basta una
     /// página sin contenido antes para que los dos se desfasen. Traducirlo es
     /// obligatorio — sin esto se borraba la página equivocada, la foto real
     /// sobrevivía en el libro y la siguiente publicación la resucitaba.

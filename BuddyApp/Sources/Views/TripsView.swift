@@ -720,7 +720,7 @@ struct TripFeedCard: View {
 
     /// Hay al menos una portada con contenido real (no en blanco)
     private var hasPublishableContent: Bool {
-        pages.contains { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+        pages.contains(where: MemoirPersistence.isPublishable)
     }
 
     init(journey: APIJourney, onEdit: @escaping (Int) -> Void, onMapTap: (() -> Void)? = nil, buddyAvatarUrl: String? = nil, buddyFirstName: String? = nil, externalPublishTrigger: Binding<Bool>? = nil, onPublishTap: (() -> Void)? = nil, showBuddyHelp: Bool = true) {
@@ -1215,7 +1215,7 @@ struct TripPageThumbnailFeed: View {
     /// Una página con thumbnail pero SIN items ni fondo es una portada en blanco
     /// (no contenido real) → la tratamos como vacía.
     private var pageHasContent: Bool {
-        !page.itemSnapshots.isEmpty || page.backgroundImageFile != nil
+        MemoirPersistence.isPublishable(page)
     }
     /// Página sin contenido propio → mostramos la foto del destino de fondo
     private var showsCoverFallback: Bool {
@@ -1335,8 +1335,7 @@ struct TripEditorSheet: View {
                     // crea el init, edítala en vez de añadir otra (evita una página
                     // default fantasma antes de la foto recién subida).
                     let onlyEmptyPage = bookVM.pages.count == 1
-                        && bookVM.pages[0].itemSnapshots.isEmpty
-                        && bookVM.pages[0].backgroundImageFile == nil
+                        && !MemoirPersistence.isPublishable(bookVM.pages[0])
                     if onlyEmptyPage {
                         bookVM.enterEdit(at: 0)
                     } else {
