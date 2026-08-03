@@ -1290,21 +1290,41 @@ struct TripPageThumbnailFeed: View {
 struct TripEditorSheet: View {
     let journey: APIJourney
     let initialPage: Int
+    /// Sumar una foto a una recomendación publica en el mismo gesto: el lugar la
+    /// muestra recién cuando el journey está publicado, así que dejarla guardada
+    /// sin publicar sería trabajo que el usuario cree hecho y no se ve.
+    let publishesOnSave: Bool
     let onDismiss: () -> Void
 
     @StateObject private var bookVM: TripBookViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var didStart = false
 
-    init(journey: APIJourney, initialPage: Int, onDismiss: @escaping () -> Void) {
+    init(journey: APIJourney, initialPage: Int, publishesOnSave: Bool = false, onDismiss: @escaping () -> Void) {
         self.journey = journey
         self.initialPage = initialPage
+        self.publishesOnSave = publishesOnSave
         self.onDismiss = onDismiss
         _bookVM = StateObject(wrappedValue: TripBookViewModel(journeyId: journey.id))
     }
 
+    private func publish() {
+        // Mismo filtro que el resto de las publicaciones: las páginas vacías no
+        // llegan al servidor.
+        let pages = bookVM.pages.filter { !$0.itemSnapshots.isEmpty || $0.backgroundImageFile != nil }
+        let jId = journey.id
+        Task {
+            try? await APIClient.shared.publishJourney(journeyId: jId, tripId: journey.tripId, pages: pages)
+            await MainActor.run {
+                Haptic.success()
+                NotificationCenter.default.post(name: .journeyPublished, object: jId)
+            }
+        }
+    }
+
     var body: some View {
-        TripCanvasEditorView(vm: bookVM.editingVM, bookVM: bookVM)
+        TripCanvasEditorView(vm: bookVM.editingVM, bookVM: bookVM,
+                             onPublish: publishesOnSave ? publish : nil)
             .onAppear {
                 // Guard: onAppear puede dispararse 2x (fullScreenCover/NavigationStack)
                 // → sin esto, "Nueva portada" creaba 2 páginas.

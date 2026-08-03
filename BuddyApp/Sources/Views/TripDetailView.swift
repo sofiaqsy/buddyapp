@@ -952,6 +952,21 @@ struct PlaceGuideDetailSheet: View {
     /// desde las visitas de la galería.
     private var allPhotos: [String] { gallery?.visits.flatMap(\.photos) ?? [] }
 
+    /// Mi propia recomendación de este lugar, si soy buddy aprobado.
+    ///
+    /// Sale de la galería y no de una llamada aparte: cada visita ya trae
+    /// traveler_id y is_buddy —que el backend calcula contra buddy_profile con
+    /// verification_status='approved'—, así que las dos condiciones se leen de
+    /// datos que esta vista ya tenía cargados. Su journeyId es al que se le
+    /// suma la foto: la recomendación existe, no hay que crear ninguna.
+    private var myBuddyRecommendation: APIPlaceVisit? {
+        guard let me = Session.travelerId else { return nil }
+        return gallery?.visits.first { $0.travelerId == me && $0.isBuddy == true }
+    }
+
+    @State private var editingJourney: APIJourney? = nil
+    @State private var isOpeningEditor = false
+
     var body: some View {
         // Mismo espacio que ocupaba la lista de tarjetas (~265pt) — nada
         // aquí puede darse el lujo de respirar como en una hoja aparte.
@@ -992,6 +1007,17 @@ struct PlaceGuideDetailSheet: View {
         }
         .sheet(isPresented: $showFullGallery) {
             PlaceFullGallerySheet(placeName: place.name, photos: allPhotos)
+        }
+        .fullScreenCover(item: $editingJourney) { journey in
+            // publishesOnSave: acá no existe el paso posterior de "publicar el
+            // trip" — la foto se suma a algo que YA está publicado, así que el
+            // único gesto disponible tiene que dejarla visible.
+            TripEditorSheet(journey: journey, initialPage: -1, publishesOnSave: true) {}
+                .onDisappear {
+                    Task {
+                        gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
+                    }
+                }
         }
     }
 
@@ -1076,13 +1102,61 @@ struct PlaceGuideDetailSheet: View {
 
     // MARK: Fotos
 
+    /// Mismo tamaño que las miniaturas para no romper la fila, y primero: es la
+    /// acción, no una foto más.
+    @ViewBuilder
+    private var addPhotoTile: some View {
+        if let mine = myBuddyRecommendation {
+            Button {
+                Haptic.medium()
+                guard !isOpeningEditor else { return }
+                isOpeningEditor = true
+                Task {
+                    // El editor necesita el APIJourney completo (tripId incluido,
+                    // que publishJourney manda); la galería solo trae su id.
+                    let journey = try? await APIClient.shared.fetchJourney(id: mine.journeyId)
+                    await MainActor.run {
+                        isOpeningEditor = false
+                        editingJourney = journey
+                    }
+                }
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.surface)
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.border, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                    if isOpeningEditor {
+                        ProgressView().tint(Color.inkMuted)
+                    } else {
+                        VStack(spacing: 6) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 20, weight: .light))
+                                .foregroundStyle(Color.brand)
+                            Text("Añadir foto")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                    }
+                }
+                .frame(width: 115, height: 115)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     @ViewBuilder
     private var fotosTab: some View {
         VStack(alignment: .leading, spacing: 10) {
             if isLoadingGallery {
                 ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
             } else if allPhotos.isEmpty {
-                emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
+                if myBuddyRecommendation != nil {
+                    HStack { addPhotoTile; Spacer() }.padding(.horizontal, 20)
+                } else {
+                    emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
+                }
             } else {
                 if allPhotos.count > 6 {
                     HStack {
@@ -1101,6 +1175,8 @@ struct PlaceGuideDetailSheet: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
+                        addPhotoTile
+
                         ForEach(Array(allPhotos.prefix(12).enumerated()), id: \.offset) { _, url in
                             Button { showFullGallery = true } label: {
                                 CachedImage(urlString: url) { img in

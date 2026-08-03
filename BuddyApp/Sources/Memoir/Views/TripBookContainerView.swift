@@ -338,6 +338,11 @@ private enum ActivePanel: Equatable { case none, edge, border, layout, crop }
 struct TripCanvasEditorView: View {
     @ObservedObject var vm: CanvasViewModel
     @ObservedObject var bookVM: TripBookViewModel
+    /// Cuando el editor se abre para sumar una foto a una recomendación, guardar
+    /// no alcanza: la foto tiene que quedar publicada o el lugar no la muestra.
+    /// El botón cambia de nombre porque cambia lo que hace — decir "Guardar" y
+    /// además publicar sería mentirle al usuario sobre el alcance de su toque.
+    var onPublish: (() -> Void)? = nil
 
     @State private var canvasSize: CGSize = .zero
     @State private var photoPickerItems: [PhotosPickerItem] = []
@@ -556,10 +561,16 @@ struct TripCanvasEditorView: View {
 
             pillDivider
 
-            Button { activePanel = .none; bookVM.exitEdit(canvasSize: canvasSize) } label: {
+            Button {
+                activePanel = .none
+                bookVM.exitEdit(canvasSize: canvasSize)
+                onPublish?()
+            } label: {
                 VStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill").font(.system(size: 20, weight: .semibold))
-                    Text("Guardar").font(.system(size: 10, weight: .semibold))
+                    Image(systemName: onPublish == nil ? "checkmark.circle.fill" : "arrow.up.circle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                    Text(onPublish == nil ? "Guardar" : "Publicar")
+                        .font(.system(size: 10, weight: .semibold))
                 }
                 .foregroundStyle(Color.teal).frame(width: 68, height: 60)
             }.buttonStyle(.plain)
