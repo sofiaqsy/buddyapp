@@ -64,16 +64,28 @@ final class MemoirPersistence {
         try? data.write(to: bookFile(for: journeyId), options: .atomic)
     }
 
-    /// Quita del libro local la página que el servidor conoce como `page_N`.
+    /// Quita una página del libro por su UUID, que es como la identifica el
+    /// servidor desde la migración de client_page_id.
     ///
-    /// ESTE ES EL ÚNICO PUNTO donde un índice del backend se traduce a un
-    /// índice del libro. Cualquier flujo nuevo que reciba un page_index del
-    /// servidor debe pasar por acá en vez de indexar `pages` directo.
+    /// Preferir SIEMPRE esta sobre la variante por índice: el id no cambia al
+    /// reordenar ni al filtrarse una página vacía al publicar.
+    func removePage(id: UUID, journeyId: String) {
+        var pages = load(journeyId: journeyId)
+        guard let index = pages.firstIndex(where: { $0.id == id }) else {
+            print("📓 [removePage] journeyId=\(journeyId) id=\(id) no está en el libro (páginas=\(pages.count))")
+            return
+        }
+        pages.remove(at: index)
+        save(pages, journeyId: journeyId)
+        print("📓 [removePage] journeyId=\(journeyId) id=\(id) → quedan \(pages.count) página(s)")
+    }
+
+    /// Variante por posición, SOLO para fotos anteriores a client_page_id.
     ///
-    /// Hace falta porque el índice que llega NO es el del libro: al publicar se filtran las páginas vacías, así que basta una
-    /// página sin contenido antes para que los dos se desfasen. Traducirlo es
-    /// obligatorio — sin esto se borraba la página equivocada, la foto real
-    /// sobrevivía en el libro y la siguiente publicación la resucitaba.
+    /// Traduce el índice del servidor al del libro porque no son el mismo: al
+    /// publicar se filtran las páginas vacías, así que basta una página sin
+    /// contenido antes para desfasarlos. Sin esta traducción se borraba la
+    /// página equivocada y la siguiente publicación resucitaba la foto.
     func removePublishedPage(at publishedIndex: Int, journeyId: String) {
         var pages = load(journeyId: journeyId)
         let published = pages.indices.filter { MemoirPersistence.isPublishable(pages[$0]) }

@@ -955,8 +955,13 @@ struct PlaceGuideDetailSheet: View {
         let url: String
         let journeyId: String
         let pageIndex: Int?
+        /// UUID de la página en el libro. Estable; es por donde va el borrado.
+        /// Nil en fotos publicadas antes de la migración, que solo tienen índice.
+        let clientPageId: String?
         let isMine: Bool
-        var id: String { "\(journeyId)#\(pageIndex.map(String.init) ?? url)" }
+        var id: String { "\(journeyId)#\(clientPageId ?? pageIndex.map(String.init) ?? url)" }
+        /// Se puede borrar si el servidor dio con qué referirse a ella.
+        var isDeletable: Bool { clientPageId != nil || pageIndex != nil }
     }
 
     /// Fotos del lugar con LAS MÍAS PRIMERO. Un buddy entra a esta ficha a ver
@@ -971,10 +976,11 @@ struct PlaceGuideDetailSheet: View {
             // sin página — se ven igual, solo que no se pueden borrar.
             if let pages = visit.photoPages, !pages.isEmpty {
                 return pages.map { GalleryPhoto(url: $0.url, journeyId: visit.journeyId,
-                                                pageIndex: $0.pageIndex, isMine: mine) }
+                                                pageIndex: $0.pageIndex, clientPageId: $0.clientPageId,
+                                                isMine: mine) }
             }
             return visit.photos.map { GalleryPhoto(url: $0, journeyId: visit.journeyId,
-                                                   pageIndex: nil, isMine: mine) }
+                                                   pageIndex: nil, clientPageId: nil, isMine: mine) }
         }
         return visits.filter { $0.travelerId == me }.flatMap(flatten)
              + visits.filter { $0.travelerId != me }.flatMap(flatten)
@@ -1197,16 +1203,21 @@ struct PlaceGuideDetailSheet: View {
     }
 
     private func deletePhoto(_ photo: GalleryPhoto) {
-        guard let pageIndex = photo.pageIndex, !isDeletingPhoto else { return }
+        guard photo.isDeletable, !isDeletingPhoto else { return }
         photoPendingDeletion = nil
         isDeletingPhoto = true
         Task {
             do {
-                try await APIClient.shared.deleteJourneyPage(journeyId: photo.journeyId, pageIndex: pageIndex)
-                // El libro local también: es la fuente de verdad al publicar, así
-                // que si la página sigue en disco la próxima publicación desde
-                // este teléfono volvería a subir la foto recién borrada.
-                await MainActor.run { MemoirPersistence.shared.removePublishedPage(at: pageIndex, journeyId: photo.journeyId) }
+                // El libro local también se toca: sigue siendo lo que se sube al
+                // publicar, así que una página que quede en disco volvería.
+                if let clientPageId = photo.clientPageId, let uuid = UUID(uuidString: clientPageId) {
+                    try await APIClient.shared.deleteJourneyPage(journeyId: photo.journeyId, clientPageId: clientPageId)
+                    await MainActor.run { MemoirPersistence.shared.removePage(id: uuid, journeyId: photo.journeyId) }
+                } else if let pageIndex = photo.pageIndex {
+                    // Foto anterior a client_page_id: no queda otra que el índice.
+                    try await APIClient.shared.deleteJourneyPage(journeyId: photo.journeyId, pageIndex: pageIndex)
+                    await MainActor.run { MemoirPersistence.shared.removePublishedPage(at: pageIndex, journeyId: photo.journeyId) }
+                }
                 gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
                 await MainActor.run {
                     Haptic.success()
@@ -1222,7 +1233,7 @@ struct PlaceGuideDetailSheet: View {
                     NotificationCenter.default.post(name: .placePhotosChanged, object: photo.journeyId)
                 }
             } catch {
-                print("❌ [deletePhoto] journey=\(photo.journeyId) page=\(pageIndex): \(error)")
+                print("❌ [deletePhoto] journey=\(photo.journeyId) page=\(photo.clientPageId ?? photo.pageIndex.map(String.init) ?? "?"): \(error)")
             }
             await MainActor.run { isDeletingPhoto = false }
         }
@@ -1275,7 +1286,7 @@ struct PlaceGuideDetailSheet: View {
                             // long-press y no un botón visible porque borrar es
                             // excepcional y no debe competir con mirar.
                             .contextMenu {
-                                if photo.isMine, photo.pageIndex != nil {
+                                if photo.isMine, photo.isDeletable {
                                     Button(role: .destructive) {
                                         photoPendingDeletion = photo
                                     } label: {

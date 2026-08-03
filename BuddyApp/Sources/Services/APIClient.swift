@@ -420,6 +420,16 @@ final class APIClient {
 
     /// Borra UNA foto del memoir. El server valida que seas el dueño del
     /// journey; acá no se chequea nada porque el cliente no es la autoridad.
+    /// Borra una foto por la identidad estable de su página.
+    ///
+    /// La vía por índice sigue existiendo para las filas anteriores a la
+    /// migración, que no tienen client_page_id, pero cualquier foto publicada
+    /// desde esta versión debe borrarse por acá: el índice se mueve, el id no.
+    func deleteJourneyPage(journeyId: String, clientPageId: String) async throws {
+        try await requestVoid(path: "/journeys/\(journeyId)/pages/by-client/\(clientPageId)", method: "DELETE")
+        print("🗑️ [APIClient] deleteJourneyPage journey=\(journeyId.prefix(8)) client=\(clientPageId.prefix(8))")
+    }
+
     func deleteJourneyPage(journeyId: String, pageIndex: Int) async throws {
         try await requestVoid(path: "/journeys/\(journeyId)/pages/\(pageIndex)", method: "DELETE")
         print("🗑️ [APIClient] deleteJourneyPage journey=\(journeyId.prefix(8)) page=\(pageIndex)")
@@ -557,7 +567,7 @@ final class APIClient {
         print("⬆️ [uploadAndSavePages] journeyId=\(journeyId) pages.count=\(pages.count)")
 
         // Recolectar los JPEG de cada página antes de armar el multipart
-        var parts: [(index: Int, data: Data)] = []
+        var parts: [(index: Int, clientPageId: String, data: Data)] = []
         for (index, page) in pages.enumerated() {
             print("⬆️ [uploadAndSavePages] page[\(index)] id=\(page.id) thumbFile=\(page.thumbnailFileName ?? "NIL")")
             guard let filename = page.thumbnailFileName else {
@@ -573,7 +583,7 @@ final class APIClient {
                 continue
             }
             print("⬆️ [uploadAndSavePages] page[\(index)] queued \(data.count) bytes")
-            parts.append((index: index, data: data))
+            parts.append((index: index, clientPageId: page.id.uuidString, data: data))
         }
 
         guard !parts.isEmpty else {
@@ -589,6 +599,13 @@ final class APIClient {
             body.append("Content-Disposition: form-data; name=\"page_\(part.index)\"; filename=\"page_\(part.index).jpg\"\r\n".data(using: .utf8)!)
             body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
             body.append(part.data)
+            body.append("\r\n".data(using: .utf8)!)
+            // El id de la página viaja al lado de su archivo: con él el servidor
+            // actualiza esa fila en su sitio en vez de borrar el journey entero
+            // y reinsertarlo, que era lo que resucitaba fotos ya borradas.
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"client_page_id_\(part.index)\"\r\n\r\n".data(using: .utf8)!)
+            body.append(part.clientPageId.data(using: .utf8)!)
             body.append("\r\n".data(using: .utf8)!)
         }
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)

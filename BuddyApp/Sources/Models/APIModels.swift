@@ -472,11 +472,16 @@ struct APIPlaceVisit: Decodable, Identifiable {
     var id: String { journeyId }
 }
 
-/// Una foto del memoir con su identidad. page_index es lo único que identifica
-/// una foto dentro de un journey — la URL en Storage se deriva de él.
+/// Una foto del memoir con su identidad.
+///
+/// clientPageId es el UUID de la página en el libro del cliente y no cambia
+/// nunca; pageIndex sí se mueve al reordenar o al filtrarse una página vacía al
+/// publicar. Es opcional porque las filas escritas antes de la migración no lo
+/// tienen: esas se pueden ver, pero no borrar por identidad.
 struct APIPlacePhoto: Decodable, Identifiable, Hashable {
     let url: String
     let pageIndex: Int
+    let clientPageId: String?
 
     var id: String { "\(url)#\(pageIndex)" }
 }
