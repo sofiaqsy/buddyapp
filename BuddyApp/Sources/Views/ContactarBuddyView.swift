@@ -1617,54 +1617,52 @@ private struct ExploreCarouselCard: View {
                 Rectangle().fill(Color.sandLight)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 178)
+            .frame(height: 176)
             .clipped()
-            // La foto se disuelve en la ficha en vez de terminar en un corte
-            // recto. Es el mismo degradado de antes invertido: aquel oscurecía
-            // la imagen para poder escribir encima; este solo la entrega al
-            // papel, sin tapar nada que importe.
+            // Arranca abajo y sube despacio: el degradado ya no tiene que hacer
+            // legible ningún texto —el texto vive en la ficha—, solo evitar que
+            // la foto termine en un corte recto. Con las paradas repartidas el
+            // blanco recién se nota en el último tercio y la imagen sigue siendo
+            // la protagonista.
             .overlay(alignment: .bottom) {
                 LinearGradient(
-                    colors: [Color.surface.opacity(0), Color.surface],
+                    stops: [
+                        .init(color: Color.surface.opacity(0),    location: 0),
+                        .init(color: Color.surface.opacity(0.25), location: 0.55),
+                        .init(color: Color.surface.opacity(0.75), location: 0.82),
+                        .init(color: Color.surface,               location: 1),
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 52)
+                .frame(height: 44)
             }
 
+            // Una sola composición, no tres bloques: sin reglas ni divisores.
+            // La jerarquía la hacen el color y el aire —etiqueta tenue, nombre
+            // en ink, autor apagado— que es como separan Apple Photos o Arc.
+            // Las líneas que había antes dibujaban cajas y peleaban con eso.
             VStack(spacing: 0) {
-                Spacer(minLength: 0)
-
                 if let category = place.category, !category.isEmpty {
-                    HStack(spacing: 6) {
-                        rule
-                        Text(category.uppercased())
-                            .font(BT.eyebrow)
-                            .tracking(1.1)
-                            .foregroundStyle(Color.brand)
-                            .lineLimit(1)
-                            .fixedSize()
-                        rule
-                    }
-                    .padding(.bottom, 8)
+                    // Caption regular y no eyebrow semibold: es contexto, no
+                    // título. El tracking abierto la mantiene legible en tenue.
+                    Text(category.uppercased())
+                        .font(BT.caption2)
+                        .tracking(1.6)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .padding(.bottom, 7)
                 }
 
-                // Tokens del sistema, no tipografía propia: la composición de la
-                // ficha (categoría, remates, regla, autor) ya la distingue, y
-                // no hace falta un tamaño ni una familia que la app no usa.
                 Text(place.name)
                     .font(BT.footnoteBold)
                     .foregroundStyle(Color.ink)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.8)
 
-                Spacer(minLength: 0)
-
-                Rectangle()
-                    .fill(Color.border)
-                    .frame(height: 1)
-                    .padding(.bottom, 8)
+                Spacer(minLength: 10)
 
                 HStack(spacing: 6) {
                     if let author = place.coverAuthorName {
@@ -1680,17 +1678,20 @@ private struct ExploreCarouselCard: View {
                                         .foregroundStyle(Color.ink))
                             }
                         }
-                        .frame(width: 20, height: 20)
+                        .frame(width: 22, height: 22)
                         .clipShape(Circle())
                     }
 
+                    // Antes el nombre iba en brand y competía de igual a igual
+                    // con el del lugar. Toda la línea baja a inkMuted; el nombre
+                    // se distingue solo por peso, que alcanza a esta escala.
                     if let author = authorFirstName {
                         Text("Recomendado por ")
                             .font(BT.caption2)
                             .foregroundStyle(Color.inkMuted)
                         + Text(author)
                             .font(BT.caption2.weight(.semibold))
-                            .foregroundStyle(Color.brand)
+                            .foregroundStyle(Color.inkMuted)
                     } else {
                         Text("Recomendado por la comunidad")
                             .font(BT.caption2)
@@ -1700,22 +1701,17 @@ private struct ExploreCarouselCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.surface)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.border, lineWidth: 1))
-    }
-
-    /// Las líneas que flanquean la categoría. Sin ellas el eyebrow flotaba sobre
-    /// el nombre; con ellas la ficha arranca con un remate y se lee compuesta.
-    private var rule: some View {
-        Rectangle()
-            .fill(Color.border)
-            .frame(height: 1)
+        // Sin stroke: el borde dibujaba la card sobre el fondo. Con radio mayor
+        // y solo la sombra del sistema, se apoya en él.
+        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .cardShadow()
     }
 }
 
