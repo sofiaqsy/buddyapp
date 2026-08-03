@@ -1419,19 +1419,11 @@ struct InicioView: View {
         // distancias eran iguales y el header se leía como un cuarto ítem de la
         // lista. Separar la estructura del contenido agrupa las filas entre sí.
         VStack(alignment: .leading, spacing: 16) {
-            // El punto verde — el mismo de la línea de disponibilidad del
-            // carrusel — dice "ahora" sin gastar una palabra, y reutiliza
-            // vocabulario que el usuario ya vio más arriba en la pantalla.
             // El título va al 75%: la sección acompaña al carrusel, no compite
             // con él, y un eyebrow a intensidad plena lo contradecía.
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Color.onlineGreen)
-                    .frame(width: 6, height: 6)
-                Text("COMUNIDAD VIVA")
-                    .font(BT.eyebrow).tracking(1.5)
-                    .foregroundStyle(Color.ink.opacity(0.75))
-            }
+            Text("COMUNIDAD VIVA")
+                .font(BT.eyebrow).tracking(1.5)
+                .foregroundStyle(Color.ink.opacity(0.75))
 
             VStack(spacing: 10) {
                 ForEach(communityPulse.filter { $0.type == "helped" }.prefix(3)) { item in
