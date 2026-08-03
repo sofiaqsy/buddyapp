@@ -1435,7 +1435,9 @@ struct InicioView: View {
     @ViewBuilder
     private func communityRow(_ item: APIPulseItem) -> some View {
         let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
-        HStack(spacing: 10) {
+        // .top y no centrado: el avatar se alinea con la línea 1, que es la que
+        // ancla la fila, igual que en Mail y Mensajes.
+        HStack(alignment: .top, spacing: 10) {
             Circle()
                 .fill(Color.sandLight)
                 .frame(width: 24, height: 24)
@@ -1454,26 +1456,44 @@ struct InicioView: View {
                 }
 
             VStack(alignment: .leading, spacing: 3) {
-                // Medium y no semibold: el ojo necesita encontrar el sujeto
-                // rápido, pero el nombre en negrita plena es la firma visual de
-                // una red social y hacía que la fila se leyera como el post de
-                // alguien en vez de como un hecho de actividad.
-                (Text(name).font(BT.footnote.weight(.medium)).foregroundStyle(Color.ink)
-                 + Text(" \(pulseAction(item))").font(BT.caption1).foregroundStyle(Color.ink))
-                    .lineLimit(1)
+                // El tiempo va trailing y alineado por baseline con la frase.
+                // Con toda la información apilada a la izquierda, el 40% derecho
+                // de la fila quedaba estructuralmente vacío y el bloque formaba
+                // un triángulo apoyado a la izquierda. Un timestamp en el borde
+                // convierte esta línea en una barra de extremo a extremo, que es
+                // lo que hace que una fila de Mail o Mensajes se sienta
+                // equilibrada: el balance no está en cada línea, sino en que la
+                // línea dominante toque los dos bordes.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // Medium y no semibold: el ojo necesita encontrar el sujeto
+                    // rápido, pero el nombre en negrita plena es la firma visual
+                    // de una red social y hacía que la fila se leyera como el
+                    // post de alguien en vez de como un hecho de actividad.
+                    (Text(name).font(BT.footnote.weight(.medium)).foregroundStyle(Color.ink)
+                     + Text(" \(pulseAction(item))").font(BT.caption1).foregroundStyle(Color.ink))
+                        .lineLimit(1)
 
-                // Tiempo primero: es la señal de vitalidad, y además es el token
-                // que VARÍA entre filas. Con la ciudad al frente las tres decían
-                // "Lima ·" y ese borde izquierdo repetido se percibe como una
-                // plantilla; con el tiempo al frente se perciben tres eventos
-                // distintos. La ciudad queda igual de disponible, sin anclar.
-                Text("\(pulseTimeAgo(item)) · \(item.city)")
+                    Spacer(minLength: 8)
+
+                    // layoutPriority para que, si algo tiene que truncarse con
+                    // Dynamic Type grande, sea la frase y nunca el ancla derecha.
+                    Text(pulseTimeAgo(item))
+                        .font(BT.caption2)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                }
+
+                // La ciudad queda de pie de la línea 1. Es corta, pero colgando
+                // de una línea que ya va de borde a borde se lee como caption y
+                // no como huérfana. Además su borde izquierdo deja de competir:
+                // antes encabezaba la línea 2 y, al ser siempre la misma ciudad,
+                // las tres filas arrancaban idénticas y parecían una plantilla.
+                Text(item.city)
                     .font(BT.caption2)
                     .foregroundStyle(Color.inkMuted)
                     .lineLimit(1)
             }
-
-            Spacer(minLength: 0)
         }
     }
 
