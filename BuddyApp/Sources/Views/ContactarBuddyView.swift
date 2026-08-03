@@ -1016,7 +1016,7 @@ struct CategoryPickerView: View {
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
     private let exploreCardWidth: CGFloat = 178
-    private let exploreCardHeight: CGFloat = 306
+    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 80
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1591,6 +1591,11 @@ private struct PendingConversationView: View {
 
 }
 
+/// Alto de la foto, compartido por la card y por el carrusel que la mide: la
+/// ficha de abajo suma su banda a este valor, así el aire del texto nunca sale
+/// del espacio de la imagen.
+private let exploreCardPhotoHeight: CGFloat = 245
+
 private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
@@ -1606,48 +1611,46 @@ private struct ExploreCarouselCard: View {
     }
 
     var body: some View {
-        // La foto entera, sin recuadros encima: la ficha de vidrio flotaba como
-        // una etiqueta pegada y partía la imagen en dos. Acá el texto no vive en
-        // un contenedor sino en la sombra de la propia foto — el degradado nace
-        // en la mitad inferior y la primera línea aparece recién donde ya hay
-        // algo de fondo, así nada tiene borde y todo se lee.
-        ZStack(alignment: .bottom) {
+        // Foto arriba, ficha abajo. Con el texto sobre la imagen hacía falta
+        // oscurecerla justo donde suele estar el lugar; con la ficha aparte la
+        // foto se ve entera y el texto no depende de lo que haya detrás.
+        VStack(spacing: 0) {
             CachedImage(urlString: photo.url) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .frame(height: exploreCardPhotoHeight)
             .clipped()
+            // Solo para que la foto no termine en un corte recto: el blanco
+            // recién asoma en el último tercio, ya sin nada que ocultar.
+            .overlay(alignment: .bottom) {
+                LinearGradient(
+                    stops: [
+                        .init(color: Color.surface.opacity(0),    location: 0),
+                        .init(color: Color.surface.opacity(0.06), location: 0.62),
+                        .init(color: Color.surface.opacity(0.35), location: 0.86),
+                        .init(color: Color.surface,               location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 36)
+                .allowsHitTesting(false)
+            }
 
-            // Ocupa la card entera y arranca al 55%: al no tener alto propio no
-            // hay ningún punto donde el degradado "empiece", que es lo que se
-            // percibía como mancha. Las paradas suben despacio —5% y 12% en el
-            // primer tramo— y el peso se acumula recién en el último cuarto,
-            // donde vive el texto. Con esto la foto se sigue viendo debajo de
-            // las tres líneas en vez de quedar tapada.
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0),    location: 0.55),
-                    .init(color: .black.opacity(0.05), location: 0.66),
-                    .init(color: .black.opacity(0.12), location: 0.75),
-                    .init(color: .black.opacity(0.26), location: 0.84),
-                    .init(color: .black.opacity(0.48), location: 0.92),
-                    .init(color: .black.opacity(0.72), location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .allowsHitTesting(false)
-
-            // Una sola composición: la jerarquía la hace la opacidad del blanco
-            // —etiqueta al 65%, nombre pleno, autor al 75%— y no cajas ni reglas.
+            // Una sola composición, sin reglas ni divisores: la jerarquía la
+            // hacen el color y el aire —etiqueta tenue, nombre en ink, autor
+            // apagado— que es como separan Apple Photos o Arc.
             VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
                 if let category = place.category, !category.isEmpty {
                     Text(category.uppercased())
                         .font(.system(size: 8, weight: .semibold))
                         .tracking(0.9)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .padding(.bottom, 6)
@@ -1655,7 +1658,7 @@ private struct ExploreCarouselCard: View {
 
                 Text(place.name)
                     .font(BT.footnoteBold)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.ink)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
@@ -1676,9 +1679,6 @@ private struct ExploreCarouselCard: View {
                         }
                         .frame(width: 20, height: 20)
                         .clipShape(Circle())
-                        // Sin el aro, un avatar claro se funde con la foto clara
-                        // y uno oscuro desaparece en el degradado.
-                        .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.5))
                         // Un círculo no tiene línea base, así que en un HStack
                         // por baseline se iría al fondo. Se le declara una a
                         // 4pt de su borde inferior: ahí es donde el ojo lee que
@@ -1686,30 +1686,31 @@ private struct ExploreCarouselCard: View {
                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4 }
                     }
 
-                    // El nombre se distingue por peso, no por color: sobre foto
-                    // cualquier tinte se ensucia y el blanco es lo único estable.
+                    // El nombre se distingue solo por peso: en brand competía
+                    // de igual a igual con el del lugar.
                     if let author = authorFirstName {
                         Text("Recomendado por ")
                             .font(BT.caption2)
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundStyle(Color.inkMuted)
                         + Text(author)
                             .font(BT.caption2.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.inkMuted)
                     } else {
                         Text("Recomendado por la comunidad")
                             .font(BT.caption2)
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundStyle(Color.inkMuted)
                     }
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .padding(.top, 6)
+
+                Spacer(minLength: 0)
             }
-            // La sombra corta sale barata y salva el caso peor: una foto clara
-            // justo detrás de la línea, donde el degradado todavía es tenue.
-            .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
             .padding(.horizontal, 12)
-            .padding(.bottom, 20)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.surface)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
