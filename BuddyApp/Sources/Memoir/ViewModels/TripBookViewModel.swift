@@ -25,7 +25,16 @@ final class TripBookViewModel: ObservableObject {
 
     // MARK: - Enter / Exit edit
 
+    /// Página que creó `addPage()` en esta sesión de edición, mientras siga sin
+    /// contenido del usuario. Abrir el editor y salir sin poner nada no debería
+    /// dejar rastro: esa página quedaba guardada para siempre, corría los
+    /// índices del libro respecto del servidor y, en cuanto existan strips de
+    /// fondo, se publicaría como si fuera una foto.
+    private var pageAddedThisSession: UUID?
+
     func enterEdit(at index: Int) {
+        // Editar una página existente no crea nada que descartar.
+        pageAddedThisSession = nil
         currentPageIndex = index
         isEditing = true
         let id = pages[index].id
@@ -40,6 +49,7 @@ final class TripBookViewModel: ObservableObject {
         print("📓 [exitEdit] vm.canvasSize after update=\(editingVM.canvasSize) items=\(editingVM.items.count)")
         vmCache[pages[currentPageIndex].id] = editingVM
         flushCacheToDisk()
+        discardAddedPageIfEmpty()
         vmCache.removeAll()
         isEditing = false
         for (i, p) in pages.enumerated() {
@@ -109,6 +119,7 @@ final class TripBookViewModel: ObservableObject {
             newVM.backgroundImage = persistence.loadBackground(stripFile, journeyId: journeyId)
         }
         pages.append(newPage)
+        pageAddedThisSession = newPage.id
         currentPageIndex = pages.count - 1
         vmCache[newPage.id] = newVM
         editingVM = newVM
@@ -126,6 +137,28 @@ final class TripBookViewModel: ObservableObject {
     }
 
     // MARK: - Private helpers
+
+    /// Descarta la página recién creada si el usuario salió sin poner nada.
+    ///
+    /// Mira `itemSnapshots` y no `isPublishable` a propósito: el fondo lo pone
+    /// `addPage()` por su cuenta, así que una página con solo fondo está vacía
+    /// desde el punto de vista de quien la abrió, aunque el filtro de publicar
+    /// la daría por buena.
+    ///
+    /// Corre después de `flushCacheToDisk` para decidir sobre el snapshot ya
+    /// escrito, no sobre el estado previo.
+    private func discardAddedPageIfEmpty() {
+        guard let addedId = pageAddedThisSession else { return }
+        pageAddedThisSession = nil
+        // El libro nunca se queda sin páginas: el init garantiza al menos una.
+        guard pages.count > 1,
+              let idx = pages.firstIndex(where: { $0.id == addedId }),
+              pages[idx].itemSnapshots.isEmpty else { return }
+        print("📓 [exitEdit] descartando página vacía id=\(addedId)")
+        pages.remove(at: idx)
+        vmCache.removeValue(forKey: addedId)
+        if currentPageIndex >= pages.count { currentPageIndex = pages.count - 1 }
+    }
 
     private func flushCacheToDisk() {
         print("📓 [flushCacheToDisk] journeyId=\(journeyId) vmCache.count=\(vmCache.count)")
