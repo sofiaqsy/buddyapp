@@ -24,9 +24,7 @@ struct TripsView: View {
     @State private var dismissedTripId: String? = nil
     /// Trip seleccionado en el selector horizontal — el editor se vincula a este.
     @State private var selectedTripId: String? = nil
-    /// Lo mismo que selectedTripId pero para la sección "Tus compartidos"
     /// (journeys con tripId=nil) — selección independiente de la de trips.
-    @State private var selectedShareId: String? = nil
     // Acciones a nivel de tab (operan sobre el trip seleccionado / una locación)
     @State private var showCancelTripConfirm = false
     @State private var deleteTarget: APIJourney? = nil
@@ -35,10 +33,6 @@ struct TripsView: View {
     // Fase 2 "Buddy Community Places" — mismo singleton y flag que ya usa
     // ConexionesView para gatear "Oportunidades para ayudar".
     @StateObject private var chatStore = ChatStore.shared
-    @State private var showCompartirLugar = false
-    /// Journey creado en CompartirLugarSheet, en espera de que el sheet
-    /// termine de cerrarse antes de abrir el editor (ver .sheet onDismiss).
-    @State private var pendingShareJourney: APIJourney? = nil
 
     struct EditTarget: Identifiable {
         let id = UUID()
@@ -67,8 +61,9 @@ struct TripsView: View {
 
     /// Trips vivos del usuario: en curso (active) y por llegar (planning).
     /// Los completados/publicados salen del tab (viven en el perfil/comunidad).
-    /// Solo journeys de un viaje real (tripId != nil) — los "compartidos"
-    /// standalone (tripId=nil) viven en visibleShares, sección aparte.
+    /// Solo journeys de un viaje real (tripId != nil). Los "compartidos"
+    /// standalone (tripId=nil) no viven acá: este tab es únicamente tus viajes,
+    /// y los lugares que recomiendas se ven en el perfil.
     private var visibleTrips: [APIJourney] {
         let rank: (String) -> Int = { s in s == "active" ? 0 : 1 }
         return journeys
@@ -92,22 +87,6 @@ struct TripsView: View {
     /// El trip cuyo editor se muestra. Cae al primero si el seleccionado ya no existe.
     private var selectedTrip: APIJourney? {
         visibleTrips.first { $0.id == selectedTripId } ?? visibleTrips.first
-    }
-
-    /// Sección "Tus compartidos": journeys standalone de buddy (tripId=nil),
-    /// mismo criterio de vigencia que visibleTrips.
-    private var visibleShares: [APIJourney] {
-        journeys
-            .filter {
-                $0.tripId == nil
-                && !dismissedJourneyIds.contains($0.id)
-                && ["active", "planning"].contains($0.status ?? "")
-            }
-            .sorted { ($0.arrivalAt ?? .distantPast) > ($1.arrivalAt ?? .distantPast) }
-    }
-
-    private var selectedShare: APIJourney? {
-        visibleShares.first { $0.id == selectedShareId } ?? visibleShares.first
     }
 
     var body: some View {
@@ -164,39 +143,6 @@ struct TripsView: View {
                         emptyState
                     }
 
-                    // Sección "Tus compartidos" — journeys standalone de buddy
-                    // (tripId=nil). Mismo patrón que "Tu trip": título, selector
-                    // horizontal si hay más de uno, tarjeta del seleccionado o
-                    // estado vacío con su propio botón de creación.
-                    if Session.hasSession && chatStore.isApprovedBuddy {
-                        HStack(alignment: .center) {
-                            Text("Tus compartidos.")
-                                .font(BT.title1)
-                                .foregroundStyle(Color.ink)
-                            Spacer()
-                            if let share = selectedShare {
-                                shareActionsMenu(for: share)
-                            }
-                        }
-                        .padding(.horizontal, Spacing.edge)
-                        .padding(.top, Spacing.xl)
-
-                        if visibleShares.count > 1 {
-                            shareSelector
-                                .padding(.top, Spacing.md)
-                        }
-
-                        if let share = selectedShare {
-                            tripCard(for: share)
-                                .id("\(share.id)-\(share.status ?? "")")
-                                .transition(.opacity)
-                                .padding(.horizontal, Spacing.edge)
-                                .padding(.top, Spacing.md)
-                        } else {
-                            shareEmptyState
-                        }
-                    }
-
                     Spacer().frame(height: 100)
                 }
             }
@@ -223,7 +169,6 @@ struct TripsView: View {
                     dismissedJourneyIds = []
                     dismissedTripId     = nil
                     selectedTripId      = nil
-                    selectedShareId     = nil
                     navPath             = NavigationPath()
                 } else {
                     Task { await loadJourneys() }
@@ -253,7 +198,6 @@ struct TripsView: View {
             if let id = note.object as? String {
                 dismissedJourneyIds.insert(id)
                 if selectedTripId == id { selectedTripId = nil }
-                if selectedShareId == id { selectedShareId = nil }
             }
             locallyActivatedId = nil
             Task { await loadJourneys() }
@@ -262,7 +206,6 @@ struct TripsView: View {
             // Cancelar/eliminar SÍ borra del backend → se excluye de inmediato.
             if let id = note.object as? String {
                 dismissedJourneyIds.insert(id)
-                if selectedShareId == id { selectedShareId = nil }
             }
             locallyActivatedId = nil
             Task { await loadJourneys() }
@@ -270,34 +213,6 @@ struct TripsView: View {
         .fullScreenCover(item: $editTarget) { target in
             TripEditorSheet(journey: target.journey, initialPage: target.pageIndex) {
                 Task { await loadJourneys() }
-            }
-        }
-        .sheet(isPresented: $showCompartirLugar, onDismiss: {
-            // Igual que crear un trip normal: NO se salta directo al editor de
-            // pantalla completa. Se recarga y se selecciona el journey nuevo,
-            // que aparece como tarjeta con "Tu historia empieza aquí" — el
-            // usuario la abre tocándola, como cualquier trip recién creado.
-            if let journey = pendingShareJourney {
-                pendingShareJourney = nil
-                let previousSelection = selectedShareId
-                Task {
-                    await loadJourneys()
-                    let wasAlreadySelected = previousSelection == journey.id
-                    selectedShareId = journey.id
-                    let stillVisible = visibleShares.contains { $0.id == journey.id }
-                    print("🌍 [CompartirLugar] onDismiss journey=\(journey.id) previousSelection=\(previousSelection ?? "nil") wasAlreadySelected=\(wasAlreadySelected) stillVisibleInShares=\(stillVisible)")
-                }
-            }
-        }) {
-            CompartirLugarSheet { journey in
-                // Misma tarjeta, mismo editor, mismo botón "Publicar" que un
-                // trip normal — el journey ya nació con trip_id=null
-                // (attachToTrip:false), así que publicarlo nunca toca ningún
-                // trip. Esa es la única diferencia real; en la UI se comporta
-                // idéntico a cualquier otro journey. CompartirLugarSheet ya se
-                // cierra sola (dismiss()); solo dejamos la posta aquí.
-                print("🌍 [CompartirLugar] onCreated journey=\(journey.id) status=\(journey.status ?? "nil")")
-                pendingShareJourney = journey
             }
         }
         .sheet(isPresented: $showIdentitySheet, onDismiss: {
@@ -387,86 +302,6 @@ struct TripsView: View {
         }
     }
 
-    // MARK: - Selector horizontal de compartidos ("Tus compartidos")
-
-    private var shareSelector: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Spacing.sm) {
-                    ForEach(visibleShares) { share in
-                        TripSelectorCard(
-                            journey: share,
-                            isSelected: share.id == (selectedShare?.id),
-                            onTap: {
-                                Haptic.select()
-                                withAnimation(.easeInOut(duration: 0.25)) {
-                                    selectedShareId = share.id
-                                }
-                                withAnimation { proxy.scrollTo(share.id, anchor: .center) }
-                            },
-                            onDelete: { deleteTarget = share }
-                        )
-                        .id(share.id)
-                    }
-                }
-                .padding(.horizontal, Spacing.edge)
-            }
-        }
-    }
-
-    // Menú de acciones de un compartido — sin concepto de "viaje" que cancelar,
-    // solo eliminar ese lugar (reusa el mismo confirmationDialog de deleteTarget).
-    @ViewBuilder
-    private func shareActionsMenu(for share: APIJourney) -> some View {
-        Menu {
-            Button(role: .destructive) {
-                Haptic.medium()
-                deleteTarget = share
-            } label: {
-                Label("Eliminar", systemImage: "xmark.circle")
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(Color.ink)
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
-        }
-    }
-
-    @ViewBuilder
-    private var shareEmptyState: some View {
-        VStack(spacing: Spacing.md) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Color.inkMuted)
-            Text("Comparte un lugar que ya conoces")
-                .font(BT.title3)
-                .foregroundStyle(Color.ink)
-            Text("Sube fotos de un lugar sin registrar\nun viaje completo.")
-                .font(BT.callout)
-                .foregroundStyle(Color.inkMuted)
-                .multilineTextAlignment(.center)
-
-            Button {
-                Haptic.medium()
-                showCompartirLugar = true
-            } label: {
-                Label("Crear compartido", systemImage: "plus")
-                    .font(BT.footnoteBold)
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.vertical, 13)
-                    .background(Color.ink)
-                    .foregroundStyle(Color.inkInverse)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, Spacing.sm)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, Spacing.lg)
-    }
-
     // Menú de acciones del VIAJE — solo cancelar.
     @ViewBuilder
     private func tripActionsMenu(for trip: APIJourney) -> some View {
@@ -514,7 +349,6 @@ struct TripsView: View {
             dismissedJourneyIds.insert(jId)
             journeys.removeAll { $0.id == jId }
             if selectedTripId == jId { selectedTripId = nil }
-            if selectedShareId == jId { selectedShareId = nil }
         }
         Haptic.success()
         Task {
@@ -619,9 +453,6 @@ struct TripsView: View {
         }
         if let t = visibleTrips.first(where: { $0.id == selectedTripId }) ?? visibleTrips.first {
             print("🧳 [TripsView] selectedTrip id=\(t.id.prefix(8)) dest=\(t.destination?.name ?? "nil") place=\(t.place?.name ?? "nil") title=\(t.title ?? "nil")")
-        }
-        if selectedShareId == nil || !visibleShares.contains(where: { $0.id == selectedShareId }) {
-            selectedShareId = visibleShares.first?.id
         }
         // Cargar match activo para mostrar avatar del buddy
         let hasActive = journeys.contains { $0.status == "active" }
