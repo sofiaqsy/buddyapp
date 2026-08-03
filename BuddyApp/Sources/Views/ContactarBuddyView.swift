@@ -1623,20 +1623,26 @@ private struct ExploreCarouselCard: View {
             .frame(maxWidth: .infinity)
             .frame(height: exploreCardPhotoHeight)
             .clipped()
-            // Solo para que la foto no termine en un corte recto: el blanco
-            // recién asoma en el último tercio, ya sin nada que ocultar.
+            // La transición ocupa el tercio inferior de la foto y llega a blanco
+            // pleno ANTES del borde: así la ficha no empieza en una línea sino
+            // en un color que ya venía formándose. La rampa es cóncava —tramos
+            // largos abajo del 30%, cortos arriba del 70%— porque el ojo detecta
+            // un blanco que aparece de golpe, no uno que crece despacio.
             .overlay(alignment: .bottom) {
                 LinearGradient(
                     stops: [
                         .init(color: Color.surface.opacity(0),    location: 0),
-                        .init(color: Color.surface.opacity(0.06), location: 0.62),
-                        .init(color: Color.surface.opacity(0.35), location: 0.86),
-                        .init(color: Color.surface,               location: 1),
+                        .init(color: Color.surface.opacity(0.04), location: 0.30),
+                        .init(color: Color.surface.opacity(0.14), location: 0.50),
+                        .init(color: Color.surface.opacity(0.34), location: 0.66),
+                        .init(color: Color.surface.opacity(0.62), location: 0.79),
+                        .init(color: Color.surface.opacity(0.88), location: 0.90),
+                        .init(color: Color.surface,               location: 0.97),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 52)
+                .frame(height: 96)
                 .allowsHitTesting(false)
             }
 
