@@ -891,9 +891,7 @@ struct CategoryPickerView: View {
             HStack(spacing: 10) {
                 ctaLeading
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(ctaTitle)
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
+                    ctaTitleText
                         .lineLimit(1)
                     if let sub = ctaSubtitle {
                         Text(sub)
@@ -916,10 +914,22 @@ struct CategoryPickerView: View {
     /// Un solo control para los tres momentos: nadie todavía, buscando, y buddy
     /// asignado. Comparten forma a propósito — el botón se va llenando a medida
     /// que avanza la historia en vez de ser reemplazado por otra cosa.
-    private var ctaTitle: String {
-        if let name = activeBuddyName { return name }
-        if searchingCategoryKey != nil { return "Buscando buddy…" }
-        return "Consultar en \(destinationName ?? "este lugar")"
+    private var ctaTitleText: Text {
+        // Con buddy el nombre solo no decía qué es esa persona ni por qué está
+        // ahí. La etiqueta va en peso normal y el nombre en bold: lo que se lee
+        // primero sigue siendo quién.
+        if let name = activeBuddyName {
+            return Text("Tu buddy asignado: ")
+                .font(BT.footnote)
+                .foregroundColor(Color.inkMuted)
+                + Text(name)
+                .font(BT.footnoteBold)
+                .foregroundColor(Color.ink)
+        }
+        let title = searchingCategoryKey != nil
+            ? "Buscando buddy…"
+            : "Consultar en \(destinationName ?? "este lugar")"
+        return Text(title).font(BT.footnoteBold).foregroundColor(Color.ink)
     }
 
     private var ctaSubtitle: String? {
