@@ -1675,8 +1675,8 @@ private struct ExploreCarouselCard: View {
                         .init(color: fadeTint.opacity(0.28),         location: 0.54),
                         .init(color: fadeTint.opacity(0.55),         location: 0.70),
                         .init(color: fadeTint.opacity(0.85),         location: 0.83),
-                        .init(color: exploreCardPaper.opacity(0.97), location: 0.92),
-                        .init(color: exploreCardPaper,               location: 0.97),
+                        .init(color: fadeTint.opacity(0.97),         location: 0.92),
+                        .init(color: fadeTint,                       location: 0.97),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -1754,7 +1754,10 @@ private struct ExploreCarouselCard: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(exploreCardPaper)
+            // La ficha toma el mismo color que cierra el degradado. Antes moría
+            // en canvas y la banda volvía al fondo de la app, así que el color
+            // de la foto se cortaba justo donde empieza el texto.
+            .background(fadeTint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { if edgeTint == nil { edgeTint = EdgeColorSampler.cached(photo.url) } }

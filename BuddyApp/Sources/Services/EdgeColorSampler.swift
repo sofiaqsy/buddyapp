@@ -179,10 +179,14 @@ enum EdgeColorSampler {
     private static func temper(_ color: UIColor) -> Color {
         var h: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, a: CGFloat = 0
         guard color.getHue(&h, saturation: &sat, brightness: &bri, alpha: &a) else { return .canvas }
+        // El piso de luminosidad sube a 0.96 porque este color ya no vela: ES
+        // el papel de la ficha. canvas está en 0.97, así que a 0.90 la banda se
+        // veía gris al lado de la página, como una card apagada. A 0.96 es papel
+        // con temperatura — que es lo que se buscaba.
         return Color(UIColor(
             hue: h,
             saturation: min(sat, 0.15),
-            brightness: max(bri, 0.90),
+            brightness: max(bri, 0.96),
             alpha: 1
         ))
     }
