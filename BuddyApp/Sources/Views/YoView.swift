@@ -677,28 +677,10 @@ struct YoView: View {
                 .padding(.horizontal, Spacing.edge)
             } else {
                 let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
+                // Sin celda de alta: con trips publicados, el grid es la
+                // vitrina de lo hecho y crear vive en su propio tab. El vacío ya
+                // tiene su invitación arriba, que es donde hace falta.
                 LazyVGrid(columns: columns, spacing: 3) {
-                    // Una sola celda y al principio. Antes eran celdas fantasma
-                    // rellenando el hueco de la última fila: su cantidad (0 a 2)
-                    // dependía de cuántos trips había —o sea el mismo botón
-                    // aparecía duplicado o no aparecía— y quedaba al final, cada
-                    // vez más lejos con cada trip publicado.
-                    Button {
-                        NotificationCenter.default.post(name: .switchToTab, object: nil,
-                                                        userInfo: ["tab": AppTab.trips.rawValue])
-                    } label: {
-                        Color.surface
-                            .aspectRatio(1, contentMode: .fit)
-                            .overlay(
-                                Image(systemName: "plus")
-                                    .font(.system(size: 22, weight: .light))
-                                    .foregroundStyle(Color.inkMuted.opacity(0.6))
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
-
                     ForEach(journeys, id: \.id) { journey in
                         TripGridCell(journey: journey)
                             .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
