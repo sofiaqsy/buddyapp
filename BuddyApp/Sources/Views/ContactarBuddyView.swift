@@ -1016,7 +1016,7 @@ struct CategoryPickerView: View {
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
     private let exploreCardWidth: CGFloat = 178
-    private let exploreCardHeight: CGFloat = 272
+    private let exploreCardHeight: CGFloat = 306
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1620,22 +1620,24 @@ private struct ExploreCarouselCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
-            // Casi la mitad de la card, con las paradas cargadas al final: así
-            // el oscurecido es imperceptible donde empieza y solo se vuelve
-            // sólido detrás de la última línea. Un degradado corto y fuerte
-            // dibuja una banda; uno largo y suave se lee como la foto misma.
+            // Ocupa la card entera y arranca al 55%: al no tener alto propio no
+            // hay ningún punto donde el degradado "empiece", que es lo que se
+            // percibía como mancha. Las paradas suben despacio —5% y 12% en el
+            // primer tramo— y el peso se acumula recién en el último cuarto,
+            // donde vive el texto. Con esto la foto se sigue viendo debajo de
+            // las tres líneas en vez de quedar tapada.
             LinearGradient(
                 stops: [
-                    .init(color: .black.opacity(0),    location: 0),
-                    .init(color: .black.opacity(0.10), location: 0.38),
-                    .init(color: .black.opacity(0.34), location: 0.64),
-                    .init(color: .black.opacity(0.62), location: 0.85),
-                    .init(color: .black.opacity(0.78), location: 1),
+                    .init(color: .black.opacity(0),    location: 0.55),
+                    .init(color: .black.opacity(0.05), location: 0.66),
+                    .init(color: .black.opacity(0.12), location: 0.75),
+                    .init(color: .black.opacity(0.26), location: 0.84),
+                    .init(color: .black.opacity(0.48), location: 0.92),
+                    .init(color: .black.opacity(0.72), location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 148)
             .allowsHitTesting(false)
 
             // Una sola composición: la jerarquía la hace la opacidad del blanco
@@ -1643,8 +1645,8 @@ private struct ExploreCarouselCard: View {
             VStack(spacing: 0) {
                 if let category = place.category, !category.isEmpty {
                     Text(category.uppercased())
-                        .font(.system(size: 9))
-                        .tracking(1.4)
+                        .font(.system(size: 8, weight: .semibold))
+                        .tracking(0.9)
                         .foregroundStyle(.white.opacity(0.65))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -1658,7 +1660,7 @@ private struct ExploreCarouselCard: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
 
-                HStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let author = place.coverAuthorName {
                         Group {
                             if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
@@ -1672,11 +1674,16 @@ private struct ExploreCarouselCard: View {
                                         .foregroundStyle(Color.ink))
                             }
                         }
-                        .frame(width: 22, height: 22)
+                        .frame(width: 20, height: 20)
                         .clipShape(Circle())
                         // Sin el aro, un avatar claro se funde con la foto clara
                         // y uno oscuro desaparece en el degradado.
                         .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.5))
+                        // Un círculo no tiene línea base, así que en un HStack
+                        // por baseline se iría al fondo. Se le declara una a
+                        // 4pt de su borde inferior: ahí es donde el ojo lee que
+                        // el avatar y el texto están sentados en la misma línea.
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4 }
                     }
 
                     // El nombre se distingue por peso, no por color: sobre foto
@@ -1696,13 +1703,13 @@ private struct ExploreCarouselCard: View {
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .padding(.top, 8)
+                .padding(.top, 6)
             }
             // La sombra corta sale barata y salva el caso peor: una foto clara
             // justo detrás de la línea, donde el degradado todavía es tenue.
             .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
             .padding(.horizontal, 12)
-            .padding(.bottom, 14)
+            .padding(.bottom, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
