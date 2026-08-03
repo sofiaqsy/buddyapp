@@ -895,8 +895,8 @@ struct CategoryPickerView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(Color.surface, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.sm))
+            .overlay(RoundedRectangle(cornerRadius: Radius.sm).strokeBorder(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
