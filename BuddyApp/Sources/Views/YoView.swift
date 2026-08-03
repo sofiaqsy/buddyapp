@@ -144,11 +144,13 @@ struct YoView: View {
                             stickerSection
                                 .padding(.top, Spacing.xl)
 
-                            // Siempre visible: antes se escondía sin aportes,
-                            // pero ahora es el único lugar desde donde se añade
-                            // uno — esconderla dejaba al usuario sin entrada.
-                            sharesSection
-                                .padding(.top, Spacing.xl)
+                            // Visible si puede aportar (necesita la entrada) o
+                            // si ya aportó (no se le esconde lo suyo aunque su
+                            // verificación haya cambiado después).
+                            if canRecommendPlaces || !shares.isEmpty {
+                                sharesSection
+                                    .padding(.top, Spacing.xl)
+                            }
 
                             tripsSection
                                 .padding(.top, Spacing.xl)
@@ -580,6 +582,16 @@ struct YoView: View {
     // Lugares que documentó para la comunidad. Aparte de TRIPS a propósito: son
     // aportes al catálogo, no viajes suyos, y cada uno es un sitio concreto en
     // vez de la narración de un recorrido.
+    /// Recomendar un lugar no es publicar: es meterlo al catálogo que ve toda
+    /// la comunidad. El backend ya lo exige —POST /places/propose rechaza si
+    /// verification_status != 'approved'— y acá se refleja esa misma regla, así
+    /// que nadie llega al final del flujo para recibir un error. "approved" y
+    /// no isBuddy a secas: is_buddy es true con el perfil creado aunque siga
+    /// pendiente de revisión.
+    private var canRecommendPlaces: Bool {
+        buddyMe?.profile?.verificationStatus == "approved"
+    }
+
     private var sharesSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             sectionHeader("LUGARES QUE RECOMIENDAS", count: shares.count)
@@ -589,7 +601,7 @@ struct YoView: View {
                     // Siempre primero: es la acción, no un elemento más de la
                     // colección. Al final habría que arrastrar toda la lista
                     // para encontrarla, y crece con cada lugar que se suma.
-                    addPlaceCard
+                    if canRecommendPlaces { addPlaceCard }
 
                     ForEach(shares, id: \.id) { place in
                         // En el perfil el pie es cuántas fotos aportó a ese
@@ -662,6 +674,27 @@ struct YoView: View {
             } else {
                 let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
                 LazyVGrid(columns: columns, spacing: 3) {
+                    // Una sola celda y al principio. Antes eran celdas fantasma
+                    // rellenando el hueco de la última fila: su cantidad (0 a 2)
+                    // dependía de cuántos trips había —o sea el mismo botón
+                    // aparecía duplicado o no aparecía— y quedaba al final, cada
+                    // vez más lejos con cada trip publicado.
+                    Button {
+                        NotificationCenter.default.post(name: .switchToTab, object: nil,
+                                                        userInfo: ["tab": AppTab.trips.rawValue])
+                    } label: {
+                        Color.surface
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay(
+                                Image(systemName: "plus")
+                                    .font(.system(size: 22, weight: .light))
+                                    .foregroundStyle(Color.inkMuted.opacity(0.6))
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+
                     ForEach(journeys, id: \.id) { journey in
                         TripGridCell(journey: journey)
                             .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
@@ -677,26 +710,6 @@ struct YoView: View {
                                     Label("Eliminar publicación", systemImage: "trash")
                                 }
                             }
-                    }
-                    // Celdas fantasma — completan la fila e invitan al próximo trip
-                    let remainder = journeys.count % 3
-                    let ghosts = remainder == 0 ? 0 : 3 - remainder
-                    ForEach(0..<ghosts, id: \.self) { _ in
-                        Button {
-                            NotificationCenter.default.post(name: .switchToTab, object: nil,
-                                                            userInfo: ["tab": AppTab.trips.rawValue])
-                        } label: {
-                            Color.surface
-                                .aspectRatio(1, contentMode: .fit)
-                                .overlay(
-                                    Image(systemName: "plus")
-                                        .font(.system(size: 22, weight: .light))
-                                        .foregroundStyle(Color.inkMuted.opacity(0.6))
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.pressable)
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
