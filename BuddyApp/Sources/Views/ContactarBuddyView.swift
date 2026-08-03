@@ -869,7 +869,13 @@ struct CategoryPickerView: View {
                                 .onTapGesture {
                                     print("🎯 [tap] idx=\(index) id=\(photo.id.suffix(8)) centerActual=\(carouselCenterId?.suffix(8) ?? "nil")")
                                     guard photo.id != carouselCenterId else { return }
-                                    withAnimation(.snappy(duration: 0.35)) {
+                                    // spring en vez de .snappy: esa curva frena
+                                    // en seco y el salto se siente rígido. Con
+                                    // response alto y damping < 1 la card se
+                                    // siente atraída al centro y se asienta con
+                                    // un rebote mínimo, como el snap del propio
+                                    // arrastre.
+                                    withAnimation(.spring(response: 0.55, dampingFraction: 0.78)) {
                                         proxy.scrollTo(photo.id, anchor: .center)
                                     }
                                     // scrollTo mueve el scroll pero NO actualiza
