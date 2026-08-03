@@ -1664,13 +1664,19 @@ private struct ExploreCarouselCard: View {
                         // TERMINA siempre en canvas. Si el color llegara hasta
                         // el final, cada card cerraría en un tono distinto y el
                         // carrusel se volvería un mosaico contra la página.
+                        // El tinte se queda con TODA la rampa y cede a papel
+                        // solo al final. Antes soltaba en 24% de opacidad, y a
+                        // esa densidad la diferencia contra canvas es de ~12/255
+                        // en el mejor canal: matemáticamente invisible sobre una
+                        // foto. Lo que mantiene el color discreto es su propia
+                        // saturación (tope 0.15), no velarlo a medias.
                         .init(color: fadeTint.opacity(0),            location: 0),
-                        .init(color: fadeTint.opacity(0.09),         location: 0.34),
-                        .init(color: fadeTint.opacity(0.18),         location: 0.52),
-                        .init(color: fadeTint.opacity(0.24),         location: 0.66),
-                        .init(color: exploreCardPaper.opacity(0.58), location: 0.78),
-                        .init(color: exploreCardPaper.opacity(0.88), location: 0.88),
-                        .init(color: exploreCardPaper,               location: 0.96),
+                        .init(color: fadeTint.opacity(0.10),         location: 0.34),
+                        .init(color: fadeTint.opacity(0.28),         location: 0.54),
+                        .init(color: fadeTint.opacity(0.55),         location: 0.70),
+                        .init(color: fadeTint.opacity(0.85),         location: 0.83),
+                        .init(color: exploreCardPaper.opacity(0.97), location: 0.92),
+                        .init(color: exploreCardPaper,               location: 0.97),
                     ],
                     startPoint: .top,
                     endPoint: .bottom

@@ -48,6 +48,14 @@ enum EdgeColorSampler {
 
         let color = temper(dominant)
         cache[urlString] = color
+
+        var rr: CGFloat = 0, gg: CGFloat = 0, bb: CGFloat = 0, aa: CGFloat = 0
+        dominant.getRed(&rr, green: &gg, blue: &bb, alpha: &aa)
+        var h: CGFloat = 0, sa: CGFloat = 0, br: CGFloat = 0
+        UIColor(color).getHue(&h, saturation: &sa, brightness: &br, alpha: &aa)
+        print(String(format: "🎨 [EdgeColor] %@ → dominante rgb(%.0f,%.0f,%.0f) → tinte hsb(%.2f, %.2f, %.2f)",
+                     (urlString as NSString).lastPathComponent, rr * 255, gg * 255, bb * 255, h, sa, br))
+
         return color
     }
 
