@@ -31,6 +31,10 @@ final class RouteStore: ObservableObject {
     private var fetchingTask: Task<MapLoadState, Never>? = nil
     private var fetchingKey: String? = nil
 
+    /// El último fetch ejecutado, para poder repetirlo cuando cambian las fotos
+    /// sin que RouteStore tenga que reconstruir de qué tipo de guía se trata.
+    private var lastFetch: (() async -> MapLoadState)? = nil
+
     private var photoObserver: NSObjectProtocol?
 
     init() {
@@ -42,7 +46,7 @@ final class RouteStore: ObservableObject {
         photoObserver = NotificationCenter.default.addObserver(
             forName: .placePhotosChanged, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.invalidateCache()
+            self?.refreshAfterPhotoChange()
         }
     }
 
@@ -50,16 +54,23 @@ final class RouteStore: ObservableObject {
         if let photoObserver { NotificationCenter.default.removeObserver(photoObserver) }
     }
 
-    /// Fuerza que el próximo `ensureLoaded` vuelva a pedir la guía.
+    /// Vuelve a pedir la guía ya cargada, ahora mismo.
     ///
-    /// No limpia `route`: la ruta que ya está en pantalla sigue siendo válida
-    /// —los spots no cambiaron, solo sus fotos— y borrarla dejaría el mapa en
-    /// blanco hasta que llegue el fetch.
+    /// Marcar el caché como sucio no alcanzaba: la portada del spot ES una de
+    /// las fotos que acaban de cambiar, y vive dentro de `route`, que quedaba
+    /// intacto en memoria Y en disco —`_fetchDestState` hace `save()`—. Por eso
+    /// la foto borrada sobrevivía a recargar la pantalla y solo desaparecía
+    /// reinstalando la app.
+    ///
+    /// Se repite el fetch en vez de limpiar `route` para que el mapa no quede en
+    /// blanco: la ruta se reemplaza cuando llega la nueva, con las portadas al
+    /// día, y `save()` pisa la copia en disco.
     @MainActor
-    func invalidateCache() {
-        guard loadedKey != nil else { return }
-        print("🗺️ [RouteStore] fotos cambiaron — invalidando caché de \(loadedKey ?? "nil")")
+    func refreshAfterPhotoChange() {
+        guard let key = loadedKey, let fetch = lastFetch else { return }
+        print("🗺️ [RouteStore] fotos cambiaron — recargando \(key)")
         loadedKey = nil
+        Task { @MainActor in _ = await fetch() }
     }
 
     func buildRouteIfNeeded(near origin: CLLocationCoordinate2D) {
@@ -122,6 +133,7 @@ final class RouteStore: ObservableObject {
         // Cache miss: limpiar datos del destino anterior inmediatamente
         isReady = false
         fetchingKey = key
+        lastFetch = fetch
         let task = Task<MapLoadState, Never> { await fetch() }
         fetchingTask = task
         let result = await task.value
