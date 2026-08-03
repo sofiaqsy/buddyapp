@@ -582,6 +582,11 @@ struct CategoryPickerView: View {
     /// Cuando true, el modo pioneer NO auto-habilita el botón — se exige selección de categoría.
     /// Pasar true desde noTripComposer cuando no hay buddies en la zona.
     var pioneerRequiresCategory: Bool = false
+    /// La grilla de categorías dejó de ser un componente de Home: ahí las
+    /// intenciones ya no se eligen, se eligen dentro de la conversación. Con
+    /// esto en true la Home muestra las fotos de la comunidad y, si todavía no
+    /// hay fotos para este lugar, solo el CTA — nunca la grilla.
+    var hidesCategoryGrid: Bool = false
     var isLoading: Bool = false
     /// El CTA del carrusel ya no dispara una búsqueda: abre la conversación.
     /// Ese cambio de verbo es todo el rediseño — la ayuda deja de ser una
@@ -788,6 +793,11 @@ struct CategoryPickerView: View {
 
             if !placeCards.isEmpty {
                 exploreCarousel
+            } else if hidesCategoryGrid {
+                consultCTA
+                    .padding(.horizontal, Spacing.edge)
+                    .redacted(reason: isSkeleton ? .placeholder : [])
+                    .disabled(isSkeleton)
             } else {
             // 2×3 grid — icon circle + title + subtitle
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
@@ -857,6 +867,38 @@ struct CategoryPickerView: View {
             // Si hay un buddy activo, el botón se habilita vía activeBuddyName, no vía selected.
             selected = nil
         }
+    }
+
+    /// Dice la CIUDAD del contexto, no la de la card centrada: la consulta es
+    /// sobre el destino completo. Atarlo a la foto del medio haría que el texto
+    /// cambiara al deslizar, y eso le enseñaría al usuario que las fotos SÍ son
+    /// un selector — justo lo contrario de lo que el carrusel comunica.
+    private var consultCTA: some View {
+        Button {
+            Haptic.medium()
+            onStartConversation?()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left.fill")
+                    .foregroundStyle(Color.ink)
+                Text("Consultar en \(destinationName ?? "este lugar")")
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(1)
+                Spacer()
+                ZStack {
+                    Circle().fill(Color.brand).frame(width: 30, height: 30)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: – Explora {ciudad} (carrusel de fotos reales)
@@ -1116,31 +1158,7 @@ struct CategoryPickerView: View {
             // Atarlo a la foto del medio haría que el texto cambiara al
             // deslizar, y eso le enseñaría al usuario que las fotos SÍ son un
             // selector — justo lo contrario de lo que el carrusel comunica.
-            Button {
-                Haptic.medium()
-                onStartConversation?()
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "bubble.left.fill")
-                        .foregroundStyle(Color.ink)
-                    Text("Consultar en \(destinationName ?? "este lugar")")
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
-                        .lineLimit(1)
-                    Spacer()
-                    ZStack {
-                        Circle().fill(Color.brand).frame(width: 30, height: 30)
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.surface, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
-            }
-            .buttonStyle(.plain)
+            consultCTA
             .padding(.horizontal, Spacing.edge)
             .padding(.top, 16)
         }

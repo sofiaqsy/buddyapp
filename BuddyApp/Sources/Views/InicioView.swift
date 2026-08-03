@@ -674,7 +674,7 @@ struct InicioView: View {
                         // in place.
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             SkeletonBox(cornerRadius: 4).frame(width: 130, height: 14)
-                            CategoryPickerView(isSkeleton: true) { _, _ in }
+                            CategoryPickerView(isSkeleton: true, hidesCategoryGrid: true) { _, _ in }
                                 .padding(.horizontal, -Spacing.edge)
                         }
                         .skeletonPulse()
@@ -782,6 +782,8 @@ struct InicioView: View {
                     activeBuddyName: activeBuddyFirstName,
                     activeBuddyAvatarUrl: activeBuddyAvatarUrl,
                     communityContext: homeCommunityContext,
+                    placeCards: exploreCards,
+                    hidesCategoryGrid: true,
                     isLoading: isFindingBuddy,
                     onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
@@ -808,6 +810,7 @@ struct InicioView: View {
                     communityContext: homeCommunityContext,
                     placeCards: exploreCards,
                     pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
+                    hidesCategoryGrid: true,
                     isLoading: isFindingBuddy,
                     onStartConversation: startConversationFromHome
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
