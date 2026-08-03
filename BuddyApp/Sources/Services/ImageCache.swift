@@ -139,21 +139,16 @@ struct CachedImage<Content: View, Placeholder: View>: View {
     let url: URL?
     let content: (Image) -> Content
     let placeholder: () -> Placeholder
-    /// Avisa cuándo hay bitmap disponible. Existe para poder muestrear color de
-    /// la propia foto sin descargarla de nuevo ni duplicar el cache.
-    var onImage: ((UIImage) -> Void)? = nil
 
     @State private var uiImage: UIImage? = nil
     @State private var isLoading = false
 
     init(
         url: URL?,
-        onImage: ((UIImage) -> Void)? = nil,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder placeholder: @escaping () -> Placeholder
     ) {
         self.url = url
-        self.onImage = onImage
         self.content = content
         self.placeholder = placeholder
     }
@@ -189,14 +184,14 @@ struct CachedImage<Content: View, Placeholder: View>: View {
         if let cached = await Task.detached(priority: .userInitiated, operation: {
             ImageCache.shared.get(url)
         }).value {
-            await MainActor.run { uiImage = cached; onImage?(cached) }
+            await MainActor.run { uiImage = cached }
             return
         }
         // Network load — show shimmer
         await MainActor.run { isLoading = true }
         let img = await ImageCache.shared.load(url)
         await MainActor.run {
-            if let img { uiImage = img; onImage?(img) }
+            if let img { uiImage = img }
             isLoading = false
         }
     }
@@ -205,10 +200,9 @@ struct CachedImage<Content: View, Placeholder: View>: View {
 // MARK: – Convenience inits
 
 extension CachedImage where Placeholder == Color {
-    init(urlString: String?, onImage: ((UIImage) -> Void)? = nil, @ViewBuilder content: @escaping (Image) -> Content) {
+    init(urlString: String?, @ViewBuilder content: @escaping (Image) -> Content) {
         self.init(
             url: urlString.flatMap { URL(string: $0) },
-            onImage: onImage,
             content: content,
             placeholder: { Color.groupedBg.opacity(0.8) }
         )
@@ -216,10 +210,9 @@ extension CachedImage where Placeholder == Color {
 }
 
 extension CachedImage {
-    init(urlString: String?, onImage: ((UIImage) -> Void)? = nil, @ViewBuilder content: @escaping (Image) -> Content, @ViewBuilder placeholder: @escaping () -> Placeholder) {
+    init(urlString: String?, @ViewBuilder content: @escaping (Image) -> Content, @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.init(
             url: urlString.flatMap { URL(string: $0) },
-            onImage: onImage,
             content: content,
             placeholder: placeholder
         )

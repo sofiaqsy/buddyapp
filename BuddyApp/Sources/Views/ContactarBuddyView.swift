@@ -1610,15 +1610,34 @@ private struct ExploreCarouselCard: View {
     let photo: ExplorePhoto
     private var place: APIPlaceCard { photo.place }
 
-    /// Tinte tomado del pie de la propia foto. Arranca con el valor cacheado
-    /// —si esta foto ya pasó por el carrusel, el color entra en el primer
-    /// frame— y si no, llega con la imagen.
-    @State private var edgeTint: Color? = nil
-
-    /// El tramo medio del degradado. Sin muestra todavía es el papel: la card se
-    /// ve exactamente como antes y el color aparece cuando está listo, nunca al
-    /// revés.
-    private var fadeTint: Color { edgeTint ?? exploreCardPaper }
+    /// Fondo de la ficha: el mismo pie de la foto, repetido y desenfocado. Es
+    /// la foto y no una interpretación de ella, así que no puede salir un tono
+    /// que la imagen no tenga —el problema que sí tenía el color extraído—. Y
+    /// como vive en la banda y no sobre la imagen, no le quita ni un pixel de
+    /// visibilidad a la foto de arriba.
+    @ViewBuilder private var plateBackground: some View {
+        Color.clear
+            .overlay(alignment: .bottom) {
+                // Alineado al pie y con el alto de la foto: lo que se ve acá es
+                // literalmente la franja inferior de la imagen de arriba, o sea
+                // la continuación y no un recorte cualquiera.
+                CachedImage(urlString: photo.url) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(Color.sandLight)
+                }
+                .frame(height: exploreCardPhotoHeight)
+                .blur(radius: 26)
+                // El blur muestrea fuera del borde; sin sobredimensionar, los
+                // lados quedan lavados.
+                .scaleEffect(1.25)
+            }
+            .clipped()
+            // Piso para el texto: el desenfoque quita el detalle pero no baja el
+            // contraste, y el nombre va en ink sobre lo que haya quedado.
+            .overlay(exploreCardPaper.opacity(0.62))
+            .allowsHitTesting(false)
+    }
 
     /// Quien recomienda el lugar, no cuánta gente lo conoce: la recomendación
     /// de una persona concreta pesa más como prueba social que un conteo, y
@@ -1635,14 +1654,7 @@ private struct ExploreCarouselCard: View {
         // oscurecerla justo donde suele estar el lugar; con la ficha aparte la
         // foto se ve entera y el texto no depende de lo que haya detrás.
         VStack(spacing: 0) {
-            CachedImage(urlString: photo.url) { image in
-                Task {
-                    guard let sampled = await EdgeColorSampler.sample(image, for: photo.url) else { return }
-                    // Animado: el color entra cuando la foto ya se está viendo,
-                    // y un cambio de fondo instantáneo se lee como parpadeo.
-                    withAnimation(.easeOut(duration: 0.4)) { edgeTint = sampled }
-                }
-            } content: { img in
+            CachedImage(urlString: photo.url) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
@@ -1735,13 +1747,9 @@ private struct ExploreCarouselCard: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // La ficha toma el mismo color que cierra el degradado. Antes moría
-            // en canvas y la banda volvía al fondo de la app, así que el color
-            // de la foto se cortaba justo donde empieza el texto.
-            .background(fadeTint)
+            .background(plateBackground)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { if edgeTint == nil { edgeTint = EdgeColorSampler.cached(photo.url) } }
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         // Borde en vez de sombra: con la ficha del color de la página, la sombra
         // era lo único que insinuaba el recipiente y lo hacía por debajo, como
