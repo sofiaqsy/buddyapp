@@ -21,13 +21,30 @@ final class ImageCache {
 
     func get(_ url: URL) -> UIImage? {
         let key = cacheKey(url)
-        if let img = memory.object(forKey: key as NSString) { return img }
+        if let img = memory.object(forKey: key as NSString) {
+            ImageCache.logOrigin("memoria", url)
+            return img
+        }
         let file = diskURL.appendingPathComponent(key)
         if let data = try? Data(contentsOf: file), let img = UIImage(data: data) {
             memory.setObject(img, forKey: key as NSString, cost: data.count)
+            ImageCache.logOrigin("disco", url)
             return img
         }
+        ImageCache.logOrigin("red", url)
         return nil
+    }
+
+    /// Solo fotos de memoir: son las únicas con ruta reciclada (page_N.jpg), y
+    /// el resto del feed inundaría la consola.
+    static func logOrigin(_ origin: String, _ url: URL) {
+        guard url.absoluteString.contains("memoir-photos") else { return }
+        print("🖼️ [ImageCache] \(origin) ← \(shortLog(url))")
+    }
+
+    static func shortLog(_ url: URL) -> String {
+        guard let c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url.absoluteString }
+        return c.path.split(separator: "/").suffix(2).joined(separator: "/") + (c.query.map { "?\($0)" } ?? " «sin ?v=»")
     }
 
     func set(_ image: UIImage, for url: URL) {
@@ -50,6 +67,7 @@ final class ImageCache {
     /// puede pedir una clave concreta.
     func remove(_ url: URL) {
         let key = cacheKey(url)
+        print("🧹 [ImageCache] remove \(ImageCache.shortLog(url))")
         memory.removeObject(forKey: key as NSString)
         let file = diskURL.appendingPathComponent(key)
         Task(priority: .utility) { try? FileManager.default.removeItem(at: file) }

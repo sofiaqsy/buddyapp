@@ -814,6 +814,16 @@ final class APIClient {
         if let lat, let lng { path += "&lat=\(lat)&lng=\(lng)" }
         let res: APIPlaceCardsResponse = try await request(path: path)
         print("🌍 [APIClient] placeCards → \(res.items.count): \(res.items.prefix(5).map { "\($0.name)(\($0.photoCount)f/\($0.buddyCount)b)" }.joined(separator: ", "))")
+        // El conteo no alcanza para diagnosticar staleness: lo que decide qué se
+        // ve son estas URLs. Interesa si traen ?v= —o sea si el backend con el
+        // token está desplegado— y si la borrada sigue en la lista.
+        for item in res.items.prefix(3) {
+            let short = (item.coverUrls ?? []).map { u -> String in
+                guard let c = URLComponents(string: u) else { return u }
+                return c.path.split(separator: "/").suffix(2).joined(separator: "/") + (c.query.map { "?\($0)" } ?? " «sin ?v=»")
+            }
+            print("🌍 [APIClient]   \(item.name) covers=\(short)")
+        }
         return res.items
     }
 

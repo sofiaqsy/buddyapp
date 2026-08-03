@@ -1214,6 +1214,7 @@ struct PlaceGuideDetailSheet: View {
                     // lista, pero la ruta en Storage se recicla —page_N.jpg con
                     // upsert—, así que dejarla cacheada haría que una futura
                     // foto en ese mismo índice se pintara con esta.
+                    print("🗑️ [deletePhoto] borrada \(photo.url)")
                     if let url = URL(string: photo.url) { ImageCache.shared.remove(url) }
                     // El Home y el perfil muestran estas mismas fotos y no
                     // tienen forma de enterarse solos: sin este aviso la foto
