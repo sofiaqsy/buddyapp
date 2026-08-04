@@ -485,9 +485,9 @@ struct TripsView: View {
         }
         // Cargar match activo para mostrar avatar del buddy
         let hasActive = journeys.contains { $0.status == "active" }
-        if hasActive, let matches = try? await APIClient.shared.fetchMatches() {
+        if hasActive, let matches = try? await APIClient.shared.fetchMatches(statuses: APIClient.estadosVigentes) {
             let myTravelerId = Session.travelerId
-            activeMatch = matches.first { ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myTravelerId }
+            activeMatch = matches.first { $0.travelerId == myTravelerId }
         } else if !hasActive {
             activeMatch = nil
         }

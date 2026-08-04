@@ -1160,11 +1160,11 @@ struct InicioView: View {
         // Sin condicionar a `active`: desde el flujo conversacional el match
         // nace ANTES que el trip (el trip se crea al aceptar), así que exigir
         // trip primero dejaba al Home ciego justo en el caso nuevo.
-        let matches = (try? await APIClient.shared.fetchMatches()) ?? []
+        // Solo los vigentes: acá se busca UN match y el historial completo de
+        // apoyos cerrados no aporta nada a esta decisión.
+        let matches = (try? await APIClient.shared.fetchMatches(statuses: APIClient.estadosVigentes)) ?? []
         let myId = Session.travelerId
-        let resolvedMatch = matches.first(where: {
-            ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
-        })
+        let resolvedMatch = matches.first(where: { $0.travelerId == myId })
 
         await MainActor.run {
             activeJourney  = active
@@ -1337,17 +1337,15 @@ struct InicioView: View {
 
             let shouldFetchMatch = await MainActor.run { activeJourney != nil }
             if shouldFetchMatch {
-                let matches = try await APIClient.shared.fetchMatches()
+                let matches = try await APIClient.shared.fetchMatches(statuses: APIClient.estadosVigentes)
                 guard !Task.isCancelled else { return }
-                print("🏠 [loadData] \(matches.count) match(es): \(matches.map { "\($0.status ?? "?")" })")
+                print("🏠 [loadData] \(matches.count) match(es) vigente(s): \(matches.map { "\($0.status ?? "?")" })")
                 // Must filter by travelerId: user may simultaneously be a buddy for
                 // another traveler, and fetchMatches() returns matches in both roles.
                 // Without this guard, the buddy-role match can win the .first() and
                 // the home shows the user's own name in the "Hablar con tu buddy" card.
                 let myId = Session.travelerId
-                let found = matches.first(where: {
-                    ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
-                })
+                let found = matches.first(where: { $0.travelerId == myId })
                 await MainActor.run { activeMatch = found }
                 await chatStore.load()
             }

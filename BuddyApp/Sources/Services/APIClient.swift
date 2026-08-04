@@ -1070,9 +1070,28 @@ final class APIClient {
     }
 
     // No path parameter — backend resolves ownership from the JWT.
-    func fetchMatches(caller: String = #function) async throws -> [APIMatch] {
-        try await request(path: "/matching/matches", via: caller)
+    /// - Parameter statuses: acota en el SERVIDOR. Nil devuelve el historial
+    ///   completo.
+    ///
+    ///   El default sigue siendo nil a propósito: ChatStore necesita los
+    ///   completados para la lista de conversaciones pasadas y para detectar la
+    ///   encuesta pendiente. Filtrar por defecto los habría hecho desaparecer de
+    ///   esa pantalla, cambiando una optimización en una pérdida de datos.
+    ///
+    ///   Lo piden con filtro las pantallas que buscan UN match vigente entre 25
+    ///   que solo crecen.
+    func fetchMatches(statuses: [String]? = nil, caller: String = #function) async throws -> [APIMatch] {
+        var path = "/matching/matches"
+        if let statuses, !statuses.isEmpty {
+            path += "?status=\(statuses.joined(separator: ","))"
+        }
+        return try await request(path: path, via: caller)
     }
+
+    /// Los estados en que un match sigue vivo. Estaba repetido literal en cinco
+    /// sitios; con la lista suelta, añadir un estado nuevo obligaba a acordarse
+    /// de los cinco.
+    static let estadosVigentes = ["pending", "accepted", "active"]
 
     func fetchMyOffers() async throws -> [APIBuddyOffer] {
         try await request(path: "/matching/my-offers")
