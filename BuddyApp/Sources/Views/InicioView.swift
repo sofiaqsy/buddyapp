@@ -1692,7 +1692,8 @@ struct InicioView: View {
                     // Biblioteca de viajes — orden y ranking vienen del servidor.
                     // Scroll infinito: al acercarse al final, carga el siguiente lote.
                     ForEach(publicJourneys) { journey in
-                        PublishedTripCard(journey: journey)
+                        PublishedTripCard(journey: journey,
+                                          onOpenAuthor: { navPath.append($0) })
                             .equatable()  // skip re-render if journey.id + flags unchanged
                             .onAppear {
                                 if journey.id == publicJourneys.suffix(4).first?.id {
@@ -2280,6 +2281,9 @@ struct PublishedTripCard: View {
     var featured: Bool = false
     var matchesMyDestination: Bool = false
     var nearby: Bool = false
+    /// Abrir el perfil del autor. Lo resuelve quien contiene la tarjeta, que es
+    /// quien tiene el NavigationStack; la card no conoce rutas.
+    var onOpenAuthor: ((TravelerProfileRoute) -> Void)? = nil
 
     @State private var showStory = false
     @State private var page = 0
@@ -2426,18 +2430,39 @@ struct PublishedTripCard: View {
     }
 
     // Pie minimalista: solo viajero + duración (sin destino ni "Ver álbum")
+    /// El pie de la publicación: quién y cuánto duró.
+    ///
+    /// La cara y el nombre llevan al perfil del autor; el resto del pie sigue
+    /// abriendo la historia. Es el mismo reparto que en Comunidad viva — quien
+    /// toca a una persona quiere ver a esa persona, y quien toca el resto de la
+    /// tarjeta quiere ver lo que publicó.
     private var footer: some View {
         HStack(spacing: 8) {
-            Circle().fill(Color.tealDeep).frame(width: 24, height: 24)
-                .overlay {
-                    CachedImage(urlString: journey.users?.avatarUrl) { img in
-                        img.resizable().scaledToFill().frame(width: 24, height: 24).clipShape(Circle())
-                    } placeholder: {
-                        Text(String(authorName.prefix(1)).uppercased())
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+            let autor = journey.users?.id.map {
+                TravelerProfileRoute(travelerId: $0,
+                                     previewName: journey.users?.fullName,
+                                     previewAvatarUrl: journey.users?.avatarUrl)
+            }
+
+            HStack(spacing: 8) {
+                Circle().fill(Color.tealDeep).frame(width: 24, height: 24)
+                    .overlay {
+                        CachedImage(urlString: journey.users?.avatarUrl) { img in
+                            img.resizable().scaledToFill().frame(width: 24, height: 24).clipShape(Circle())
+                        } placeholder: {
+                            Text(String(authorName.prefix(1)).uppercased())
+                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                        }
                     }
-                }
-            Text(authorName).font(BT.footnote).foregroundStyle(Color.ink)
+                Text(authorName).font(BT.footnote).foregroundStyle(Color.ink)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard let autor else { return }
+                Haptic.light()
+                onOpenAuthor?(autor)
+            }
+
             Spacer(minLength: 4)
             if let d = durationLine {
                 Text(d).font(BT.subhead).foregroundStyle(Color.inkMuted)
