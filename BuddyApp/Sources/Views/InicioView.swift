@@ -71,6 +71,14 @@ struct InicioView: View {
     @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
     @State private var recentHelpLoadedAt: Date? = nil    // throttle de refetch
+    /// Cuándo se pidió recent-help de CADA destino.
+    ///
+    /// loadRecentHelp tenía su propio throttle de 30s y loadRecentHelpPerTrip
+    /// ninguno, así que la segunda refetcheaba todos los destinos en cada ciclo
+    /// —y además repetía el que la primera acababa de pedir, porque el destino
+    /// actual siempre está entre los trips vivos—. Con dos trips eso eran tres
+    /// peticiones por ciclo, y en un arranque salieron diez.
+    @State private var recentHelpFetchedAt: [String: Date] = [:]
     @State private var lastRefreshTripStateAt: Date? = nil // throttle scenePhase refresh (30s)
     @State private var lastCommunityContextLocation: CLLocation? = nil // gate GPS → resolve
     @State private var lastCommunityContextAt: Date? = nil
@@ -247,6 +255,10 @@ struct InicioView: View {
                 activeMatch    = nil
                 recentHelp     = []
                 recentHelpByDest = [:]
+                // Sin esto, el throttle seguiría creyendo que los destinos de la
+                // sesión anterior se pidieron hace nada y el siguiente usuario
+                // no vería actividad durante 30s.
+                recentHelpFetchedAt = [:]
                 pendingIdentityAction = nil
                 hasLoaded = false
             } else {
@@ -1413,6 +1425,7 @@ struct InicioView: View {
             }
             recentHelpDestId = destId
             recentHelpLoadedAt = Date()
+            recentHelpFetchedAt[destId] = Date()
         } catch {
             // Error transitorio (p. ej. al hacer pull-to-refresh): preserva la
             // info actual en vez de borrarla.
@@ -1421,8 +1434,16 @@ struct InicioView: View {
 
     /// Carga la actividad de comunidad de CADA destino vivo (uno por trip del
     /// carrusel), en paralelo. Así cada card muestra su propia prueba social.
-    private func loadRecentHelpPerTrip() async {
-        let destIds = Set(liveJourneys.compactMap { $0.destination?.id ?? $0.destinationId })
+    private func loadRecentHelpPerTrip(force: Bool = false) async {
+        let todos = Set(liveJourneys.compactMap { $0.destination?.id ?? $0.destinationId })
+        // Solo los que no se hayan pedido en los últimos 30s — el mismo criterio
+        // que loadRecentHelp, y con el mismo reloj, así ninguna de las dos repite
+        // lo que la otra acaba de traer.
+        let destIds = force ? todos : todos.filter { id in
+            guard let at = recentHelpFetchedAt[id] else { return true }
+            return Date().timeIntervalSince(at) >= 30
+        }
+        guard !destIds.isEmpty else { return }
         await withTaskGroup(of: (String, [APIRecentHelp]).self) { group in
             for id in destIds {
                 group.addTask {
@@ -1437,6 +1458,7 @@ struct InicioView: View {
                 for (id, r) in collected where !r.isEmpty || recentHelpByDest[id] == nil {
                     recentHelpByDest[id] = r
                 }
+                for id in collected.keys { recentHelpFetchedAt[id] = Date() }
             }
         }
     }
