@@ -392,29 +392,69 @@ struct TripDetailView: View {
 
     // MARK: – Navegación externa (Google Maps / Waze / Apple Maps)
 
+    /// Mismo criterio que Waze: esquema propio primero, web de respaldo.
+    ///
+    /// El universal link de Google Maps sí conserva los parámetros al saltar,
+    /// así que aquí no había el fallo de Waze — pero sí compartía el riesgo del
+    /// locale, y `comgooglemaps://` ahorra el rebote por el navegador.
     private func openInGoogleMaps() {
         guard let p = navigationTarget else {
             print("🧭 [ComoLlegar] googleMaps — navigationTarget=nil, no se abre nada")
             return
         }
-        let url = URL(string: "https://www.google.com/maps/dir/?api=1&destination=\(p.latitude),\(p.longitude)&travelmode=driving")!
-        print("🧭 [ComoLlegar] googleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
-        print("🧭 [ComoLlegar] googleMaps URL: \(url.absoluteString)")
-        UIApplication.shared.open(url) { ok in
-            print(ok ? "🧭 [ComoLlegar] googleMaps ✅ abierto" : "🧭 [ComoLlegar] googleMaps ❌ open falló")
+        let ll = String(format: "%.6f,%.6f", locale: Locale(identifier: "en_US_POSIX"),
+                        p.latitude, p.longitude)
+        print("🧭 [ComoLlegar] googleMaps → place=\(p.name) ll=\(ll)")
+
+        let nativa = URL(string: "comgooglemaps://?daddr=\(ll)&directionsmode=driving")!
+        UIApplication.shared.open(nativa) { ok in
+            if ok {
+                print("🧭 [ComoLlegar] googleMaps ✅ abierto con esquema nativo")
+                return
+            }
+            let web = URL(string: "https://www.google.com/maps/dir/?api=1&destination=\(ll)&travelmode=driving")!
+            print("🧭 [ComoLlegar] googleMaps — sin app instalada, abriendo web")
+            UIApplication.shared.open(web) { ok2 in
+                print(ok2 ? "🧭 [ComoLlegar] googleMaps ✅ abierto en web" : "🧭 [ComoLlegar] googleMaps ❌ open falló")
+            }
         }
     }
 
+    /// Waze: primero su esquema propio, y el universal link solo como respaldo.
+    ///
+    /// Con `https://waze.com/ul?...` la app abría pero SIN destino. El universal
+    /// link pasa antes por el navegador —o por el resolutor de enlaces de iOS—, y
+    /// en ese salto Waze recibe el arranque pero pierde los parámetros; el
+    /// resultado es Waze en el mapa, sin ruta, que es justo lo que se veía.
+    /// `waze://` va directo al proceso y llega con `ll` y `navigate` intactos.
+    ///
+    /// `open()` no necesita LSApplicationQueriesSchemes —eso solo lo exige
+    /// `canOpenURL`—, así que si Waze no está instalado la llamada devuelve
+    /// false y ahí sí cae al enlace web, que ofrece instalarlo.
+    ///
+    /// Coordenadas con `%.6f` y locale POSIX: son ~11 cm de precisión, de sobra
+    /// para un local, y sobre todo evitan que un dispositivo con locale español
+    /// escriba "-12,0584" con coma y parta el parámetro en dos.
     private func openInWaze() {
         guard let p = navigationTarget else {
             print("🧭 [ComoLlegar] waze — navigationTarget=nil, no se abre nada")
             return
         }
-        let url = URL(string: "https://waze.com/ul?ll=\(p.latitude),\(p.longitude)&navigate=yes")!
-        print("🧭 [ComoLlegar] waze → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
-        print("🧭 [ComoLlegar] waze URL: \(url.absoluteString)")
-        UIApplication.shared.open(url) { ok in
-            print(ok ? "🧭 [ComoLlegar] waze ✅ abierto" : "🧭 [ComoLlegar] waze ❌ open falló")
+        let ll = String(format: "%.6f,%.6f", locale: Locale(identifier: "en_US_POSIX"),
+                        p.latitude, p.longitude)
+        print("🧭 [ComoLlegar] waze → place=\(p.name) ll=\(ll)")
+
+        let nativa = URL(string: "waze://?ll=\(ll)&navigate=yes")!
+        UIApplication.shared.open(nativa) { ok in
+            if ok {
+                print("🧭 [ComoLlegar] waze ✅ abierto con esquema nativo")
+                return
+            }
+            let web = URL(string: "https://waze.com/ul?ll=\(ll)&navigate=yes")!
+            print("🧭 [ComoLlegar] waze — sin app instalada, abriendo web: \(web.absoluteString)")
+            UIApplication.shared.open(web) { ok2 in
+                print(ok2 ? "🧭 [ComoLlegar] waze ✅ abierto en web" : "🧭 [ComoLlegar] waze ❌ open falló")
+            }
         }
     }
 
