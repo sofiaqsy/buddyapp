@@ -2572,8 +2572,14 @@ struct PlaceGuideMapSheet: View {
         Group {
             switch loadState {
             case .loading:
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(alignment: .topLeading) { closeButton }
+                // Con fondo propio y a sangre. Sin él, mientras carga se veía el
+                // fondo del contenedor respetando el safe area, y al llegar la
+                // ruta el mapa pasaba a full-bleed: la pantalla daba un salto.
+                ZStack {
+                    Color.canvas.ignoresSafeArea()
+                    ProgressView()
+                }
+                .overlay(alignment: .topLeading) { backButton }
             case .guideAvailable:
                 // TripDetailView ya trae su propio botón de volver (chevron
                 // flotante sobre el mapa) — no hace falta agregar otro.
@@ -2581,15 +2587,25 @@ struct PlaceGuideMapSheet: View {
                     .environmentObject(routeStore)
             case .noGuide(let lat, let lng):
                 MapPinView(name: name, lat: lat, lng: lng, span: 0.003)
-                    .overlay(alignment: .topLeading) { closeButton }
+                    .overlay(alignment: .topLeading) { backButton }
             case .noData:
                 fallbackMessage("No tenemos la ubicación de este lugar", icon: "mappin.slash")
-                    .overlay(alignment: .topLeading) { closeButton }
+                    .overlay(alignment: .topLeading) { backButton }
             case .error:
                 fallbackMessage("No pudimos cargar el mapa", icon: "wifi.exclamationmark")
-                    .overlay(alignment: .topLeading) { closeButton }
+                    .overlay(alignment: .topLeading) { backButton }
             }
         }
+        // Acá, y no solo dentro de TripDetailView.
+        //
+        // Esta vista se abre SIEMPRE con un push (navigationDestination, nunca
+        // como modal), así que hereda la barra de navegación del sistema con su
+        // botón "atrás". TripDetailView la esconde, pero recién existe cuando la
+        // ruta terminó de cargar: durante ese medio segundo se veía la barra del
+        // sistema y encima aparecía la vista final, tapándola. El parpadeo no
+        // era un resto de una pantalla anterior — era esta barra.
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             guard let destId = destinationId else {
                 loadState = lat != nil && lng != nil
@@ -2600,14 +2616,21 @@ struct PlaceGuideMapSheet: View {
         }
     }
 
-    private var closeButton: some View {
+    /// Mismo chevron, mismo tamaño y mismo estilo que el de TripDetailView.
+    ///
+    /// Antes era una "x" de 32pt y el de la vista final un chevron de 44: al
+    /// terminar la carga el botón cambiaba de forma y de sitio, y ese cambio se
+    /// leía como un parpadeo aunque durara lo que dura una transición. Siendo el
+    /// mismo botón, no hay nada que se mueva. Y "x" era además la señal
+    /// equivocada: esto se abre con un push, así que vuelve, no cierra.
+    private var backButton: some View {
         Button { dismiss() } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Color.ink)
-                .frame(width: 32, height: 32)
-                .background(.thinMaterial, in: Circle())
+            Image(systemName: "chevron.left")
+                .font(.system(size: 16, weight: .bold))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
+        .buttonStyle(GlassCircleButtonStyle())
         .padding(.leading, Spacing.edge)
         .padding(.top, Spacing.md)
     }
