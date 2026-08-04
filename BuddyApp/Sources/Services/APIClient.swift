@@ -132,7 +132,11 @@ final class APIClient {
         // "estas 3 funciones piden lo mismo".
         let (veces, esPaginacion) = APIClient.contar(path)
         let repetido = (veces > 1 && !esPaginacion) ? "  ⚠️ ×\(veces) en esta sesión"
-                     : (esPaginacion ? "  📄 página \(veces)" : "")
+                     // "continuación N" y no "página N": este contador solo ve
+                     // las peticiones CON cursor, así que su N=1 es en realidad
+                     // la segunda página. Llamarla "página 1" hacía que el log
+                     // contradijera al propio feed.
+                     : (esPaginacion ? "  📄 continuación \(veces)" : "")
         let quien = via.map { "  ← \($0)" } ?? ""
         print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))\(quien)\(repetido)")
         let (data, response) = try await APIClient.session.data(for: req)
