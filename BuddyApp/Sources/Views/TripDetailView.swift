@@ -993,6 +993,9 @@ struct PlaceGuideDetailSheet: View {
     @State private var buddies: [APIPlaceBuddy] = []
     @State private var isLoadingBuddies = true
     @State private var showFullGallery = false
+    /// Foto abierta a pantalla completa. Tocar una miniatura abre ESA foto, no
+    /// la cuadrícula: "ver el resto" ya tiene su entrada en "Ver todas".
+    @State private var fotoAmpliada: GalleryPhoto? = nil
 
     @State private var photoPendingDeletion: GalleryPhoto? = nil
     @State private var isDeletingPhoto = false
@@ -1047,9 +1050,8 @@ struct PlaceGuideDetailSheet: View {
             // recibe GalleryPhoto tiene la identidad de cada página, así que
             // desde "Ver todas" también se puede borrar. Antes solo se podían
             // borrar las 12 de la fila.
-            PlaceFullGallerySheet(placeName: place.name, vm: galleryVM) { photo in
-                photoPendingDeletion = photo
-            }
+            PlaceFullGallerySheet(placeName: place.name, vm: galleryVM,
+                                  onDelete: { photoPendingDeletion = $0 })
         }
         .fullScreenCover(item: $editingJourney) { journey in
             // publishesOnSave: acá no existe el paso posterior de "publicar el
@@ -1073,6 +1075,9 @@ struct PlaceGuideDetailSheet: View {
             Button("Cancelar", role: .cancel) { photoPendingDeletion = nil }
         } message: {
             Text("Se quitará de este lugar para siempre.")
+        }
+        .fullScreenCover(item: $fotoAmpliada) { foto in
+            PhotoLightbox(photo: foto)
         }
         .alert("No se pudo eliminar la foto", isPresented: $deleteFailed) {
             Button("OK", role: .cancel) {}
@@ -1283,7 +1288,7 @@ struct PlaceGuideDetailSheet: View {
                         addPhotoTile
 
                         ForEach(galleryVM.photos) { photo in
-                            Button { showFullGallery = true } label: {
+                            Button { fotoAmpliada = photo } label: {
                                 CachedImage(urlString: photo.url) { img in
                                     img.resizable().scaledToFill()
                                 } placeholder: {
@@ -1465,6 +1470,7 @@ struct PlaceFullGallerySheet: View {
     let onDelete: (GalleryPhoto) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var fotoAmpliada: GalleryPhoto? = nil
     private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
 
     var body: some View {
@@ -1479,6 +1485,10 @@ struct PlaceFullGallerySheet: View {
                         }
                         .aspectRatio(1, contentMode: .fill)
                         .clipped()
+                        .contentShape(Rectangle())
+                        // Mismo gesto que en la fila: tocar una foto la abre a
+                        // pantalla completa.
+                        .onTapGesture { fotoAmpliada = photo }
                         .contextMenu {
                             if photo.isMine, photo.isDeletable {
                                 Button(role: .destructive) {
@@ -1502,6 +1512,9 @@ struct PlaceFullGallerySheet: View {
             .navigationTitle(placeName)
             .navigationBarTitleDisplayMode(.inline)
             .refreshable { vm.refresh() }
+            .fullScreenCover(item: $fotoAmpliada) { foto in
+                PhotoLightbox(photo: foto)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cerrar") { dismiss() }

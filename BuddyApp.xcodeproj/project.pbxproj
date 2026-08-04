@@ -18,6 +18,7 @@
 		5A1C0E7B21D4F8093B6C7701 /* SpotGalleryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0E7B21D4F8093B6C7702 /* SpotGalleryStore.swift */; };
 		5A1C0E7B21D4F8093B6C7703 /* YoViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0E7B21D4F8093B6C7704 /* YoViewModel.swift */; };
 		5A1C0E7B21D4F8093B6C7707 /* UserProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0E7B21D4F8093B6C7708 /* UserProfileView.swift */; };
+		5A1C0E7B21D4F8093B6C7709 /* PhotoLightbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0E7B21D4F8093B6C770A /* PhotoLightbox.swift */; };
 		5A1C0E7B21D4F8093B6C7705 /* UserProfileViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0E7B21D4F8093B6C7706 /* UserProfileViewModel.swift */; };
 		3F17D6E8DAE570071F615D95 /* SubjectLiftService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97E7CB7E2EAEDA1A629DB06 /* SubjectLiftService.swift */; };
 		586024213F46B73E227A0B37 /* CanvasItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84085C23C5525A7516896F8E /* CanvasItemView.swift */; };
@@ -105,6 +106,7 @@
 		5A1C0E7B21D4F8093B6C7702 /* SpotGalleryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotGalleryStore.swift; sourceTree = "<group>"; };
 		5A1C0E7B21D4F8093B6C7704 /* YoViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YoViewModel.swift; sourceTree = "<group>"; };
 		5A1C0E7B21D4F8093B6C7708 /* UserProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileView.swift; sourceTree = "<group>"; };
+		5A1C0E7B21D4F8093B6C770A /* PhotoLightbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLightbox.swift; sourceTree = "<group>"; };
 		5A1C0E7B21D4F8093B6C7706 /* UserProfileViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileViewModel.swift; sourceTree = "<group>"; };
 		A1B2C3D40002TRAVELERALIAS /* TravelerAlias.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelerAlias.swift; sourceTree = "<group>"; };
 		AA11223344556677AABBCC00 /* NotificationType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationType.swift; sourceTree = "<group>"; };
@@ -253,6 +255,7 @@
 				FA7237947F0CFF86BB760D14 /* TripsView.swift */,
 				6B836978B401B0B9D6162E18 /* YoView.swift */,
 				5A1C0E7B21D4F8093B6C7708 /* UserProfileView.swift */,
+				5A1C0E7B21D4F8093B6C770A /* PhotoLightbox.swift */,
 				BB2C3D4E5F6A7B8C9D0E1F2A /* BuddyProfileView.swift */,
 			);
 			path = Views;
@@ -432,6 +435,7 @@
 				5A1C0E7B21D4F8093B6C7701 /* SpotGalleryStore.swift in Sources */,
 				5A1C0E7B21D4F8093B6C7703 /* YoViewModel.swift in Sources */,
 				5A1C0E7B21D4F8093B6C7707 /* UserProfileView.swift in Sources */,
+				5A1C0E7B21D4F8093B6C7709 /* PhotoLightbox.swift in Sources */,
 				5A1C0E7B21D4F8093B6C7705 /* UserProfileViewModel.swift in Sources */,
 				7D894E3A9391A35A28D5AFF6 /* StickerUnlockSheet.swift in Sources */,
 				AA11BB22CC33DD44EE55FF66 /* QRScannerView.swift in Sources */,
