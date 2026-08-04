@@ -10,35 +10,24 @@ struct YoView: View {
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var router: AppRouter
     @EnvironmentObject var locationService: LocationService
-    @State private var user: APIUser? = nil
-    @State private var stickers: [APIUserSticker] = []
-    @State private var journeys: [APIJourney] = []
-    /// Lugares que recomienda — sección aparte de los viajes propios.
-    @State private var shares: [APIPlaceCard] = []
+    /// Todo el estado de datos vive en el ViewModel: perfil, trips, lugares,
+    /// cachés por bloque y paginación. Acá solo queda lo que es de la vista —qué
+    /// sheet está abierta, qué se está editando, a dónde navega.
+    @StateObject private var vm = YoViewModel()
     @State private var showCompartirLugar = false
     /// Journey creado por la sheet, en espera del onDismiss para recargar. El
     /// perfil no puede refrescar antes: la sheet sigue arriba y el usuario
     /// vería la lista moverse debajo.
     @State private var pendingShareJourney: APIJourney? = nil
-    @State private var tripsNextCursor: String? = nil
-    @State private var tripsHasMore: Bool = false
-    @State private var isLoadingMoreTrips: Bool = false
     @State private var selectedStory: APIJourney? = nil   // detalle de publicación
     /// Long-press en un trip del grid → confirmar eliminación de la publicación.
     @State private var deletePublicationTarget: APIJourney? = nil
-    @State private var isLoading = true
     @State private var editingBio = false
     @State private var bioText = ""
-    @State private var isSavingBio = false
     @State private var avatarItem: PhotosPickerItem? = nil
-    @State private var isUploadingAvatar = false
     @State private var showLogoutConfirm = false
     @State private var showDeleteConfirm = false
     @State private var isDeletingAccount = false
-    @State private var bioSaveFailed      = false
-    @State private var avatarUploadFailed = false
-    @State private var buddyMe: APIBuddyMe? = nil
-    @State private var destinations: [APIDestination] = []
     @State private var showBecomeBuddyConfirm = false
     @State private var isBecomingBuddy = false
     @State private var showNameSheet = false
@@ -47,14 +36,6 @@ struct YoView: View {
     @State private var profileSocialError: String? = nil
     // Guardia de logout: si hay apoyo activo no se puede cerrar sesión sin confirmar
     @State private var showActiveHelpLogoutAlert = false
-    // Caché en memoria: evita recargar el perfil en cada cambio de tab
-    @State private var lastFetchedAt: Date? = nil
-    // Previene llamadas concurrentes y rapid-retries (Task restarts por cambios de layout)
-    @State private var isLoadingProfile = false
-    @State private var lastFetchAttemptedAt: Date? = nil
-    // Demanda sin cubrir en la zona actual — invita a postular como buddy ahí.
-    @State private var unattendedCount = 0
-    @State private var unattendedPlaceName = ""
 
     /// Push, no modal: un push dentro de este stack respeta la barra de tabs
     /// de la app; un .fullScreenCover la tapa siempre.
@@ -66,7 +47,7 @@ struct YoView: View {
                 // ── Estado anónimo ──
                 if !authState.isLoggedIn {
                     anonymousState
-                } else if isLoading {
+                } else if vm.isLoadingProfile {
                     ZStack {
                         Color.canvas.ignoresSafeArea()
                         ProgressView().tint(Color.inkMuted)
@@ -128,8 +109,8 @@ struct YoView: View {
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.xl)
 
-                            if buddyMe?.isBuddy != true {
-                                if unattendedCount > 0 {
+                            if vm.buddyMe?.isBuddy != true {
+                                if vm.unattendedCount > 0 {
                                     unattendedDemandCTA
                                         .padding(.horizontal, Spacing.edge)
                                         .padding(.top, Spacing.md)
@@ -147,7 +128,7 @@ struct YoView: View {
                             // Visible si puede aportar (necesita la entrada) o
                             // si ya aportó (no se le esconde lo suyo aunque su
                             // verificación haya cambiado después).
-                            if canRecommendPlaces || !shares.isEmpty {
+                            if canRecommendPlaces || !vm.shares.isEmpty {
                                 sharesSection
                                     .padding(.top, Spacing.xl)
                             }
@@ -157,7 +138,7 @@ struct YoView: View {
                         }
                         .padding(.bottom, Spacing.xl).safeAreaPadding(.bottom)
                     }
-                    .refreshable { await loadProfile(forceRefresh: true) }
+                    .refreshable { await vm.load(force: true) }
                     .background(Color.canvas)
                 }
             }
@@ -176,7 +157,7 @@ struct YoView: View {
                 titleVisibility: .visible
             ) {
                 Button("Eliminar publicación", role: .destructive) {
-                    if let t = deletePublicationTarget { deletePublication(t) }
+                    if let t = deletePublicationTarget { vm.deletePublication(t) }
                     deletePublicationTarget = nil
                 }
                 Button("Cancelar", role: .cancel) { deletePublicationTarget = nil }
@@ -201,7 +182,7 @@ struct YoView: View {
                 IdentitySheet(purpose: .profile,
                               suggestedName: suggestedNameForProfile,
                               startAtName: true) {
-                    Task { await loadProfile(forceRefresh: true) }
+                    Task { await vm.load(force: true) }
                 }
                 .environmentObject(authState)
             }
@@ -232,12 +213,12 @@ struct YoView: View {
                     }
                 }
             }
-            .alert("No se pudo guardar la bio", isPresented: $bioSaveFailed) {
+            .alert("No se pudo guardar la bio", isPresented: $vm.bioSaveFailed) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Tu bio no se guardó. Verifica tu conexión e inténtalo de nuevo.")
             }
-            .alert("No se pudo subir la foto", isPresented: $avatarUploadFailed) {
+            .alert("No se pudo subir la foto", isPresented: $vm.avatarUploadFailed) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Tu foto de perfil no se actualizó. Verifica tu conexión e inténtalo de nuevo.")
@@ -251,7 +232,7 @@ struct YoView: View {
                 // sigue siendo cosa del editor, igual que desde Tu trip.
                 guard pendingShareJourney != nil else { return }
                 pendingShareJourney = nil
-                Task { await loadProfile(forceRefresh: true) }
+                Task { await vm.load(force: true) }
             }) {
                 CompartirLugarSheet { journey in
                     print("🌍 [YoView] compartido creado journey=\(journey.id)")
@@ -259,18 +240,22 @@ struct YoView: View {
                 }
             }
         }
-        .task { await loadProfile() }
-        .task { await loadUnattendedDemand() }
+        .task { await vm.load() }
+        .task { await vm.loadUnattendedDemand(location: locationService.userLocation) }
+        // Cada aviso invalida SOLO el bloque que le corresponde. Antes los
+        // tres forzaban la recarga entera: desbloquear un sticker volvía a pedir
+        // los trips y los lugares sin ningún motivo.
         .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
-            Task { await loadProfile(forceRefresh: true) }
+            vm.invalidateProfile()
+            Task { await vm.load() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
-            Task { await loadProfile(forceRefresh: true) }
+            vm.invalidatePhotos()
+            Task { await vm.load() }
         }
-        // forceRefresh porque el guard de 60s ignoraría la recarga: borrar una
-        // foto y volver al perfil pasa en segundos.
         .onReceive(NotificationCenter.default.publisher(for: .placePhotosChanged)) { _ in
-            Task { await loadProfile(forceRefresh: true) }
+            vm.invalidatePhotos()
+            Task { await vm.load() }
         }
     }
 
@@ -284,7 +269,7 @@ struct YoView: View {
                     Circle()
                         .fill(Color.sandLight)
                         .frame(width: 88, height: 88)
-                    CachedImage(urlString: user?.avatarUrl) { img in
+                    CachedImage(urlString: vm.user?.avatarUrl) { img in
                         img.resizable().scaledToFill()
                             .frame(width: 88, height: 88)
                             .clipShape(Circle())
@@ -294,7 +279,7 @@ struct YoView: View {
                             .foregroundStyle(Color.sand)
                             .frame(width: 88, height: 88) // ancla el placeholder al mismo tamaño
                     }
-                    if isUploadingAvatar {
+                    if vm.isUploadingAvatar {
                         Circle().fill(.black.opacity(0.4)).frame(width: 88, height: 88)
                         ProgressView().tint(.white)
                     }
@@ -318,7 +303,7 @@ struct YoView: View {
 
             // Identidad — el nombre lidera, luego la narrativa
             VStack(alignment: .leading, spacing: 3) {
-                Text(user?.fullName ?? "Tú")
+                Text(vm.user?.fullName ?? "Tú")
                     .font(BT.title3)
                     .foregroundStyle(Color.ink)
                     .lineLimit(1)
@@ -326,7 +311,7 @@ struct YoView: View {
                 Text(metaLine)
                     .font(BT.subhead)
                     .foregroundStyle(Color.inkMuted)
-                if let since = user?.memberSince {
+                if let since = vm.user?.memberSince {
                     Text("Viajando desde \(memberSinceLabel(date: since))")
                         .font(BT.caption1)
                         .foregroundStyle(Color.inkMuted)
@@ -337,10 +322,10 @@ struct YoView: View {
     }
 
     private var metaLine: String {
-        let trips = journeys.count
+        let trips = vm.journeys.count
         let tripsLabel = trips == 1 ? "1 trip" : "\(trips) trips"
-        let stickersLabel = stickers.isEmpty ? nil
-            : (stickers.count == 1 ? "1 sticker" : "\(stickers.count) stickers")
+        let stickersLabel = vm.stickers.isEmpty ? nil
+            : (vm.stickers.count == 1 ? "1 sticker" : "\(vm.stickers.count) vm.stickers")
         return [tripsLabel, stickersLabel].compactMap { $0 }.joined(separator: " · ")
     }
 
@@ -361,7 +346,7 @@ struct YoView: View {
 
                     HStack(spacing: Spacing.sm) {
                         Button("Cancelar") {
-                            bioText = user?.bio ?? ""
+                            bioText = vm.user?.bio ?? ""
                             editingBio = false
                         }
                         .font(BT.footnote)
@@ -372,7 +357,7 @@ struct YoView: View {
                         Button {
                             saveBio()
                         } label: {
-                            if isSavingBio {
+                            if vm.isSavingBio {
                                 ProgressView().scaleEffect(0.7).tint(.white)
                             } else {
                                 Text("Guardar")
@@ -384,17 +369,17 @@ struct YoView: View {
                         .background(Color.ink)
                         .foregroundStyle(Color.inkInverse)
                         .clipShape(Capsule())
-                        .disabled(isSavingBio)
+                        .disabled(vm.isSavingBio)
                     }
                 }
             } else {
                 // Toda la fila es tappeable — target ≥ 44pt
                 Button {
-                    bioText = user?.bio ?? ""
+                    bioText = vm.user?.bio ?? ""
                     editingBio = true
                 } label: {
                     HStack(alignment: .center, spacing: Spacing.sm) {
-                        if let bio = user?.bio, !bio.isEmpty {
+                        if let bio = vm.user?.bio, !bio.isEmpty {
                             Text(bio)
                                 .font(BT.callout)
                                 .foregroundStyle(Color.ink)
@@ -421,14 +406,14 @@ struct YoView: View {
 
     @ViewBuilder
     private var buddyRow: some View {
-        if let bm = buddyMe, bm.isBuddy, let p = bm.profile {
+        if let bm = vm.buddyMe, bm.isBuddy, let p = bm.profile {
             // IS BUDDY — fila navegable hacia BuddyProfileView
             NavigationLink {
-                BuddyProfileView(profile: p, destinations: destinations) { updated in
-                    buddyMe = updated
+                BuddyProfileView(profile: p, destinations: vm.destinations) { updated in
+                    vm.setBuddyMe(updated)
                 }
             } label: {
-                BuddyNavRow(profile: p, destinations: destinations)
+                BuddyNavRow(profile: p, destinations: vm.destinations)
             }
             .buttonStyle(.plain)
         }
@@ -477,9 +462,9 @@ struct YoView: View {
                         .foregroundStyle(.white)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(unattendedCount == 1
-                         ? "1 persona buscó un buddy en \(unattendedPlaceName)"
-                         : "\(unattendedCount) personas buscaron un buddy en \(unattendedPlaceName)")
+                    Text(vm.unattendedCount == 1
+                         ? "1 persona buscó un buddy en \(vm.unattendedPlaceName)"
+                         : "\(vm.unattendedCount) personas buscaron un buddy en \(vm.unattendedPlaceName)")
                         .font(BT.footnoteBold)
                         .foregroundStyle(.white)
                     Text("Sé el primer buddy aquí")
@@ -504,11 +489,11 @@ struct YoView: View {
 
     private var stickerSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("STICKERS", count: stickers.count)
+            sectionHeader("STICKERS", count: vm.stickers.count)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: Spacing.lg) {
-                    ForEach(stickers, id: \.id) { s in
+                    ForEach(vm.stickers, id: \.id) { s in
                         VStack(spacing: 6) {
                             ZStack {
                                 Circle()
@@ -542,7 +527,7 @@ struct YoView: View {
                     }
 
                     // Slots vacíos punteados — muestran que hay más por coleccionar
-                    ForEach(0..<max(0, 3 - stickers.count), id: \.self) { _ in
+                    ForEach(0..<max(0, 3 - vm.stickers.count), id: \.self) { _ in
                         Circle()
                             .strokeBorder(Color.inkMuted.opacity(0.25),
                                           style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
@@ -594,30 +579,36 @@ struct YoView: View {
     /// no isBuddy a secas: is_buddy es true con el perfil creado aunque siga
     /// pendiente de revisión.
     private var canRecommendPlaces: Bool {
-        buddyMe?.profile?.verificationStatus == "approved"
+        vm.buddyMe?.profile?.verificationStatus == "approved"
     }
 
     private var sharesSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("LUGARES QUE RECOMIENDAS", count: shares.count)
+            sectionHeader("LUGARES QUE RECOMIENDAS", count: vm.shares.count)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 // 3 como la grilla de TRIPS, y no solo entre el "+" y su vecino:
                 // una separación distinta en un único hueco se lee como error de
                 // maquetado, no como intención. Con el mismo valor las dos
                 // secciones del perfil se leen como una sola colección.
-                HStack(spacing: 3) {
+                //
+                // LazyHStack y no HStack: el normal construye TODAS las tarjetas
+                // al aparecer, así que cada portada arranca su descarga aunque
+                // esté fuera de pantalla. Con un lugar no se nota; con veinte, la
+                // sección compite por ancho de banda con el resto del perfil.
+                LazyHStack(spacing: 3) {
                     // Siempre primero: es la acción, no un elemento más de la
                     // colección. Al final habría que arrastrar toda la lista
                     // para encontrarla, y crece con cada lugar que se suma.
                     if canRecommendPlaces { addPlaceCard }
 
-                    ForEach(shares, id: \.id) { place in
+                    ForEach(vm.shares, id: \.id) { place in
                         // En el perfil el pie es cuántas fotos aportó a ese
                         // lugar; los buddies del destino no vienen al caso aquí.
                         NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel) {
                             navPath.append(place)
                         }
+                        .onAppear { vm.shareAppeared(place) }
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
@@ -657,9 +648,9 @@ struct YoView: View {
 
     private var tripsSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("TRIPS", count: journeys.count)
+            sectionHeader("TRIPS", count: vm.journeys.count)
 
-            if journeys.isEmpty {
+            if vm.journeys.isEmpty {
                 // Empty state — invita a la acción, no lamenta el vacío
                 Button {
                     router.switchTo(.trips)
@@ -686,7 +677,7 @@ struct YoView: View {
                 // vitrina de lo hecho y crear vive en su propio tab. El vacío ya
                 // tiene su invitación arriba, que es donde hace falta.
                 LazyVGrid(columns: columns, spacing: 3) {
-                    ForEach(journeys, id: \.id) { journey in
+                    ForEach(vm.journeys, id: \.id) { journey in
                         TripGridCell(journey: journey)
                             .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
                             .onTapGesture {
@@ -701,33 +692,18 @@ struct YoView: View {
                                     Label("Eliminar publicación", systemImage: "trash")
                                 }
                             }
+                            .onAppear { vm.tripAppeared(journey) }
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
 
-                // Cargar más páginas cuando hay resultados adicionales en el servidor
-                if tripsHasMore {
-                    Button {
-                        Haptic.light()
-                        Task { await loadMoreTrips() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if isLoadingMoreTrips {
-                                ProgressView().scaleEffect(0.8)
-                            }
-                            Text(isLoadingMoreTrips ? "Cargando…" : "Ver más trips")
-                                .font(BT.footnoteBold)
-                                .foregroundStyle(Color.ink)
-                        }
+                // La siguiente página ya viene en camino desde el 80%; esto solo
+                // ocupa el sitio mientras llega, para que el grid no dé un salto
+                // al aparecer la fila nueva.
+                if vm.tripsHasMore {
+                    ProgressView()
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Spacing.md)
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, Spacing.edge)
-                    .disabled(isLoadingMoreTrips)
                 }
             }
         }
@@ -751,11 +727,7 @@ struct YoView: View {
         AuthService.shared.signOut()
         // `userDidLogOut` ya fue emitido por signOut(); AuthState lo escucha y
         // pone isLoggedIn = false. Limpiamos el estado local de la vista.
-        user         = nil
-        stickers     = []
-        journeys     = []
-        buddyMe      = nil
-        isLoading    = true
+        vm.signedOut()
     }
 
     private func deleteAccount() async {
@@ -830,7 +802,7 @@ struct YoView: View {
                                          title: "Tus momentos",
                                          subtitle: "Las fotos y recuerdos que guardaste te siguen a donde vayas.")
                         anonymousBenefit(icon: "sparkles",
-                                         title: "Tus stickers",
+                                         title: "Tus vm.stickers",
                                          subtitle: "Recuerdos de los lugares que te recibieron.")
                         anonymousBenefit(icon: "person.2",
                                          title: "Tu perfil de Buddy",
@@ -971,7 +943,7 @@ struct YoView: View {
         switch destination {
         case .home:
             authState.didAuthenticate()
-            Task { await loadProfile(forceRefresh: true) }
+            Task { await vm.load(force: true) }
         case .needsProfileCompletion:
             let name = result.suggestedName ?? ""
             if name.trimmingCharacters(in: .whitespaces).count >= 2 {
@@ -980,7 +952,7 @@ struct YoView: View {
                         fullName: name.trimmingCharacters(in: .whitespaces)
                     )
                     authState.didAuthenticate()
-                    await loadProfile(forceRefresh: true)
+                    await vm.load(force: true)
                 }
             } else {
                 suggestedNameForProfile = name
@@ -1012,203 +984,34 @@ struct YoView: View {
     }
 
     private func saveBio() {
-        guard let userId = Session.travelerId else { return }
-        isSavingBio = true
         Task {
-            do {
-                try await APIClient.shared.updateUserBio(travelerId: userId, bio: bioText)
-                await MainActor.run {
-                    user = user.map { u in var copy = u; copy.bio = bioText; return copy }
-                    editingBio = false
-                    isSavingBio = false
-                    Haptic.success()
-                }
-            } catch {
-                await MainActor.run { isSavingBio = false; bioSaveFailed = true }
-            }
+            if await vm.saveBio(bioText) { editingBio = false }
         }
     }
 
     private func uploadAvatar(item: PhotosPickerItem) async {
-        print("🖼️ [uploadAvatar] iniciando…")
-
+        // Decodificar y comprimir es cosa de la vista: nace de un PhotosPicker,
+        // que es UI. El VM recibe bytes ya listos y no sabe qué es un
+        // PhotosPickerItem.
         guard let data = try? await item.loadTransferable(type: Data.self) else {
             print("🖼️ [uploadAvatar] ❌ loadTransferable falló — formato no soportado")
             return
         }
-        print("🖼️ [uploadAvatar] imagen original: \(data.count / 1024) KB")
-
         guard let uiImg = UIImage(data: data),
-              let jpegData = uiImg.limitedToMaxDimension(400).jpegData(compressionQuality: 0.85) else {
+              let jpeg = uiImg.limitedToMaxDimension(400).jpegData(compressionQuality: 0.85) else {
             print("🖼️ [uploadAvatar] ❌ compresión JPEG falló")
             return
         }
-        print("🖼️ [uploadAvatar] JPEG comprimido: \(jpegData.count / 1024) KB — enviando a backend…")
-
-        await MainActor.run { isUploadingAvatar = true }
-        do {
-            let url = try await APIClient.shared.uploadAvatar(imageData: jpegData)
-            print("🖼️ [uploadAvatar] ✅ \(url.suffix(60))")
-            await MainActor.run {
-                user = user.map { u in var copy = u; copy.avatarUrl = url; return copy }
-                isUploadingAvatar = false
-                Haptic.success()
-            }
-        } catch {
-            print("🖼️ [uploadAvatar] ❌ \(error)")
-            await MainActor.run { isUploadingAvatar = false; avatarUploadFailed = true }
-        }
+        print("🖼️ [uploadAvatar] \(data.count / 1024) KB → \(jpeg.count / 1024) KB")
+        await vm.uploadAvatar(jpegData: jpeg)
     }
 
-    /// Elimina una publicación del perfil — optimista: se quita del grid al
-    /// instante y el backend la despublica (cancelled + is_public=false),
-    /// con lo que también desaparece del feed de la comunidad.
-    private func deletePublication(_ journey: APIJourney) {
-        journeys.removeAll { $0.id == journey.id }
-        Haptic.success()
-        Task {
-            do { try await APIClient.shared.cancelJourney(journeyId: journey.id) }
-            catch { print("❌ [deletePublication] \(error)") }
-        }
-    }
-
-    /// Si el usuario no es buddy y tiene ubicación disponible, busca cuántas
-    /// solicitudes recientes en su zona actual se quedaron sin buddy — para
-    /// invitarlo a postular ahí mismo (unattendedDemandCTA).
-    private func loadUnattendedDemand() async {
-        guard buddyMe?.isBuddy != true else { return }
-        guard let loc = locationService.userLocation else { return }
-        do {
-            let place = try await APIClient.shared.resolvePlace(
-                lat: loc.coordinate.latitude, lng: loc.coordinate.longitude
-            )
-            guard let destinationId = place.destinationId else { return }
-            let count = try await APIClient.shared.fetchUnattendedCount(destinationId: destinationId)
-            guard count > 0 else { return }
-            await MainActor.run {
-                unattendedCount = count
-                unattendedPlaceName = place.name
-            }
-        } catch {
-            print("👤 [YoView] loadUnattendedDemand falló:", error.localizedDescription)
-        }
-    }
-
-    private func loadProfile(forceRefresh: Bool = false) async {
-        // Prevent concurrent calls and rapid-fire retries (SwiftUI may restart .task on layout changes)
-        if !forceRefresh {
-            if isLoadingProfile { return }
-            if let lastAttempt = lastFetchAttemptedAt,
-               Date().timeIntervalSince(lastAttempt) < 2 { return }
-        }
-
-        let tid  = TravelerService.shared.travelerId?.prefix(8) ?? "nil"
-        let ttok = TravelerService.shared.token.map { String($0.prefix(16)) + "…" } ?? "nil"
-        let atok = AuthService.shared.accessToken.map { String($0.prefix(16)) + "…" } ?? "nil"
-        print("👤 [YoView] loadProfile — travelerId=\(tid) travelerToken=\(ttok) authToken=\(atok) hasSession=\(Session.hasSession) isVerified=\(Session.isVerified) forceRefresh=\(forceRefresh)")
-
-        guard Session.hasSession else {
-            print("👤 [YoView] sin sesión — saliendo")
-            isLoading = false; return
-        }
-
-        // Cache: si los datos tienen menos de 10 s y no hay forzado, no recargar.
-        //
-        // El guard existe para el `.task` de esta vista, que corre cada vez que se
-        // entra al tab: sin él, ir y volver dispara media docena de requests. Diez
-        // segundos alcanzan para eso. Estaba en 60 y ese minuto era el que ocultaba
-        // una foto subida desde OTRO dispositivo (o por otro buddy): entrando al
-        // tab seguido nunca se recargaba, y solo aparecía tras un rato de inactividad.
-        // En el dispositivo que sube la foto no se notaba porque .journeyPublished
-        // y .placePhotosChanged ya fuerzan la recarga.
-        //
-        // Esto no vuelve el perfil tiempo real: un cambio ajeno se ve al refetchear,
-        // no cuando ocurre. Ese es otro problema y se resuelve versionando por hash
-        // de contenido o con invalidación desde el servidor.
-        if !forceRefresh, let fetchedAt = lastFetchedAt,
-           Date().timeIntervalSince(fetchedAt) < 10, user != nil {
-            print("👤 [YoView] perfil en caché (\(Int(Date().timeIntervalSince(fetchedAt)))s) — omitiendo recarga")
-            isLoading = false; return
-        }
-
-        isLoadingProfile = true
-        lastFetchAttemptedAt = Date()
-        defer { isLoadingProfile = false }
-
-        if user == nil { isLoading = true }
-
-        // ── Fase 1: header ─────────────────────────────────────────────────────
-        // Carga /users/me primero y muestra el header inmediatamente.
-        // El contenido inferior (stickers, trips) se carga en fase 2.
-        // Retry once after a brief delay — backend may need a moment to create the user
-        // record after social sign-in (Apple in particular has a propagation delay).
-        print("👤 [YoView] fetchCurrentUser → /users/me…")
-        var me: APIUser? = try? await APIClient.shared.fetchCurrentUser()
-        if me == nil {
-            print("👤 [YoView] fetchCurrentUser falló — reintentando en 1.5s…")
-            try? await Task.sleep(for: .seconds(1.5))
-            me = try? await APIClient.shared.fetchCurrentUser()
-        }
-        guard let me else {
-            print("👤 [YoView] ❌ fetchCurrentUser falló — token inválido, sin red, o sin perfil en DB")
-            isLoading = false; return
-        }
-        print("👤 [YoView] fetchCurrentUser ✅ → id=\(me.id.prefix(8)) name=\(me.fullName ?? "nil") role=\(me.role ?? "nil")")
-
-        // Header visible: el usuario ve nombre, avatar y buddy card antes de que
-        // terminen de cargar los stickers y los trips.
-        user      = me
-        isLoading = false
-
-        // ── Fase 2: contenido inferior (paralelo) ──────────────────────────────
-        print("👤 [YoView] cargando stickers/trips/buddy para id=\(me.id.prefix(8))…")
-        async let stickersTask = try? APIClient.shared.fetchUserStickers(travelerId: me.id)
-        async let tripsTask    = try? APIClient.shared.fetchUserTrips(travelerId: me.id)
-        async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
-        async let destsTask    = try? APIClient.shared.fetchDestinations()
-        async let sharesTask   = try? APIClient.shared.fetchUserShares(travelerId: me.id)
-
-        let (s, tp, b, d, sh) = await (stickersTask, tripsTask, buddyTask, destsTask, sharesTask)
-        print("👤 [YoView] datos cargados — stickers=\(s?.count ?? 0) shares=\(sh?.count ?? 0) trips=\(tp?.items.count ?? 0) hasMore=\(tp?.hasMore ?? false) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
-
-        stickers        = s ?? []
-        journeys        = tp?.items ?? []
-        shares          = sh ?? []
-        tripsNextCursor = tp?.nextCursor
-        tripsHasMore    = tp?.hasMore ?? false
-        buddyMe         = b
-        destinations    = d ?? []
-        lastFetchedAt   = Date()
-
-        await routeStore.syncCollectedStickers(userStickers: stickers)
-    }
-
-    private func loadMoreTrips() async {
-        guard tripsHasMore, !isLoadingMoreTrips, let userId = user?.id else { return }
-        print("👤 [YoView] loadMoreTrips — cursor=\(tripsNextCursor ?? "nil")")
-        isLoadingMoreTrips = true
-        defer { isLoadingMoreTrips = false }
-        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: userId, cursor: tripsNextCursor) else { return }
-        journeys        += page.items
-        tripsNextCursor  = page.nextCursor
-        tripsHasMore     = page.hasMore
-        print("👤 [YoView] loadMoreTrips ✅ — +\(page.items.count) trips totalNow=\(journeys.count)")
-    }
-
-    /// Crea el perfil de buddy del usuario y refresca la sección.
     private func becomeBuddy() async {
         guard !isBecomingBuddy else { return }
         isBecomingBuddy = true
         defer { isBecomingBuddy = false }
-        do {
-            let result = try await APIClient.shared.becomeBuddy()
-            await MainActor.run {
-                buddyMe = result
-                Haptic.success()
-            }
-        } catch {
-            await MainActor.run { Haptic.error() }
-        }
+        do { _ = try await vm.becomeBuddy(); Haptic.success() }
+        catch { Haptic.error() }
     }
 
     private static let memberSinceFormatter: DateFormatter = {
