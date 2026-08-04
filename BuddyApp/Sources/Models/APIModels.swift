@@ -196,6 +196,8 @@ struct APIPlace: Decodable, Identifiable {
             stickerImageUrl: stickerCatalog?.first?.imageUrl,
             stickerId: stickerCatalog?.first?.id,
             category: placeTypeToCategory(placeType ?? ""),
+            categoryName: placeCategory?.name,
+            categoryIcon: placeCategory?.icon,
             latitude: lat,
             longitude: lng,
             radiusMeters: Double(geofenceRadius ?? 50),
@@ -205,6 +207,17 @@ struct APIPlace: Decodable, Identifiable {
     }
 }
 
+/// `place_type` → el enum viejo de seis casos.
+///
+/// El `default` era `.culture`, y eso es lo que hacía que "El encanto" —un
+/// hotel— se anunciara como "Cultura": su place_type es 'other', que no está
+/// contemplado, y la rama por defecto inventaba una categoría en vez de admitir
+/// que no la sabe. Hoy 10 de los 14 spots son 'other', así que la mayoría del
+/// catálogo salía etiquetado igual de mal.
+///
+/// Ahora cae en `.hidden`, que es el único caso del enum que no afirma nada
+/// sobre qué es el lugar. La categoría de verdad viaja aparte, en
+/// `Place.categoryName`, y sale de `spot_category`.
 private func placeTypeToCategory(_ type: String) -> Place.Category {
     switch type {
     case "cafe":       return .cafe
@@ -212,7 +225,7 @@ private func placeTypeToCategory(_ type: String) -> Place.Category {
     case "landmark":   return .culture
     case "market":     return .market
     case "activity":   return .nature
-    default:           return .culture
+    default:           return .hidden
     }
 }
 

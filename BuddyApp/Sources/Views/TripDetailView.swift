@@ -712,7 +712,10 @@ struct RecommendationPin: View {
     let place: Place
     let isSelected: Bool
 
-    private var glyph: String { place.category.symbol }
+    /// El icono del catálogo antes que el del enum: un hotel se ve como una cama
+    /// y no como una columna griega. El enum queda de respaldo para los lugares
+    /// que aún no tienen categoría curada.
+    private var glyph: String { place.categoryIcon ?? place.category.symbol }
 
     var body: some View {
         if place.featured {
@@ -1302,24 +1305,21 @@ struct PlaceGuideDetailSheet: View {
 
     private var infoTab: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(place.category.label, systemImage: place.category.symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.brand)
+            // La categoría curada del catálogo, no la derivada de place_type.
+            // Y solo si existe: antes, un lugar sin clasificar caía en el
+            // `default` del mapeo y se anunciaba como "Cultura" — un hotel decía
+            // ser cultura. Es mejor no decir nada que decir algo falso, así que
+            // sin categoría la fila simplemente no aparece.
+            if let name = place.categoryName {
+                Label(name, systemImage: place.categoryIcon ?? "mappin.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+            }
 
             if !place.description.isEmpty {
                 Text(place.description)
                     .font(.system(size: 14))
                     .foregroundStyle(.primary)
-            }
-
-            Divider()
-
-            if place.isCollected {
-                Label("Ya desbloqueaste el recuerdo de este lugar", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.teal)
-            } else {
-                Label("Aquí desbloqueas un recuerdo", systemImage: "sparkles")
-                    .font(.system(size: 13)).foregroundStyle(Color.sand)
             }
         }
         .padding(.horizontal, 20)

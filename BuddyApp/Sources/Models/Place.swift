@@ -12,6 +12,16 @@ struct Place: Identifiable, Codable {
     var isCollected: Bool = false    // true after QR scan or geofence unlock
     var isFavorite: Bool = false     // marcado por el usuario (sincroniza con backend)
     let category: Category
+    /// Categoría CURADA del catálogo ("Hotel", "Restaurante", "Transporte"…),
+    /// tal como la editan en buddy-admin, con su SF Symbol.
+    ///
+    /// Existe aparte de `category` porque las dos no son lo mismo: `Category` es
+    /// un enum viejo de seis casos que no incluye ni hotel ni restaurante ni
+    /// transporte, y se deriva de `place_type`, que en el 71% de los spots vale
+    /// 'other'. Esto es el dato real; `category` queda para los mapas y colores
+    /// que ya dependen de él.
+    var categoryName: String? = nil
+    var categoryIcon: String? = nil
     let latitude: Double
     let longitude: Double
     let radiusMeters: Double
