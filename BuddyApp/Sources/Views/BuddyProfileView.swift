@@ -1037,7 +1037,8 @@ struct BuddyGuideMapSheet: View {
                         let old = localSpots[i]
                         localSpots[i] = APIPlaceGuideSpot(id: updated.id, name: updated.name,
                                                           lat: updated.lat, lng: updated.lng,
-                                                          coverUrl: updated.coverUrl ?? old.coverUrl)
+                                                          coverUrl: updated.coverUrl ?? old.coverUrl,
+                                                          placeCategory: old.placeCategory)
                     }
                     movingSpotId       = nil
                     isSaving           = false
@@ -1096,7 +1097,8 @@ struct BuddyGuideMapSheet: View {
                 if let i = localSpots.firstIndex(where: { $0.id == spot.id }) {
                     localSpots[i] = APIPlaceGuideSpot(id: updated.id, name: updated.name,
                                                       lat: updated.lat, lng: updated.lng,
-                                                      coverUrl: updated.coverUrl ?? spot.coverUrl)
+                                                      coverUrl: updated.coverUrl ?? spot.coverUrl,
+                                                      placeCategory: spot.placeCategory)
                 }
                 localSpots.sort { $0.name < $1.name }
                 editingSpot        = nil

@@ -77,15 +77,23 @@ struct APIPlaceGuideSpot: Decodable, Identifiable {
     let lat: Double
     let lng: Double
     let coverUrl: String?
+    /// `var` con default para que los tres sitios que rehacen un spot tras
+    /// editarlo en el mapa no tengan que pasarlo; Decodable lo sigue leyendo.
+    var placeCategory: APIPlaceCategory? = nil
 
     var asPlace: Place {
         Place(
             id: UUID(uuidString: id) ?? UUID(),
             name: name,
             description: "",
-            stickerSymbol: "mappin.circle.fill",
+            stickerSymbol: placeCategory?.icon ?? "mappin.circle.fill",
             stickerEmoji: "📍",
-            category: .culture,
+            // .hidden y no .culture: por esta vía nunca hubo dato de categoría,
+            // así que decir "Cultura" era inventarlo. La categoría de verdad
+            // viaja en categoryName, que ahora sí llega.
+            category: .hidden,
+            categoryName: placeCategory?.name,
+            categoryIcon: placeCategory?.icon,
             latitude: lat,
             longitude: lng,
             radiusMeters: 50,
