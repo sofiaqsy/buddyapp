@@ -144,11 +144,8 @@ struct UserProfileView: View {
 
     // MARK: Tarjeta de buddy
 
-    /// Quién es como buddy: si está disponible, en qué ayuda y a cuánta gente.
-    ///
-    /// Es la información que justifica esta pantalla — se llega desde la lista
-    /// de buddies de un lugar, y lo que se quiere saber es si esta persona puede
-    /// ayudar y con qué.
+    /// Quién es como buddy: si está disponible, dónde y a cuánta gente ha
+    /// ayudado.
     private func buddyCard(_ bp: APIBuddyProfile) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(spacing: 6) {
@@ -177,11 +174,11 @@ struct UserProfileView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let specs = bp.specialties, !specs.isEmpty {
-                // Las mismas etiquetas que en Conexiones: el vocabulario de las
-                // intenciones tiene que ser el mismo en toda la app.
-                FlowRow(specs.map { categoryLabels[$0] ?? $0 })
-            }
+            // Sin las especialidades. Este perfil responde "quién es y dónde
+            // está", no "qué me puede resolver": lo segundo es cosa del flujo de
+            // pedir ayuda, que ya pregunta la intención antes de buscar buddy.
+            // Listarlas acá invitaba a elegir persona por su etiqueta, y el
+            // emparejamiento no funciona así.
         }
         .padding(Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -299,31 +296,5 @@ struct UserProfileView: View {
     }()
     private static func memberSince(_ date: Date) -> String {
         memberSinceFormatter.string(from: date).capitalized
-    }
-}
-
-// MARK: – FlowRow
-
-/// Etiquetas que saltan de línea solas. Las especialidades son entre una y ocho
-/// y de ancho muy distinto ("Comer" contra "Alojamiento"); un HStack las
-/// desbordaría y un ScrollView horizontal escondería la mitad sin avisar.
-///
-/// Reutiliza el FlowLayout que ya vive en RegisterTripView.
-struct FlowRow: View {
-    let items: [String]
-    init(_ items: [String]) { self.items = items }
-
-    var body: some View {
-        FlowLayout(spacing: 6) {
-            ForEach(items, id: \.self) { text in
-                Text(text)
-                    .font(BT.caption1)
-                    .foregroundStyle(Color.ink)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color.sandLight)
-                    .clipShape(Capsule())
-            }
-        }
     }
 }
