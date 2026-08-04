@@ -1061,7 +1061,11 @@ struct CategoryPickerView: View {
     /// zIndex dibujan la del centro invadiendo el espacio de sus vecinas, como
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
-    private let exploreCardWidth: CGFloat = 160
+    // 176 y no 160: +10% sobre la imagen, pedido de diseño. Solo crece la foto
+    // — la banda de texto de abajo sigue midiendo 70pt, así que las tipografías
+    // quedan intactas y lo que gana peso es la fotografía, que es lo que el
+    // carrusel viene a mostrar.
+    private let exploreCardWidth: CGFloat = 176
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
@@ -1637,7 +1641,7 @@ private struct PendingConversationView: View {
 /// Alto de la foto, compartido por la card y por el carrusel que la mide: la
 /// ficha de abajo suma su banda a este valor, así el aire del texto nunca sale
 /// del espacio de la imagen.
-private let exploreCardPhotoHeight: CGFloat = 207
+private let exploreCardPhotoHeight: CGFloat = 228
 
 /// El papel de la ficha. Va acá y no inline porque el degradado tiene que
 /// terminar EXACTAMENTE en este color: si se separan, aparece una costura entre
