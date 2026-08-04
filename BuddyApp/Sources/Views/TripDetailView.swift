@@ -423,18 +423,24 @@ struct TripDetailView: View {
         }
     }
 
+    /// Apple Maps va por MKMapItem y no por URL.
+    ///
+    /// La URL mezclaba `daddr` con `q`, y Apple ignora `q` cuando hay destino:
+    /// el lugar se abría con las coordenadas por título ("-12.0464, -77.0428")
+    /// en vez de su nombre. MKMapItem lleva el nombre en el propio objeto, así
+    /// que Mapas muestra "El encanto" y ya arranca en modo indicaciones.
     private func openInAppleMaps() {
         guard let p = navigationTarget else {
             print("🧭 [ComoLlegar] appleMaps — navigationTarget=nil, no se abre nada")
             return
         }
-        let name = p.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? p.name
-        let url = URL(string: "https://maps.apple.com/?daddr=\(p.latitude),\(p.longitude)&q=\(name)")!
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: p.coordinate))
+        item.name = p.name
         print("🧭 [ComoLlegar] appleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
-        print("🧭 [ComoLlegar] appleMaps URL: \(url.absoluteString)")
-        UIApplication.shared.open(url) { ok in
-            print(ok ? "🧭 [ComoLlegar] appleMaps ✅ abierto" : "🧭 [ComoLlegar] appleMaps ❌ open falló")
-        }
+        let ok = item.openInMaps(launchOptions: [
+            MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving
+        ])
+        print(ok ? "🧭 [ComoLlegar] appleMaps ✅ abierto" : "🧭 [ComoLlegar] appleMaps ❌ open falló")
     }
 
     // MARK: – Bottom panel
@@ -450,10 +456,6 @@ struct TripDetailView: View {
                     place: place,
                     destinationId: resolvedDestinationId,
                     buddyPresenceText: buddyPresenceText,
-                    isFavorite: isFav(place),
-                    onToggleFavorite: {
-                        if let jid = journey?.id { routeStore.toggleFavorite(placeId: place.id, journeyId: jid) }
-                    },
                     onNavigate: { navigationTarget = place },
                     onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil } }
                 )
@@ -925,8 +927,6 @@ struct PlaceGuideDetailSheet: View {
     let place: Place
     let destinationId: String?
     let buddyPresenceText: String?
-    let isFavorite: Bool
-    let onToggleFavorite: () -> Void
     let onNavigate: () -> Void
     /// Embebido en el panel del mapa (no como sheet): @Environment(\.dismiss)
     /// no tiene nada que cerrar ahí, así que quién lo contiene decide qué
@@ -934,13 +934,10 @@ struct PlaceGuideDetailSheet: View {
     let onClose: () -> Void
 
     init(place: Place, destinationId: String?, buddyPresenceText: String?,
-         isFavorite: Bool, onToggleFavorite: @escaping () -> Void,
          onNavigate: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.place = place
         self.destinationId = destinationId
         self.buddyPresenceText = buddyPresenceText
-        self.isFavorite = isFavorite
-        self.onToggleFavorite = onToggleFavorite
         self.onNavigate = onNavigate
         self.onClose = onClose
         _galleryVM = StateObject(wrappedValue: SpotGalleryViewModel(spotId: place.id.uuidString))
@@ -1068,16 +1065,6 @@ struct PlaceGuideDetailSheet: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-
-            Button(action: onToggleFavorite) {
-                Image(systemName: isFavorite ? "heart.fill" : "heart")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(isFavorite ? Color.errorRed : Color.ink.opacity(0.6))
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.secondary.opacity(0.12)))
-                    .symbolEffect(.bounce, value: isFavorite)
-            }
-            .buttonStyle(.plain)
 
             Button {
                 Haptic.light()
