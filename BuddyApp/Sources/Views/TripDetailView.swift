@@ -1353,9 +1353,22 @@ struct PlaceGuideDetailSheet: View {
                 emptyState(icon: "person.2", text: "Todavía no hay buddies en este destino")
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: Spacing.lg) {
+                    LazyHStack(alignment: .top, spacing: Spacing.lg) {
                         ForEach(Array(buddies.enumerated()), id: \.offset) { _, buddy in
-                            buddyAvatar(buddy)
+                            // Solo navegable si el servidor mandó a quién: sin id
+                            // no hay perfil que abrir, y una cara que no responde
+                            // al toque es peor que una que claramente no lo pide.
+                            if let id = buddy.travelerId {
+                                NavigationLink(value: TravelerProfileRoute(
+                                    travelerId: id,
+                                    previewName: buddy.fullName,
+                                    previewAvatarUrl: buddy.avatarUrl)) {
+                                    buddyAvatar(buddy)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                buddyAvatar(buddy)
+                            }
                         }
                     }
                     .padding(.horizontal, Spacing.edge)

@@ -229,6 +229,9 @@ struct YoView: View {
             .navigationDestination(for: APIPlaceCard.self) { place in
                 PlaceGuideMapSheet(place: place)
             }
+            .navigationDestination(for: TravelerProfileRoute.self) { r in
+                UserProfileView(route: r)
+            }
             // La navegación va en onDismiss y no en el callback: empujar en el
             // navPath mientras la hoja todavía se está cerrando encima hace que
             // el push se vea a medias o se pierda.
@@ -348,7 +351,7 @@ struct YoView: View {
         let trips = vm.journeys.count
         let tripsLabel = trips == 1 ? "1 trip" : "\(trips) trips"
         let stickersLabel = vm.stickers.isEmpty ? nil
-            : (vm.stickers.count == 1 ? "1 sticker" : "\(vm.stickers.count) vm.stickers")
+            : (vm.stickers.count == 1 ? "1 sticker" : "\(vm.stickers.count) stickers")
         return [tripsLabel, stickersLabel].compactMap { $0 }.joined(separator: " · ")
     }
 
@@ -825,7 +828,7 @@ struct YoView: View {
                                          title: "Tus momentos",
                                          subtitle: "Las fotos y recuerdos que guardaste te siguen a donde vayas.")
                         anonymousBenefit(icon: "sparkles",
-                                         title: "Tus vm.stickers",
+                                         title: "Tus stickers",
                                          subtitle: "Recuerdos de los lugares que te recibieron.")
                         anonymousBenefit(icon: "person.2",
                                          title: "Tu perfil de Buddy",

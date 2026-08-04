@@ -412,6 +412,9 @@ struct APINearbySpotsResponse: Decodable {
 /// Buddy mostrado en la tarjeta de un lugar. Es un buddy del DESTINO (así se
 /// asignan), no del local — por eso la tarjeta lo rotula "N buddies en Lima".
 struct APIPlaceBuddy: Decodable, Hashable {
+    /// El backend lo manda desde siempre; el modelo no lo declaraba, así que se
+    /// descartaba al decodificar y no había forma de abrir el perfil de nadie.
+    let travelerId: String?
     let fullName: String?
     let avatarUrl: String?
     /// Solo lo trae GET /destinations/:id/buddies (la pestaña "Buddies" del

@@ -568,6 +568,9 @@ struct InicioView: View {
                 .navigationDestination(for: APIPlaceCard.self) { place in
                     PlaceGuideMapSheet(place: place)
                 }
+                .navigationDestination(for: TravelerProfileRoute.self) { r in
+                    UserProfileView(route: r)
+                }
                 .navigationDestination(for: DestinationMapRoute.self) { route in
                     PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
                 }
