@@ -606,7 +606,16 @@ struct InicioView: View {
                     // Al volver de navegación interna solo refrescamos estado del trip
                     // (journeys + match) — loadData completo no es necesario y causa
                     // que el scroll vuelva al top al reasignar publicJourneys.
-                    if new == 0 && old > 0 { Task { await refreshTripState() } }
+                    //
+                    // Con el mismo límite de 10s que el onAppear: abrir y cerrar
+                    // tres perfiles seguidos disparaba tres ciclos completos
+                    // —journeys, matches, contexto, solicitudes y recent-help por
+                    // trip— en pocos segundos. Volver de una pantalla de lectura
+                    // no cambia el estado del viaje.
+                    guard new == 0, old > 0 else { return }
+                    let age = Date().timeIntervalSince(lastRefreshTripStateAt ?? .distantPast)
+                    guard age >= 10 else { return }
+                    Task { await refreshTripState() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
                     Task { await loadData() }
