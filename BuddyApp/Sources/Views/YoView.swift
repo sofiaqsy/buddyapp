@@ -19,6 +19,9 @@ struct YoView: View {
     /// perfil no puede refrescar antes: la sheet sigue arriba y el usuario
     /// vería la lista moverse debajo.
     @State private var pendingShareJourney: APIJourney? = nil
+    /// Lugar que el buddy eligió y que YA recomendaba — se abre su ficha al
+    /// cerrarse la hoja, en vez de crear una recomendación duplicada.
+    @State private var pendingExistingShare: APIPlaceCard? = nil
     @State private var selectedStory: APIJourney? = nil   // detalle de publicación
     /// Long-press en un trip del grid → confirmar eliminación de la publicación.
     @State private var deletePublicationTarget: APIJourney? = nil
@@ -226,15 +229,35 @@ struct YoView: View {
             .navigationDestination(for: APIPlaceCard.self) { place in
                 PlaceGuideMapSheet(place: place)
             }
+            // La navegación va en onDismiss y no en el callback: empujar en el
+            // navPath mientras la hoja todavía se está cerrando encima hace que
+            // el push se vea a medias o se pierda.
             .sheet(isPresented: $showCompartirLugar, onDismiss: {
-                // El journey nace con trip_id=null y sin publicar; acá solo se
-                // recarga para que el lugar aparezca en la sección. Publicarlo
-                // sigue siendo cosa del editor, igual que desde Tu trip.
+                // Caso 1 — ya recomienda ese lugar: se va a su ficha, que es
+                // donde vive "Añadir foto". Elegir un lugar que ya es tuyo es
+                // pedir sumarle algo, no empezarlo de nuevo.
+                if let existing = pendingExistingShare {
+                    pendingExistingShare = nil
+                    print("🌍 [YoView] lugar ya recomendado → abriendo su ficha")
+                    navPath.append(existing)
+                    return
+                }
+                // Caso 2 — lugar nuevo: el journey nace con trip_id=null y sin
+                // publicar, así que todavía no puede aparecer en la sección
+                // (place_cards_by_traveler exige is_public, completed y fotos).
+                // La recarga sola no alcanza; falta encadenar el editor.
                 guard pendingShareJourney != nil else { return }
                 pendingShareJourney = nil
                 Task { await vm.load(force: true) }
             }) {
-                CompartirLugarSheet { journey in
+                CompartirLugarSheet(
+                    alreadyRecommended: Set(vm.shares.map { $0.id.lowercased() }),
+                    onExisting: { spotId in
+                        pendingExistingShare = vm.shares.first {
+                            $0.id.caseInsensitiveCompare(spotId) == .orderedSame
+                        }
+                    }
+                ) { journey in
                     print("🌍 [YoView] compartido creado journey=\(journey.id)")
                     pendingShareJourney = journey
                 }

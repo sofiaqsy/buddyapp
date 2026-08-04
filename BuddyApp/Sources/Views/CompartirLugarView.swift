@@ -57,6 +57,20 @@ struct CompartirLugarCard: View {
 // MARK: - Sheet: "¿Dónde estás ahora?"
 
 struct CompartirLugarSheet: View {
+    /// Spots que quien abre esta hoja YA recomienda, en minúsculas.
+    ///
+    /// Elegir uno de estos no es empezar una recomendación: es volver a la que
+    /// ya existe para sumarle fotos. Se corta antes de llamar al backend, y no
+    /// solo para ahorrar la llamada — `createJourney` deduplica únicamente
+    /// contra journeys en 'active' o 'planning', así que un lugar ya publicado
+    /// (que está en 'completed') no se reconoce y cada toque dejaba un journey
+    /// nuevo, vacío e invisible.
+    var alreadyRecommended: Set<String> = []
+
+    /// Se llama con el id del spot cuando el elegido ya estaba recomendado. No
+    /// se creó nada: el llamador solo tiene que llevar a su ficha.
+    var onExisting: (String) -> Void = { _ in }
+
     /// Se llama cuando el journey ya existe en el backend (creado o reutilizado)
     /// — el llamador decide qué hacer (típicamente: abrir el editor Memoir).
     let onCreated: (APIJourney) -> Void
@@ -475,6 +489,15 @@ struct CompartirLugarSheet: View {
     // MARK: – Envío común
 
     private func submit(destinationId: String? = nil, placeId: String? = nil, spotId: String? = nil, lat: Double? = nil, lng: Double? = nil) {
+        // Ya lo recomienda: no hay nada que crear. Comparación insensible a
+        // mayúsculas porque los UUID viajan con distinto casing según de qué
+        // endpoint vengan.
+        if let spotId, alreadyRecommended.contains(spotId.lowercased()) {
+            print("🌍 [CompartirLugarSheet] spot=\(spotId.prefix(8)) ya recomendado — a su ficha, sin crear journey")
+            dismiss()
+            onExisting(spotId)
+            return
+        }
         isSubmitting = true
         Task {
             do {
