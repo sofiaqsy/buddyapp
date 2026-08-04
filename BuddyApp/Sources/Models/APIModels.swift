@@ -604,7 +604,20 @@ struct APIBuddyProfile: Decodable {
     let ratingAvg: Double?
     let ratingCount: Int?
     let totalHelps: Int?
+    /// El PRIMER destino que declaró, no su cobertura. Sirve de respaldo.
     let destination: APIDestinationRef?
+    /// Todos los destinos donde eligió ser buddy. Hay quien cubre seis, así que
+    /// `destination` a secas contaba mucho menos de lo que la persona cubre.
+    let destinations: [APIDestinationRef]?
+
+    /// Los nombres de su cobertura, sin repetir y en orden. Cae en
+    /// `destination` para los perfiles que aún no tienen el array poblado.
+    var coverageNames: [String] {
+        if let all = destinations, !all.isEmpty {
+            return all.compactMap { $0.name ?? $0.city }
+        }
+        return [destination?.name ?? destination?.city].compactMap { $0 }
+    }
 }
 
 struct APIBuddyMe: Decodable {

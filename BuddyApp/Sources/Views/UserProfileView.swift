@@ -32,7 +32,14 @@ struct UserProfileView: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                header
+                // Sin antetítulo "PERFIL": la pantalla ya se abrió tocando una
+                // cara, así que nadie duda de qué está viendo. Etiquetarlo solo
+                // empujaba el nombre hacia abajo.
+                Text(displayName)
+                    .font(BT.title1)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Spacing.edge)
                     .padding(.top, Spacing.md)
 
@@ -91,19 +98,6 @@ struct UserProfileView: View {
     }
 
     // MARK: Cabecera
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("PERFIL")
-                .font(BT.eyebrow).tracking(2)
-                .foregroundStyle(Color.inkMuted)
-            Text(displayName)
-                .font(BT.title1)
-                .foregroundStyle(Color.ink)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 
     /// Avatar + una línea de contexto. Sin PhotosPicker: la foto de otro no se
     /// toca.
@@ -172,10 +166,15 @@ struct UserProfileView: View {
                 }
             }
 
-            if let zona = bp.destination?.name ?? bp.destination?.city {
-                Label(zona, systemImage: "mappin.and.ellipse")
+            // TODOS los destinos donde eligió ser buddy, no solo el primero.
+            // Sin icono de ubicación: la tarjeta ya dice que habla de un buddy y
+            // el pin repetía lo que el propio nombre del sitio ya comunica.
+            let cobertura = bp.coverageNames
+            if !cobertura.isEmpty {
+                Text(cobertura.joined(separator: " · "))
                     .font(BT.caption1)
                     .foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let specs = bp.specialties, !specs.isEmpty {
