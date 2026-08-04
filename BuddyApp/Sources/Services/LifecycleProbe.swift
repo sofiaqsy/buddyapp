@@ -89,7 +89,7 @@ enum RenderMetrics {
     /// Totales, para no tener que sumar líneas ⏱ a mano. Responde de una vez
     /// "¿cuántos renders hubo REALMENTE?" y "¿cuánto costaron?", que es la
     /// pregunta que el conteo de líneas de log respondía mal.
-    static func resumen(_ momento: String) {
+    static func resumen(_ momento: String, deUnTotalDe total: Int? = nil) {
         guard !renders.isEmpty else { return }
         let totalRenders = renders.values.reduce(0, +)
         let totalDerivadas = derivados.values.reduce(0, +)
@@ -102,6 +102,14 @@ enum RenderMetrics {
                      totalDerivadas > 0 ? Double(totalDerivadas) / Double(totalRenders) : 0))
         if let peor {
             print(String(format: "📊 [RenderMetrics]   más cara: %@ con %.2f ms acumulados", peor.key, Double(peor.value) / 1_000_000))
+        }
+        // La cifra que valida LazyVStack: cuántas tarjetas se CONSTRUYERON
+        // frente a cuántas hay en la lista. Con VStack eran todas.
+        if let total, total > 0 {
+            let pct = Double(renders.count) / Double(total) * 100
+            print(String(format: "📊 [RenderMetrics]   construidas %d de %d del feed (%.0f%%)%@",
+                         renders.count, total, pct,
+                         renders.count < total ? " ✅ perezoso" : "  ⚠️ se construyó todo"))
         }
     }
 }

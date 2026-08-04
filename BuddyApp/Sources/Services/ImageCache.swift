@@ -19,19 +19,48 @@ final class ImageCache {
         memory.countLimit = 120
     }
 
+    /// Conteo TEMPORAL para validar el dedupe. Cuenta todas las imágenes, no
+    /// solo las que logOrigin imprime — ese print está filtrado a memoir-photos
+    /// y dejaría fuera los avatares, que son precisamente los que más se
+    /// repiten entre tarjetas del feed.
+    private static var stats: [String: Int] = [:]
+    private static let statsLock = NSLock()
+    private static func contar(_ que: String) {
+        statsLock.lock(); stats[que, default: 0] += 1; statsLock.unlock()
+    }
+
+    static func resumen(_ momento: String) {
+        statsLock.lock(); let s = stats; statsLock.unlock()
+        guard !s.isEmpty else { return }
+        let mem = s["memoria"] ?? 0, disco = s["disco"] ?? 0
+        let red = s["red"] ?? 0, vuelo = s["enVuelo"] ?? 0
+        print("📊 [ImageCache] ── \(momento): memoria=\(mem) disco=\(disco) red=\(red) deduplicadas=\(vuelo) ──")
+        if vuelo > 0 {
+            print("📊 [ImageCache]   \(vuelo) descarga(s) evitada(s) por dedupe en vuelo ✅")
+        }
+    }
+
     func get(_ url: URL) -> UIImage? {
         let key = cacheKey(url)
         if let img = memory.object(forKey: key as NSString) {
+            ImageCache.contar("memoria")
             ImageCache.logOrigin("memoria", url)
             return img
         }
         let file = diskURL.appendingPathComponent(key)
         if let data = try? Data(contentsOf: file), let img = UIImage(data: data) {
             memory.setObject(img, forKey: key as NSString, cost: data.count)
+            ImageCache.contar("disco")
             ImageCache.logOrigin("disco", url)
             return img
         }
-        ImageCache.logOrigin("red", url)
+        // Antes acá se imprimía «red ←», y era engañoso: esto es un FALLO de
+        // caché, no una descarga. Peor, CachedImage.loadImage llama a get() y
+        // después a load(), que vuelve a llamar a get() — así que una sola
+        // imagen producía DOS líneas «red ←». Sobre esas dos líneas concluí que
+        // la misma foto se descargaba dos veces; era falso: una descarga, dos
+        // fallos de caché logueados. Ahora «red ←» se imprime donde de verdad
+        // se sale a la red.
         return nil
     }
 
@@ -73,12 +102,47 @@ final class ImageCache {
         Task(priority: .utility) { try? FileManager.default.removeItem(at: file) }
     }
 
+    /// Descargas en vuelo, para que dos vistas que piden la MISMA url no
+    /// descarguen ni decodifiquen dos veces.
+    ///
+    /// El caso real no es una vista pidiendo dos veces: es el mismo avatar en
+    /// varias tarjetas del feed montando a la vez. En el log se veía como
+    /// cuatro «disco ←» seguidas del mismo archivo — cuatro lecturas y cuatro
+    /// decodificaciones JPEG del mismo dato, porque las cuatro fallaron el
+    /// caché de memoria antes de que la primera terminara de llenarlo.
+    ///
+    /// Mismo patrón que InFlightRegistry, pero con NSLock en vez de @MainActor:
+    /// esto se llama desde tareas de fondo y forzar un salto al hilo principal
+    /// por cada imagen sería peor que el problema que resuelve.
+    private var descargasEnVuelo: [URL: Task<UIImage?, Never>] = [:]
+    private let enVueloLock = NSLock()
+
     func load(_ url: URL) async -> UIImage? {
         if let cached = get(url) { return cached }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let image = UIImage(data: data) else { return nil }
-        set(image, for: url)
-        return image
+
+        enVueloLock.lock()
+        if let existente = descargasEnVuelo[url] {
+            enVueloLock.unlock()
+            ImageCache.contar("enVuelo")
+            ImageCache.logOrigin("♻️ en vuelo", url)
+            return await existente.value
+        }
+        let task = Task<UIImage?, Never> {
+            ImageCache.contar("red")
+            ImageCache.logOrigin("red", url)
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data) else { return nil }
+            self.set(image, for: url)
+            return image
+        }
+        descargasEnVuelo[url] = task
+        enVueloLock.unlock()
+
+        let img = await task.value
+        enVueloLock.lock()
+        descargasEnVuelo[url] = nil
+        enVueloLock.unlock()
+        return img
     }
 
     private func cacheKey(_ url: URL) -> String {

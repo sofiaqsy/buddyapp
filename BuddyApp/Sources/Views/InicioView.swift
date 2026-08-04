@@ -619,7 +619,8 @@ struct InicioView: View {
                 .onDisappear {
                     probe.evento("👋 onDisappear")
                     APIClient.resumenDePeticiones("al salir del Home")
-                    RenderMetrics.resumen("al salir del Home")
+                    RenderMetrics.resumen("al salir del Home", deUnTotalDe: publicJourneys.count)
+                    ImageCache.resumen("al salir del Home")
                 }
                 .onAppear {
                     probe.evento("👁 onAppear (hasLoaded=\(hasLoaded), tab=\(router.selectedTab))")
@@ -1379,7 +1380,8 @@ struct InicioView: View {
         // refreshHomeCommunityContext arriba.
         await loadCommunityPulseIfNeeded()
         APIClient.resumenDePeticiones("fin del arranque")
-        RenderMetrics.resumen("fin del arranque")
+        RenderMetrics.resumen("fin del arranque", deUnTotalDe: await MainActor.run { publicJourneys.count })
+        ImageCache.resumen("fin del arranque")
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
@@ -1815,7 +1817,17 @@ struct InicioView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Spacing.xl)
             } else if !publicJourneys.isEmpty {
-                VStack(alignment: .leading, spacing: Spacing.lg) {
+                // LazyVStack, no VStack: con scroll infinito esta lista no tiene
+                // techo. En VStack SwiftUI construye TODAS las tarjetas aunque
+                // no se vean —medido: 21 renders antes de tocar la pantalla— y
+                // eso crece con cada página. Ni .equatable() ni la caché de
+                // imágenes lo evitan: la vista igual existe.
+                //
+                // Solo esta lista se vuelve perezosa. El VStack exterior agrupa
+                // secciones heterogéneas y acotadas (cabecera, composer,
+                // comunidad); volverlo Lazy no ahorraría nada y cambiaría cuándo
+                // se disparan sus efectos.
+                LazyVStack(alignment: .leading, spacing: Spacing.lg) {
                     Text("HISTORIAS DE VIAJEROS")
                         .font(BT.eyebrow)
                         .tracking(1.5)
