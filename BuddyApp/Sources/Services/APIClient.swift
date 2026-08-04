@@ -1088,10 +1088,17 @@ final class APIClient {
         return try await request(path: path, via: caller)
     }
 
-    /// Los estados en que un match sigue vivo. Estaba repetido literal en cinco
-    /// sitios; con la lista suelta, añadir un estado nuevo obligaba a acordarse
-    /// de los cinco.
-    static let estadosVigentes = ["pending", "accepted", "active"]
+    /// Los estados en que un match sigue vivo.
+    ///
+    /// SIN "active": el enum match_status de Postgres es
+    /// (pending, accepted, rejected, cancelled, completed) y "active" nunca
+    /// existió. Llevaba años en el filtro del cliente sin hacer daño porque
+    /// filtrar en memoria por un valor inexistente simplemente no coincide con
+    /// nada. Al mandarlo al servidor como literal de enum, la consulta entera
+    /// devolvía 500 y la Home se quedaba sin matches.
+    ///
+    /// El mismo dato, en memoria es ruido inofensivo y en SQL es un fallo duro.
+    static let estadosVigentes = ["pending", "accepted"]
 
     func fetchMyOffers() async throws -> [APIBuddyOffer] {
         try await request(path: "/matching/my-offers")
