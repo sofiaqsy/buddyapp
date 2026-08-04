@@ -45,7 +45,7 @@ final class PlaceContextRepository {
     }
 
     private var cache: [Key: APIPlaceContext] = [:]
-    private let inflight = InFlightRegistry<Key>()
+    private let inflight = InFlightRegistry<Key>("placeContext")
 
     /// Devuelve el contexto del lugar: de caché si ya se pidió, y si no, de red
     /// —una sola vez aunque lo pidan varias pantallas a la vez—.

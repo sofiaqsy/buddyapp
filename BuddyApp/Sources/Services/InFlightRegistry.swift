@@ -29,6 +29,12 @@ import Foundation
 @MainActor
 final class InFlightRegistry<Key: Hashable> {
     private var tasks: [Key: Task<Void, Never>] = [:]
+    /// Solo para el log: sin esto, un llamador que se engancha a otra tarea no
+    /// deja rastro, y en el log no se puede distinguir "se dedupó" de "nunca
+    /// ocurrió". Esa ambigüedad ya me impidió confirmar una medición.
+    private let nombre: String
+
+    init(_ nombre: String) { self.nombre = nombre }
 
     /// Ejecuta `work` para `key`, o se engancha a la ejecución que ya esté en
     /// vuelo para esa misma clave.
@@ -42,6 +48,7 @@ final class InFlightRegistry<Key: Hashable> {
             if replaceExisting {
                 existing.cancel()
             } else {
+                print("♻️ [InFlight/\(nombre)] \(key) — enganchado a una carga en vuelo (sin red)")
                 await existing.value
                 return
             }
@@ -80,12 +87,12 @@ enum HomeContextKey: Hashable {
 /// que muere con ella y no filtra tareas entre sesiones.
 @MainActor
 final class HomeInFlight: ObservableObject {
-    let contexto = InFlightRegistry<HomeContextKey>()
+    let contexto = InFlightRegistry<HomeContextKey>("contexto")
     /// Clave: destinationId. `recent-help` se pide por destino y es el que más
     /// se duplicaba: dos dueños distintos pedían el mismo id a la vez.
-    let recentHelp = InFlightRegistry<String>()
+    let recentHelp = InFlightRegistry<String>("recentHelp")
     /// El pulso global. Clave: el traveler, porque es lo único que lo distingue
     /// (no depende de destino). Mismo problema que los otros dos: su throttle de
     /// 60s tampoco ve una petición que aún no volvió.
-    let pulse = InFlightRegistry<String>()
+    let pulse = InFlightRegistry<String>("pulse")
 }
