@@ -33,11 +33,15 @@ final class ImageCache {
         statsLock.lock(); let s = stats; statsLock.unlock()
         guard !s.isEmpty else { return }
         let mem = s["memoria"] ?? 0, disco = s["disco"] ?? 0
-        let red = s["red"] ?? 0, vuelo = s["enVuelo"] ?? 0
-        print("📊 [ImageCache] ── \(momento): memoria=\(mem) disco=\(disco) red=\(red) deduplicadas=\(vuelo) ──")
-        if vuelo > 0 {
-            print("📊 [ImageCache]   \(vuelo) descarga(s) evitada(s) por dedupe en vuelo ✅")
-        }
+        let red = s["red"] ?? 0
+        let decodes = s["decodeCompartido"] ?? 0, descargas = s["descargaCompartida"] ?? 0
+        print("📊 [ImageCache] ── \(momento): memoria=\(mem) disco=\(disco) red=\(red) ──")
+        // Separadas a propósito: en la medición anterior conté las dos bajo la
+        // etiqueta "descargas evitadas" y era falso — lo que se ahorró fueron
+        // decodificaciones de disco, no tráfico. Ahorrar CPU y ahorrar datos no
+        // son lo mismo y no deberían leerse como un solo número.
+        if decodes > 0 { print("📊 [ImageCache]   \(decodes) decodificación(es) de disco compartida(s) ✅") }
+        if descargas > 0 { print("📊 [ImageCache]   \(descargas) descarga(s) de red evitada(s) ✅") }
     }
 
     func get(_ url: URL) -> UIImage? {
@@ -140,7 +144,7 @@ final class ImageCache {
         lecturaLock.lock()
         if let existente = lecturasEnVuelo[url] {
             lecturaLock.unlock()
-            ImageCache.contar("enVuelo")
+            ImageCache.contar("decodeCompartido")
             ImageCache.logOrigin("♻️ decodificación compartida", url)
             return await existente.value
         }
@@ -159,8 +163,8 @@ final class ImageCache {
         enVueloLock.lock()
         if let existente = descargasEnVuelo[url] {
             enVueloLock.unlock()
-            ImageCache.contar("enVuelo")
-            ImageCache.logOrigin("♻️ en vuelo", url)
+            ImageCache.contar("descargaCompartida")
+            ImageCache.logOrigin("♻️ descarga compartida", url)
             return await existente.value
         }
         let task = Task<UIImage?, Never> {
