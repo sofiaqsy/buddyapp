@@ -1032,11 +1032,11 @@ struct InicioView: View {
         if let j = effectiveTripJourney {
             print("🏠 [refreshHomeCommunityContext] active trip — loading context")
             if let destId = j.destination?.id ?? j.destinationId,
-               let ctx = try? await APIClient.shared.fetchPlaceContext(id: destId, source: "destination") {
+               let ctx = await PlaceContextRepository.shared.context(id: destId, source: "destination") {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
                 print("🏠 [refreshHomeCommunityContext] ✅ loaded from destination: buddies=\(ctx.buddies)")
             } else if let placeId = j.placeId,
-                      let ctx = try? await APIClient.shared.fetchPlaceContext(id: placeId, source: "place") {
+                      let ctx = await PlaceContextRepository.shared.context(id: placeId, source: "place") {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
                 print("🏠 [refreshHomeCommunityContext] ✅ loaded from place: buddies=\(ctx.buddies)")
             } else {
@@ -1066,7 +1066,7 @@ struct InicioView: View {
                 await loadCommunityPulseIfNeeded()
 
                 // Cargar contexto de la comunidad de este destino
-                if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
+                if let ctx = await PlaceContextRepository.shared.context(id: resolution.destinationId, source: "destination") {
                     await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
                     print("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
                     return

@@ -834,7 +834,9 @@ struct TripFeedCard: View {
         if let d = destId       { id = d; source = "destination" }
         else if let p = placeId { id = p; source = "place" }
         else { await MainActor.run { hasBuddies = false }; return }
-        guard let ctx = try? await APIClient.shared.fetchPlaceContext(id: id, source: source) else { return }
+        // Vía el repositorio: la Home suele haber pedido este mismo destino
+        // segundos antes. Antes eran dos peticiones para pintar el mismo número.
+        guard let ctx = await PlaceContextRepository.shared.context(id: id, source: source) else { return }
         print("🧳 [TripFeedCard] buddyContext id=\(id.prefix(8)) total=\(ctx.totalBuddies) status=\(ctx.status)")
         await MainActor.run { hasBuddies = ctx.totalBuddies > 0 }
     }
