@@ -16,7 +16,10 @@ struct BuddyProfileView: View {
     let onUpdated: (APIBuddyMe) -> Void
 
     @State private var isAvailable:      Bool
-    @State private var specialties:      Set<String>
+    /// Intenciones POR LUGAR. Antes era un único Set compartido por todas las
+    /// tarjetas: marcar seis en Villa Rica las marcaba en los seis lugares,
+    /// porque las N filas escribían la misma variable.
+    @State private var specialtiesPorLugar: [String: Set<String>]
     @State private var selectedCoverage: BuddyCoverageInput?  // ciudad de cobertura del buddy
     @State private var zones:            [ZoneEntry]           // lugares específicos (place)
 
@@ -34,7 +37,14 @@ struct BuddyProfileView: View {
         self.destinations = destinations
         self.onUpdated    = onUpdated
         _isAvailable = State(initialValue: profile.isAvailable)
-        _specialties = State(initialValue: Set(profile.specialties ?? []))
+        // Cada lugar arranca con lo suyo; los que aún no tienen nada propio
+        // caen a la lista global, que es lo que el buddy declaró cuando no
+        // había forma de distinguir por sitio.
+        var porLugar: [String: Set<String>] = [:]
+        for placeId in profile.placeIds ?? [] {
+            porLugar[placeId] = profile.specialties(forPlace: placeId)
+        }
+        _specialtiesPorLugar = State(initialValue: porLugar)
 
         // Cobertura: buscar el primer destination en el catálogo local
         let firstDestId = profile.activeZoneIds?.first ?? profile.destinationIds?.first
@@ -60,7 +70,8 @@ struct BuddyProfileView: View {
     // MARK: – Preview contextual por zona
 
     private func previewText(forZone zone: ZoneEntry) -> String? {
-        let cats = specialties.compactMap { key in
+        // Las de ESTA zona: el texto describe lo que el buddy ofrece aquí.
+        let cats = (specialtiesPorLugar[zone.id] ?? []).compactMap { key in
             BuddyProfileView.categoryOptions.first(where: { $0.key == key })?.label
         }.sorted()
         guard !cats.isEmpty, zone.name != zone.id else { return nil }
@@ -289,13 +300,18 @@ struct BuddyProfileView: View {
                     .font(BT.footnote).foregroundStyle(Color.inkMuted)
                 FlowLayout(spacing: 6) {
                     ForEach(BuddyProfileView.categoryOptions, id: \.key) { opt in
-                        let on = specialties.contains(opt.key)
+                        let deEsteLugar = specialtiesPorLugar[zone.id] ?? []
+                        let on = deEsteLugar.contains(opt.key)
                         Button {
                             Haptic.select()
                             withAnimation(.easeInOut(duration: 0.18)) {
-                                if on { specialties.remove(opt.key) } else { specialties.insert(opt.key) }
+                                var nuevas = deEsteLugar
+                                if on { nuevas.remove(opt.key) } else { nuevas.insert(opt.key) }
+                                specialtiesPorLugar[zone.id] = nuevas
                             }
-                            Task { await saveSpecialties() }
+                            // Solo este lugar: el backend no toca los que no
+                            // vengan en el body.
+                            Task { await saveSpecialties(forPlace: zone.id) }
                         } label: {
                             Text(opt.label)
                                 .font(BT.caption1).fontWeight(on ? .semibold : .regular)
@@ -476,11 +492,14 @@ struct BuddyProfileView: View {
         }
     }
 
-    private func saveSpecialties() async {
+    private func saveSpecialties(forPlace placeId: String) async {
         savingSpecs = true
         defer { savingSpecs = false }
         do {
-            let updated = try await APIClient.shared.updateBuddyMe(specialties: Array(specialties))
+            let lista = Array(specialtiesPorLugar[placeId] ?? [])
+            let updated = try await APIClient.shared.updateBuddyMe(
+                placeSpecialties: [placeId: lista])
+            print("🤝 [BuddyProfile] lugar=\(placeId.prefix(8)) intenciones=\(lista.sorted().joined(separator: ","))")
             onUpdated(updated)
         } catch {
             Haptic.error()

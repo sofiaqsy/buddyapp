@@ -781,9 +781,13 @@ final class APIClient {
     func updateBuddyMe(specialties: [String]? = nil,
                        coverage: BuddyCoverageInput? = nil,
                        placeIds: [String]? = nil,
-                       isAvailable: Bool? = nil) async throws -> APIBuddyMe {
+                       isAvailable: Bool? = nil,
+                       placeSpecialties: [String: [String]]? = nil) async throws -> APIBuddyMe {
         var body: [String: Any] = [:]
         if let specialties { body["specialties"]  = specialties }
+        // Solo los lugares que cambiaron: el backend no borra los que no vengan,
+        // así que guardar uno no pisa la configuración de los demás.
+        if let placeSpecialties { body["place_specialties"] = placeSpecialties }
         if let placeIds    { body["place_ids"]    = placeIds }
         if let isAvailable { body["is_available"] = isAvailable }
         if let coverage {

@@ -682,7 +682,21 @@ struct APIBuddyMeProfile: Decodable {
     let destinationIds: [String]?
     let activeZoneIds: [String]?
     let placeIds: [String]?
+    /// Intenciones POR LUGAR: { placeId: [intención] }.
+    ///
+    /// `specialties` sigue existiendo como lista global del perfil y es el
+    /// respaldo para los lugares que el buddy todavía no configuró. Sin este
+    /// mapa, la pantalla dibujaba una fila de intenciones por lugar pero las N
+    /// escribían la misma lista.
+    let placeSpecialties: [String: [String]]?
     let destination: APIDestinationRef?
+
+    /// Lo que hay que pintar en la tarjeta de un lugar. Cae a la lista global
+    /// cuando ese lugar aún no tiene nada propio guardado.
+    func specialties(forPlace placeId: String) -> Set<String> {
+        if let propias = placeSpecialties?[placeId] { return Set(propias) }
+        return Set(specialties ?? [])
+    }
 }
 
 // MARK: Matching
