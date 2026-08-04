@@ -117,6 +117,42 @@ final class ImageCache {
     private var descargasEnVuelo: [URL: Task<UIImage?, Never>] = [:]
     private let enVueloLock = NSLock()
 
+    /// Lecturas de caché en vuelo.
+    ///
+    /// El dedupe de `load` NO cubría el caso que lo motivó, y la medición lo
+    /// dejó claro: «deduplicadas=0, red=0». Con todo servido desde disco, la
+    /// ruta de red —la única deduplicada— no se ejecutaba nunca, mientras las
+    /// lecturas de disco repetidas seguían ahí («disco ← bce35d8e…» dos veces
+    /// seguidas). Deduplicar la descarga no sirve de nada cuando el trabajo
+    /// duplicado es leer y DECODIFICAR el mismo JPEG N veces.
+    private var lecturasEnVuelo: [URL: Task<UIImage?, Never>] = [:]
+    private let lecturaLock = NSLock()
+
+    /// Memoria + disco, deduplicado. Sin red: quien llame decide si sigue.
+    /// Separado de `load` para no cambiar la UI — el shimmer solo debe aparecer
+    /// cuando de verdad se sale a la red, no en un acierto de disco.
+    func desdeCache(_ url: URL) async -> UIImage? {
+        if let img = memory.object(forKey: cacheKey(url) as NSString) {
+            ImageCache.contar("memoria")
+            ImageCache.logOrigin("memoria", url)
+            return img
+        }
+        lecturaLock.lock()
+        if let existente = lecturasEnVuelo[url] {
+            lecturaLock.unlock()
+            ImageCache.contar("enVuelo")
+            ImageCache.logOrigin("♻️ decodificación compartida", url)
+            return await existente.value
+        }
+        let task = Task<UIImage?, Never> { self.get(url) }
+        lecturasEnVuelo[url] = task
+        lecturaLock.unlock()
+
+        let img = await task.value
+        lecturaLock.lock(); lecturasEnVuelo[url] = nil; lecturaLock.unlock()
+        return img
+    }
+
     func load(_ url: URL) async -> UIImage? {
         if let cached = get(url) { return cached }
 
@@ -281,9 +317,10 @@ struct CachedImage<Content: View, Placeholder: View>: View {
         guard let url else { return }
         // Hit de memoria/disco — disco + decodificación SIEMPRE fuera del main;
         // la asignación de @State, en main.
-        if let cached = await Task.detached(priority: .userInitiated, operation: {
-            ImageCache.shared.get(url)
-        }).value {
+        // Vía desdeCache: disco y decodificación siguen fuera del main (get()
+        // corre dentro de una Task), pero ahora dos tarjetas con el mismo
+        // avatar comparten UNA decodificación en vez de hacer una cada una.
+        if let cached = await ImageCache.shared.desdeCache(url) {
             await MainActor.run { uiImage = cached }
             return
         }
