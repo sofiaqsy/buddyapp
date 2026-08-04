@@ -1470,6 +1470,19 @@ struct InicioView: View {
     @ViewBuilder
     private func communityRow(_ item: APIPulseItem) -> some View {
         let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
+        // La cara y la frase llevan al perfil de quien ayudó; la línea de
+        // metadatos no. Así queda una zona de la fila que no navega, y el gesto
+        // no se dispara al leer la hora o la ciudad.
+        //
+        // La frase entera y no solo el nombre: va concatenada con la acción en
+        // un mismo Text para que fluya y parta de línea sola, y dentro de un
+        // Text no se puede hacer tocable un tramo. Recortar el nombre a su
+        // propio Text lo arrancaría del párrafo.
+        let destino = item.buddyId.map {
+            TravelerProfileRoute(travelerId: $0,
+                                 previewName: item.buddyName,
+                                 previewAvatarUrl: item.buddyAvatarUrl)
+        }
         // .top y no centrado: el avatar se alinea con la línea 1, que es la que
         // ancla la fila, igual que en Mail y Mensajes.
         HStack(alignment: .top, spacing: 10) {
@@ -1489,6 +1502,8 @@ struct InicioView: View {
                             .foregroundStyle(Color.sand)
                     }
                 }
+                .contentShape(Circle())
+                .onTapGesture { if let destino { Haptic.light(); navPath.append(destino) } }
 
             VStack(alignment: .leading, spacing: 4) {
                 // El apoyo se queda con la línea entera y a un solo tamaño. Antes
@@ -1502,6 +1517,8 @@ struct InicioView: View {
                  + Text(" \(pulseAction(item))").font(BT.footnote).foregroundStyle(Color.ink))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture { if let destino { Haptic.light(); navPath.append(destino) } }
 
                 // Los dos metadatos comparten renglón en los extremos opuestos.
                 // Así la fila cierra tocando ambos bordes —lo que equilibra una

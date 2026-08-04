@@ -551,6 +551,9 @@ struct APIPulseItem: Decodable, Identifiable {
     let at: Date?
     /// Enum crudo de help_request.category — el texto lo arma la vista.
     let category: String?
+    /// Quién ayudó. Sin él la fila nombra a alguien a quien no se puede abrir.
+    /// Nil en los items "traveling", que cuentan gente sin nombrarla.
+    let buddyId: String?
     let buddyName: String?
     let buddyAvatarUrl: String?
     var id: String { "\(type)-\(city)-\(at?.timeIntervalSince1970 ?? 0)" }
