@@ -1112,9 +1112,21 @@ struct YoView: View {
             isLoading = false; return
         }
 
-        // Cache: si los datos tienen menos de 60 s y no hay forzado, no recargar.
+        // Cache: si los datos tienen menos de 10 s y no hay forzado, no recargar.
+        //
+        // El guard existe para el `.task` de esta vista, que corre cada vez que se
+        // entra al tab: sin él, ir y volver dispara media docena de requests. Diez
+        // segundos alcanzan para eso. Estaba en 60 y ese minuto era el que ocultaba
+        // una foto subida desde OTRO dispositivo (o por otro buddy): entrando al
+        // tab seguido nunca se recargaba, y solo aparecía tras un rato de inactividad.
+        // En el dispositivo que sube la foto no se notaba porque .journeyPublished
+        // y .placePhotosChanged ya fuerzan la recarga.
+        //
+        // Esto no vuelve el perfil tiempo real: un cambio ajeno se ve al refetchear,
+        // no cuando ocurre. Ese es otro problema y se resuelve versionando por hash
+        // de contenido o con invalidación desde el servidor.
         if !forceRefresh, let fetchedAt = lastFetchedAt,
-           Date().timeIntervalSince(fetchedAt) < 60, user != nil {
+           Date().timeIntervalSince(fetchedAt) < 10, user != nil {
             print("👤 [YoView] perfil en caché (\(Int(Date().timeIntervalSince(fetchedAt)))s) — omitiendo recarga")
             isLoading = false; return
         }
