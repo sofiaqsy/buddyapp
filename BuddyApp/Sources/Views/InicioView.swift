@@ -696,7 +696,10 @@ struct InicioView: View {
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, isLoadingData || homeComposerHasHeaderRow ? Spacing.md : 0)
+                // Mismo padding cargando y resuelto. Con el ternario anterior el
+                // bloque entero subía 16pt al llegar los datos si el composer
+                // resuelto no traía fila de encabezado.
+                .padding(.top, Spacing.md)
                 // Loader visible mientras se procesa la intención (flujo pioneer:
                 // crear trip + solicitud) — sin esto la pantalla parece congelada.
                 .overlay {
@@ -721,8 +724,22 @@ struct InicioView: View {
 
                 // Comunidad viva — últimas ayudas en cualquier lugar, sin
                 // restringir al destino del usuario.
-                if communityPulse.contains(where: { $0.type == "helped" }) {
-                    communityLiveSection
+                //
+                // Durante la carga se dibuja con filas de relleno en lugar de
+                // omitirse: la sección aparecía después y empujaba hacia abajo
+                // todo lo que venía detrás, que es el salto que se sentía como
+                // "la pantalla se reacomoda".
+                if isLoadingData {
+                    communityLiveSection(items: APIPulseItem.placeholders(), esEsqueleto: true)
+                        .padding(.top, Spacing.md)
+                        // El mismo pulso que el composer: dos bloques del mismo
+                        // esqueleto respirando a distinto ritmo se leen como dos
+                        // pantallas pegadas.
+                        .skeletonPulse()
+                } else if communityPulse.contains(where: { $0.type == "helped" }) {
+                    communityLiveSection(
+                        items: Array(communityPulse.filter { $0.type == "helped" }.prefix(3)),
+                        esEsqueleto: false)
                         .padding(.top, Spacing.md)
                 }
 
@@ -1437,7 +1454,7 @@ struct InicioView: View {
     /// Tres y no diez porque esto es una SEÑAL, y las señales saturan: al
     /// tercer evento el usuario ya concluyó "hay gente ayudando". Las siete
     /// restantes solo agregan carga y convierten la sección en un feed.
-    private var communityLiveSection: some View {
+    private func communityLiveSection(items: [APIPulseItem], esEsqueleto: Bool) -> some View {
         // 16 entre el header y las filas, 10 entre filas: con ambos a 12 las
         // distancias eran iguales y el header se leía como un cuarto ítem de la
         // lista. Separar la estructura del contenido agrupa las filas entre sí.
@@ -1451,10 +1468,11 @@ struct InicioView: View {
                 .foregroundStyle(Color.ink)
 
             VStack(spacing: 10) {
-                ForEach(communityPulse.filter { $0.type == "helped" }.prefix(3)) { item in
+                ForEach(items) { item in
                     communityRow(item)
                 }
             }
+            .redacted(reason: esEsqueleto ? .placeholder : [])
         }
         .padding(.horizontal, Spacing.edge)
     }
@@ -1622,7 +1640,10 @@ struct InicioView: View {
                         .foregroundStyle(Color.ink)
                         .padding(.horizontal, Spacing.edge)
                     VStack(alignment: .leading, spacing: 0) {
-                        SkeletonBox(cornerRadius: 0).frame(height: 480)
+                        // Mismo cálculo que la card real: alto derivado del
+                        // ancho por aspectRatio, no un 480 fijo.
+                        SkeletonBox(cornerRadius: 0)
+                            .aspectRatio(1 / PublishedTripCard.memoirRatio, contentMode: .fit)
                         HStack(spacing: 8) {
                             SkeletonBox(cornerRadius: 12).frame(width: 24, height: 24)
                             SkeletonBox(cornerRadius: 4).frame(width: 100, height: 13)
@@ -2281,8 +2302,13 @@ struct PublishedTripCard: View {
     // represents the memoir page format, not a runtime window dimension.
     // Using the ratio (not the absolute values) means the carousel height is always
     // derived from the actual container width at layout time via aspectRatio(_:).
-    private let memoirRatio: CGFloat =
+    /// static para que el esqueleto del feed use EXACTAMENTE esta proporción.
+    /// Antes el esqueleto fijaba 480pt de alto de foto mientras la card real la
+    /// deriva del ancho: en una pantalla de 402pt la card mide 362 y la foto
+    /// sale a 432, así que al llegar el feed todo lo de abajo subía 48pt.
+    static let memoirRatio: CGFloat =
         CanvasViewModel.pageSize.height / max(1, CanvasViewModel.pageSize.width)
+    private var memoirRatio: CGFloat { PublishedTripCard.memoirRatio }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

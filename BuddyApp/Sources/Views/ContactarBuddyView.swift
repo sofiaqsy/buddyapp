@@ -778,8 +778,12 @@ struct CategoryPickerView: View {
                     + Text("buddy").foregroundColor(Color.brand)
                 }
                 .font(BT.displayLarge)
-                .lineLimit(isSkeleton ? 1 : nil)
-                .minimumScaleFactor(isSkeleton ? 0.8 : 1)
+                // Mismas reglas en los dos estados. Antes el esqueleto forzaba
+                // una línea y permitía encoger al 80%, y el estado resuelto no:
+                // si el título se resolvía a dos líneas, se movía él y empujaba
+                // hacia abajo el subtítulo, el carrusel y todo lo demás.
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
                 Text(subtitleAttributed)
                     .font(BT.callout)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1011,50 +1015,24 @@ struct CategoryPickerView: View {
         }
     }
 
-    /// Tres cards vacías con la geometría real del carrusel: mismo ancho, alto,
-    /// separación y el mismo salto de escala en la del medio. No es una barra
-    /// gris genérica — la silueta ya dice "acá van a aparecer fotos".
+    /// El carrusel REAL con tarjetas de relleno, no una réplica.
+    ///
+    /// La versión anterior era una silueta hecha a mano con las mismas medidas,
+    /// y aun así saltaba: centraba el grupo de tres y agrandaba la del MEDIO,
+    /// mientras que el carrusel de verdad usa contentMargins para centrar la
+    /// PRIMERA y agranda ésa. Al llegar los datos la card grande se movía del
+    /// medio a la izquierda, que es el salto más visible de toda la pantalla.
+    ///
+    /// Reutilizando el componente final el layout es idéntico por construcción
+    /// —mismo ScrollView, mismos contentMargins, mismo scaleEffect— y no hay
+    /// medidas que mantener sincronizadas entre dos jerarquías.
     private var exploreSkeleton: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: exploreCardSpacing) {
-                ForEach(0..<3, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                        .fill(Color.groupedBg)
-                        .frame(width: exploreCardWidth, height: exploreCardHeight)
-                        .overlay(alignment: .bottom) {
-                            // La banda de la ficha, con sus tres líneas: es lo
-                            // que distingue esta silueta de un rectángulo.
-                            VStack(spacing: 5) {
-                                SkeletonBox(cornerRadius: 2).frame(width: 34, height: 5)
-                                SkeletonBox(cornerRadius: 3).frame(width: 78, height: 9)
-                                SkeletonBox(cornerRadius: 3).frame(width: 96, height: 7)
-                            }
-                            .padding(.bottom, 14)
-                        }
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                                .strokeBorder(Color.border, lineWidth: 0.5)
-                        )
-                        // La del medio agrandada como la centrada real, para que
-                        // el peek lateral sea el mismo antes y después.
-                        .scaleEffect(index == 1 ? 1 + exploreScaleDelta : 1)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
-
-            HStack(spacing: 6) {
-                Circle().fill(Color.border).frame(width: 6, height: 6)
-                SkeletonBox(cornerRadius: 3).frame(width: 180, height: 9)
-            }
-            .padding(.top, 12)
-
-            consultCTA
-                .padding(.horizontal, Spacing.edge)
-                .padding(.top, 14)
-                .disabled(true)
-        }
-        .redacted(reason: .placeholder)
+        exploreCarousel
+            .redacted(reason: .placeholder)
+            .disabled(true)
+            // El scroll no debe responder: arrastrar un esqueleto sugiere que
+            // hay contenido que explorar y no lo hay.
+            .scrollDisabled(true)
     }
 
     // MARK: – Explora {ciudad} (carrusel de fotos reales)
@@ -1065,7 +1043,10 @@ struct CategoryPickerView: View {
     /// Fotos sueltas, no agrupadas por lugar — si "El Encanto" tiene 3 fotos,
     /// el carrusel muestra 3 tarjetas, no 1 tarjeta con 3 fotos adentro.
     private var explorePhotos: [ExplorePhoto] {
-        placeCards.flatMap { place -> [ExplorePhoto] in
+        // En skeleton el carrusel se dibuja igual, con tarjetas de relleno: es
+        // lo que permite que sea el MISMO componente y no una réplica.
+        let fuente = (isSkeleton && placeCards.isEmpty) ? APIPlaceCard.placeholders() : placeCards
+        return fuente.flatMap { place -> [ExplorePhoto] in
             let urls = (place.coverUrls?.isEmpty == false ? place.coverUrls! : [place.coverUrl].compactMap { $0 })
             return urls.enumerated().map { i, url in
                 ExplorePhoto(id: "\(place.id)-\(i)", url: url, place: place)

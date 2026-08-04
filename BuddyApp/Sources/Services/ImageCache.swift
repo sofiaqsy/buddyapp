@@ -141,8 +141,13 @@ struct SkeletonPulseModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .opacity(pulsing ? 0.45 : 1.0)
-            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulsing)
+            // 0.62 y 1.25s, antes 0.45 y 0.9s. El pulso viejo bajaba a menos de
+            // la mitad de opacidad en menos de un segundo: se leía como un
+            // parpadeo de alarma y llamaba más la atención que el contenido que
+            // estaba esperando. Una respiración lenta y poco profunda es lo que
+            // hacen Wallet y App Store — dice "esto está vivo" sin pedir nada.
+            .opacity(pulsing ? 0.62 : 1.0)
+            .animation(.easeInOut(duration: 1.25).repeatForever(autoreverses: true), value: pulsing)
             .onAppear { pulsing = true }
     }
 }

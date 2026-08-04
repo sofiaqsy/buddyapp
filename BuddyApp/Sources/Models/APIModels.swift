@@ -464,6 +464,28 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
 
     var photoLabel: String { "\(photoCount) foto\(photoCount == 1 ? "" : "s")" }
 
+    /// Tarjetas de relleno para el esqueleto del carrusel.
+    ///
+    /// Existen para que el skeleton pueda renderizar el carrusel REAL en vez de
+    /// una silueta parecida. Cualquier réplica hecha a mano se desalinea:
+    /// la que había centraba el grupo de tres y agrandaba la del medio, mientras
+    /// que el carrusel de verdad centra la PRIMERA y agranda ésa. Al llegar los
+    /// datos, la card grande saltaba del medio a la izquierda.
+    ///
+    /// coverUrl nil a propósito: CachedImage ya pinta su placeholder, y una URL
+    /// falsa dispararía una petición de red condenada a fallar.
+    static func placeholders(_ n: Int = 3) -> [APIPlaceCard] {
+        (0..<n).map { i in
+            APIPlaceCard(
+                id: "placeholder-\(i)", name: "Nombre del lugar",
+                destinationId: nil, destinationName: nil, lat: nil, lng: nil,
+                coverUrl: nil, coverUrls: nil,
+                coverAuthorName: "Buddy", coverAuthorAvatarUrl: nil,
+                category: "Categoría", photoCount: 0, isNew: false,
+                buddyCount: 0, buddies: [])
+        }
+    }
+
     /// "6 buddies en Villa Rica" — nombrar el destino evita dar a entender que
     /// esos buddies están dentro del local.
     var buddyLabel: String? {
@@ -557,6 +579,26 @@ struct APIPulseItem: Decodable, Identifiable {
     let buddyName: String?
     let buddyAvatarUrl: String?
     var id: String { "\(type)-\(city)-\(at?.timeIntervalSince1970 ?? 0)" }
+}
+
+extension APIPulseItem {
+    /// Filas de relleno para el esqueleto de Comunidad viva.
+    ///
+    /// La sección entera no existía mientras cargaba y aparecía después,
+    /// empujando hacia abajo todo lo que venía detrás. Con estas filas ocupa su
+    /// sitio definitivo desde el primer frame.
+    ///
+    /// Los textos tienen largo realista —no "..."— porque el redacted dibuja
+    /// una barra del ancho del texto: con marcadores cortos las barras salían
+    /// mínimas y el bloque no reservaba el alto real de dos líneas.
+    static func placeholders(_ n: Int = 3) -> [APIPulseItem] {
+        (0..<n).map { i in
+            APIPulseItem(type: "helped", city: "Ciudad", count: nil,
+                         at: Date(timeIntervalSince1970: TimeInterval(i)),
+                         category: "general",
+                         buddyId: nil, buddyName: "Nombre", buddyAvatarUrl: nil)
+        }
+    }
 }
 
 struct APIPulseResponse: Decodable {
