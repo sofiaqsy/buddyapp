@@ -70,17 +70,25 @@ final class APIClient {
     /// duplicaciones: /community/pulse ×2 pasó desapercibido hasta que alguien
     /// lo contó. Esto lo dice el propio log.
     ///
-    /// La clave ignora el query string: /feed/stories?cursor=A y ?cursor=B son
-    /// paginación legítima, no repetición. Lo que interesa es el recurso.
+    /// La clave ignora el query string, para que /feed/place-shares con lat/lng
+    /// distintos cuente como el mismo recurso.
+    ///
+    /// Eso solo tiene una excepción, y la descubrí leyendo un log donde el
+    /// contador se contradecía: la paginación por cursor comparte path con la
+    /// primera página, así que /feed/stories?cursor=… salía marcado ⚠️ ×2 siendo
+    /// la página 2, no una repetición. Un contador que grita en falso es peor
+    /// que no tenerlo: enseña a ignorar el aviso. Las páginas se cuentan aparte.
     private static var conteoPorPath: [String: Int] = [:]
     private static let conteoLock = NSLock()
 
-    private static func contar(_ path: String) -> Int {
-        let recurso = String(path.split(separator: "?").first ?? "")
+    /// Devuelve (veces, esPaginacion). Con esPaginacion=true no se avisa.
+    private static func contar(_ path: String) -> (Int, Bool) {
+        let esPaginacion = path.contains("cursor=")
+        let recurso = String(path.split(separator: "?").first ?? "") + (esPaginacion ? " (páginas)" : "")
         conteoLock.lock(); defer { conteoLock.unlock() }
         let n = (conteoPorPath[recurso] ?? 0) + 1
         conteoPorPath[recurso] = n
-        return n
+        return (n, esPaginacion)
     }
 
     private func request<T: Decodable>(
@@ -122,8 +130,9 @@ final class APIClient {
         // El sufijo ×N delata la repetición sin tener que cruzar reqIds a mano;
         // `via` dice QUIÉN la pidió, que es lo que convierte "hay 3 llamadas" en
         // "estas 3 funciones piden lo mismo".
-        let veces = APIClient.contar(path)
-        let repetido = veces > 1 ? "  ⚠️ ×\(veces) en esta sesión" : ""
+        let (veces, esPaginacion) = APIClient.contar(path)
+        let repetido = (veces > 1 && !esPaginacion) ? "  ⚠️ ×\(veces) en esta sesión"
+                     : (esPaginacion ? "  📄 página \(veces)" : "")
         let quien = via.map { "  ← \($0)" } ?? ""
         print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))\(quien)\(repetido)")
         let (data, response) = try await APIClient.session.data(for: req)
