@@ -142,7 +142,7 @@ struct InicioView: View {
     }
 
     var body: some View {
-        let _ = probe.render()
+        let _ = probe.render("live=\(liveJourneys.count) ctx=\(effectiveHomeContext.map(String.init(describing:)) ?? "nil") buddies=\(homeBuddyCount) help=\(recentHelp.count) pulse=\(communityPulse.count) feed=\(publicJourneys.count) loading=\(isLoadingData)")
         NavigationStack(path: $navPath) {
             scrollContent
         }

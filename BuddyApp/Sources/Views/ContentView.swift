@@ -45,7 +45,7 @@ struct RootView: View {
     @StateObject private var probe = LifecycleProbe("ContentView")
 
     var body: some View {
-        let _ = probe.render()
+        let _ = probe.render("unread=\(chatStore.totalUnread) loading=\(chatStore.isLoading) conns=\(chatStore.connections.count) tab=\(router.selectedTab)")
         return ZStack(alignment: .bottom) {
             // Tab content — keep all views alive to preserve scroll/nav state
             TabView(selection: $router.selectedTab) {

@@ -35,9 +35,15 @@ final class LifecycleProbe: ObservableObject {
     }
 
     /// Llamar desde `body`.
-    func render() {
+    ///
+    /// `detalle` es el estado del que depende ese body. Sin él, un contador de
+    /// renders dice CUÁNTOS pero no POR QUÉ: si el detalle no cambia entre dos
+    /// renders consecutivos, algo invalidó la vista sin que cambiara nada que
+    /// esa vista use — que es justo el caso que queda por explicar.
+    func render(_ detalle: String? = nil) {
         renders += 1
-        print("🧬 [\(nombre)] body #\(renders)")
+        let d = detalle.map { "  ·  \($0)" } ?? ""
+        print("🧬 [\(nombre)] body #\(renders)\(d)")
     }
 
     func evento(_ que: String) {

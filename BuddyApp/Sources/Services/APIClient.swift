@@ -63,11 +63,32 @@ final class APIClient {
 
     // MARK: – Generic request
 
+    /// Cuántas veces se pidió cada path en esta sesión, y quién lo pidió.
+    ///
+    /// Instrumentación TEMPORAL para el diagnóstico de trabajo duplicado. Leer
+    /// un arranque contando reqIds a ojo es donde ya se me escaparon
+    /// duplicaciones: /community/pulse ×2 pasó desapercibido hasta que alguien
+    /// lo contó. Esto lo dice el propio log.
+    ///
+    /// La clave ignora el query string: /feed/stories?cursor=A y ?cursor=B son
+    /// paginación legítima, no repetición. Lo que interesa es el recurso.
+    private static var conteoPorPath: [String: Int] = [:]
+    private static let conteoLock = NSLock()
+
+    private static func contar(_ path: String) -> Int {
+        let recurso = String(path.split(separator: "?").first ?? "")
+        conteoLock.lock(); defer { conteoLock.unlock() }
+        let n = (conteoPorPath[recurso] ?? 0) + 1
+        conteoPorPath[recurso] = n
+        return n
+    }
+
     private func request<T: Decodable>(
         path: String,
         method: String = "GET",
         body: [String: Any]? = nil,
-        isRetry: Bool = false
+        isRetry: Bool = false,
+        via: String? = nil
     ) async throws -> T {
         guard let url = URL(string: baseURL + path) else {
             throw APIError.invalidURL
@@ -98,7 +119,13 @@ final class APIClient {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
+        // El sufijo ×N delata la repetición sin tener que cruzar reqIds a mano;
+        // `via` dice QUIÉN la pidió, que es lo que convierte "hay 3 llamadas" en
+        // "estas 3 funciones piden lo mismo".
+        let veces = APIClient.contar(path)
+        let repetido = veces > 1 ? "  ⚠️ ×\(veces) en esta sesión" : ""
+        let quien = via.map { "  ← \($0)" } ?? ""
+        print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))\(quien)\(repetido)")
         let (data, response) = try await APIClient.session.data(for: req)
 
         guard let http = response as? HTTPURLResponse else {
@@ -826,8 +853,11 @@ final class APIClient {
 
     /// Journeys del Traveler actual (guest o verified) — no requiere userId,
     /// el backend lo resuelve desde el traveler_id en el JWT.
-    func fetchTravelerJourneys() async throws -> [APIJourney] {
-        try await request(path: "/travelers/me/journeys")
+    /// `caller` usa #function como valor por defecto: los argumentos por defecto
+    /// se evalúan en el SITIO DE LLAMADA, así que llega el nombre de quien pide,
+    /// sin tocar ninguno de los llamadores.
+    func fetchTravelerJourneys(caller: String = #function) async throws -> [APIJourney] {
+        try await request(path: "/travelers/me/journeys", via: caller)
     }
 
     /// Publicaciones del perfil AGRUPADAS por viaje (una por trip, con momentos
@@ -1010,8 +1040,8 @@ final class APIClient {
     }
 
     // No path parameter — backend resolves ownership from the JWT.
-    func fetchMatches() async throws -> [APIMatch] {
-        try await request(path: "/matching/matches")
+    func fetchMatches(caller: String = #function) async throws -> [APIMatch] {
+        try await request(path: "/matching/matches", via: caller)
     }
 
     func fetchMyOffers() async throws -> [APIBuddyOffer] {
