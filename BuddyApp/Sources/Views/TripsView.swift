@@ -966,8 +966,17 @@ struct TripFeedCard: View {
 
     // MARK: - Logic
 
+    /// Borra una portada del libro Y del servidor.
+    ///
+    /// El borrado en el servidor no es opcional ni "por si acaso": publicar solo
+    /// agrega y actualiza —nunca borra por ausencia—, así que una página que se
+    /// quite únicamente del disco se queda en `journey_page` para siempre y se
+    /// sigue viendo en Home, el perfil, el feed y la ficha del lugar. Antes la
+    /// limpiaba de rebote el borrado masivo de la publicación; ese borrado ya no
+    /// existe, y con razón.
     private func deletePage(at index: Int) {
         guard pages.indices.contains(index) else { return }
+        let pageId = pages[index].id
         var updated = pages
         updated.remove(at: index)
         pages = updated
@@ -976,6 +985,20 @@ struct TripFeedCard: View {
         let jId = journey.id
         Task.detached(priority: .utility) {
             MemoirPersistence.shared.save(updated, journeyId: jId)
+            do {
+                try await APIClient.shared.deleteJourneyPage(journeyId: jId, clientPageId: pageId.uuidString)
+                // Las mismas fotos se pintan en Home y en el perfil, que no tienen
+                // forma de enterarse solos.
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .placePhotosChanged, object: jId)
+                }
+            } catch APIError.server(404, _) {
+                // La página nunca llegó a publicarse: no hay fila que borrar y el
+                // libro local ya quedó bien. No es un error.
+                print("🗑️ [deletePage] journey=\(jId.prefix(8)) page=\(pageId) sin publicar — solo local")
+            } catch {
+                print("❌ [deletePage] journey=\(jId.prefix(8)) page=\(pageId): \(error)")
+            }
         }
     }
 
