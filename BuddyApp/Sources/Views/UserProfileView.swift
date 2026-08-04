@@ -80,8 +80,7 @@ struct UserProfileView: View {
                             && vm.shares.isEmpty && vm.journeys.isEmpty {
                     // Un buddy recién aprobado no ha aportado nada todavía. No es
                     // un error ni un vacío que haya que disimular.
-                    emptyState("\(displayName.split(separator: " ").first.map(String.init) ?? displayName) todavía no ha compartido nada",
-                               icon: "sparkles")
+                    emptyState("\(displayName.split(separator: " ").first.map(String.init) ?? displayName) todavía no ha compartido nada")
                         .padding(.top, Spacing.xxl)
                 }
             }
@@ -274,11 +273,17 @@ struct UserProfileView: View {
         }
     }
 
-    private func emptyState(_ text: String, icon: String) -> some View {
+    /// `icon` opcional: el vacío de "todavía no ha compartido nada" va sin él.
+    /// Unos destellos encima de esa frase la convertían en un cartel, cuando es
+    /// solo una constatación — la persona acaba de empezar. El fallo de carga sí
+    /// lo lleva, porque ahí el icono dice qué salió mal.
+    private func emptyState(_ text: String, icon: String? = nil) -> some View {
         VStack(spacing: Spacing.sm) {
-            Image(systemName: icon)
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(Color.inkMuted)
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(Color.inkMuted)
+            }
             Text(text)
                 .font(BT.callout)
                 .foregroundStyle(Color.inkMuted)
