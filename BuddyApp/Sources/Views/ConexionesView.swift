@@ -309,7 +309,11 @@ final class ChatStore: ObservableObject {
     /// - Parameter force: para quien acaba de cambiar el mundo (aceptar un
     ///   apoyo, mandar un mensaje, pull-to-refresh). Sin esto se engancharía a
     ///   una carga que salió ANTES de su cambio y vería datos ya viejos.
-    func load(force: Bool = false) async {
+    func load(force: Bool = false, caller: String = #function) async {
+        // `caller` con #function por defecto: se evalúa en el sitio de llamada,
+        // así que el log nombra al llamador sin tocar los 20 puntos de llamada.
+        // Con 20 llamadores, "load() ×3" no dice nada; "quién" lo dice todo.
+        print("💬 [ChatStore.load] ← \(caller)\(force ? " (force)" : "")")
         await ChatStore.inflight.run(Session.travelerId ?? "anon", replaceExisting: force) { [self] in
             await self._loadBody()
         }
@@ -322,7 +326,10 @@ final class ChatStore: ObservableObject {
             return
         }
         let currentTravelerId = Session.travelerId
-        await MainActor.run { isLoading = true }
+        await MainActor.run {
+            print("💬 [ChatStore] publica: isLoading=true → render de ContentView")
+            isLoading = true
+        }
         do {
             let matches = try await APIClient.shared.fetchMatches()
             // Capture cached connections so completed matches can reuse their last
@@ -358,6 +365,11 @@ final class ChatStore: ObservableObject {
             let availableResult = await fetchAvailableHelpResult()
 
             await MainActor.run {
+                // ContentView observa este objeto, así que cada bloque publicado
+                // es un render suyo. Sin esta marca no se puede saber si un
+                // render vino de acá o de otra fuente — que es justo lo que
+                // falta para explicar el AttributeGraph cycle.
+                print("💬 [ChatStore] publica: conns=\(items.count) offers=\(fetchedOffers.count) → render de ContentView")
                 connections = items
                 offers = fetchedOffers
                 if let fetchedAvailable = availableResult { applyAvailableHelp(fetchedAvailable) }

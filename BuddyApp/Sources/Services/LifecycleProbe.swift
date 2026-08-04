@@ -85,4 +85,23 @@ enum RenderMetrics {
     static func derivado(_ tipo: String, _ id: String) {
         derivados["\(tipo)/\(id)", default: 0] += 1
     }
+
+    /// Totales, para no tener que sumar líneas ⏱ a mano. Responde de una vez
+    /// "¿cuántos renders hubo REALMENTE?" y "¿cuánto costaron?", que es la
+    /// pregunta que el conteo de líneas de log respondía mal.
+    static func resumen(_ momento: String) {
+        guard !renders.isEmpty else { return }
+        let totalRenders = renders.values.reduce(0, +)
+        let totalDerivadas = derivados.values.reduce(0, +)
+        let totalMs = Double(nanos.values.reduce(0, +)) / 1_000_000
+        let peor = nanos.max { $0.value < $1.value }
+        print(String(format: "📊 [RenderMetrics] ── %@: %d tarjetas · %d renders · %.1f ms de construcción · %d derivadas ──",
+                     momento, renders.count, totalRenders, totalMs, totalDerivadas))
+        print(String(format: "📊 [RenderMetrics]   media %.2f renders/tarjeta · %.2f derivadas/render",
+                     Double(totalRenders) / Double(renders.count),
+                     totalDerivadas > 0 ? Double(totalDerivadas) / Double(totalRenders) : 0))
+        if let peor {
+            print(String(format: "📊 [RenderMetrics]   más cara: %@ con %.2f ms acumulados", peor.key, Double(peor.value) / 1_000_000))
+        }
+    }
 }

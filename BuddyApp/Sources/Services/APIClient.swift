@@ -91,6 +91,23 @@ final class APIClient {
         return (n, esPaginacion)
     }
 
+    /// Vuelca el conteo acumulado. Leer 400 líneas contando reqIds a mano es
+    /// donde ya se escaparon dos duplicaciones; esto lo dice en tres renglones.
+    static func resumenDePeticiones(_ momento: String) {
+        conteoLock.lock()
+        let snapshot = conteoPorPath
+        conteoLock.unlock()
+        let repetidos = snapshot.filter { $0.value > 1 && !$0.key.hasSuffix("(páginas)") }
+            .sorted { $0.value > $1.value }
+        let total = snapshot.values.reduce(0, +)
+        print("📊 [APIClient] ── resumen \(momento): \(total) peticiones, \(snapshot.count) recursos ──")
+        if repetidos.isEmpty {
+            print("📊 [APIClient] sin recursos repetidos ✅")
+        } else {
+            for (path, n) in repetidos { print("📊 [APIClient]   ×\(n)  \(path)") }
+        }
+    }
+
     private func request<T: Decodable>(
         path: String,
         method: String = "GET",

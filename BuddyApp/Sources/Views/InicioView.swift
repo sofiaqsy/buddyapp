@@ -616,7 +616,11 @@ struct InicioView: View {
                     hasLoaded = true
                     await loadData()
                 }
-                .onDisappear { probe.evento("👋 onDisappear") }
+                .onDisappear {
+                    probe.evento("👋 onDisappear")
+                    APIClient.resumenDePeticiones("al salir del Home")
+                    RenderMetrics.resumen("al salir del Home")
+                }
                 .onAppear {
                     probe.evento("👁 onAppear (hasLoaded=\(hasLoaded), tab=\(router.selectedTab))")
                     if hasLoaded {
@@ -1374,6 +1378,8 @@ struct InicioView: View {
         // así que se carga siempre acá, sin importar en qué rama cayó
         // refreshHomeCommunityContext arriba.
         await loadCommunityPulseIfNeeded()
+        APIClient.resumenDePeticiones("fin del arranque")
+        RenderMetrics.resumen("fin del arranque")
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
