@@ -70,7 +70,6 @@ struct InicioView: View {
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
-    @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
     @State private var recentHelpLoadedAt: Date? = nil    // throttle de refetch
     /// Cuándo se pidió recent-help de CADA destino.
@@ -82,6 +81,16 @@ struct InicioView: View {
     /// peticiones por ciclo, y en un arranque salieron diez.
     @State private var recentHelpFetchedAt: [String: Date] = [:]
     @State private var lastRefreshTripStateAt: Date? = nil // throttle scenePhase refresh (30s)
+    /// Deduplicación en vuelo del contexto del Home y de recent-help.
+    /// Ver InFlightRegistry: los throttles por tiempo no ven lo que aún no terminó.
+    @StateObject private var inflight = HomeInFlight()
+    /// El estado inicial del Home ya se construyó (loadData terminó su cola).
+    ///
+    /// Nombrado por la intención y no por el mecanismo: lo que el onChange del
+    /// GPS necesita saber no es "hay un loadData corriendo", es "¿ya sé cuál es
+    /// mi contexto?". Antes de eso, resolver la ubicación es trabajo condenado —
+    /// el trip activo va a prevalecer y descarta lo resuelto.
+    @State private var initialContextReady = false
     @State private var lastCommunityContextLocation: CLLocation? = nil // gate GPS → resolve
     @State private var lastCommunityContextAt: Date? = nil
     @State private var communityPulseLoadedAt: Date? = nil
@@ -243,6 +252,12 @@ struct InicioView: View {
             // usuario no se haya movido, así que este onChange dispara en cada
             // tick. Gate por distancia/tiempo para no re-resolver en cada fix.
             guard let loc else { return }
+            // Mientras el Home construye su estado inicial, este disparador es
+            // prematuro: corre con activeJourney todavía en nil, cae en la rama
+            // "no trip" y resuelve el GPS contra el backend para que un segundo
+            // después el trip activo lo descarte. En el log del arranque ese
+            // /location/resolve fue trabajo tirado — había un trip en curso.
+            guard initialContextReady else { return }
             let moved = lastCommunityContextLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
             let age = Date().timeIntervalSince(lastCommunityContextAt ?? .distantPast)
             guard moved > 100 || age > 60 else { return }
@@ -369,7 +384,10 @@ struct InicioView: View {
     private func selectHomeContext(_ context: HomeContext) {
         homeContextOverride = context
         Task {
-            await refreshHomeCommunityContext()
+            // force: la selección manual ES el cambio; engancharse a una carga
+            // que salió con el contexto anterior mostraría lo que se acaba de
+            // descartar.
+            await refreshHomeCommunityContext(force: true)
             await loadRecentHelp()
             await loadCommunityPulseIfNeeded()
         }
@@ -974,7 +992,37 @@ struct InicioView: View {
         print("🏠 [refreshOpenRequest] destId=\(destId.prefix(8)) → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
     }
 
-    private func refreshHomeCommunityContext() async {
+    /// ÚNICA puerta de entrada para actualizar el contexto de comunidad del Home.
+    ///
+    /// El diagnóstico del arranque no encontró tres bugs sino tres propietarios
+    /// inicializando el mismo contexto sin saber uno del otro: el onChange del
+    /// GPS, la cola de `loadData` y la cola de `refreshTripState`. Los tres
+    /// pedían `/places/:id/context` del MISMO destino, con dos de esas peticiones
+    /// simultáneas.
+    ///
+    /// Acá se centraliza la decisión: se calcula la identidad de lo que se va a
+    /// pedir y el registro resuelve si hay que lanzar trabajo nuevo o engancharse
+    /// al que ya vuela. Los llamadores no cambian —siguen llamando a esta
+    /// función— pero dejan de poder duplicarse entre sí.
+    ///
+    /// - Parameter force: para disparadores que saben que el mundo cambió
+    ///   (pull-to-refresh, selección manual de contexto). Cancela lo que esté en
+    ///   vuelo en vez de colgarse de una respuesta anterior al cambio.
+    private func refreshHomeCommunityContext(force: Bool = false) async {
+        let key: HomeContextKey
+        if let j = effectiveTripJourney {
+            key = .trip(traveler: Session.travelerId,
+                        destinationId: j.destination?.id ?? j.destinationId,
+                        placeId: j.placeId)
+        } else {
+            key = .ubicacion(traveler: Session.travelerId)
+        }
+        await inflight.contexto.run(key, replaceExisting: force) { [self] in
+            await self._refreshHomeCommunityContextBody()
+        }
+    }
+
+    private func _refreshHomeCommunityContextBody() async {
         // Si el contexto elegido es un trip, cargar el contexto de SU destino o
         // lugar (no necesariamente liveJourneys.first — puede ser cualquiera de
         // los trips vivos). Si el viajero eligió "Ubicación actual" (aunque haya
@@ -1226,6 +1274,9 @@ struct InicioView: View {
             await MainActor.run { isLoadingData = false }
             await loadFeed()
             await refreshHomeCommunityContext()
+            // Sin sesión no hay trip que pueda prevalecer, así que el GPS ya es
+            // la única fuente de contexto: habilitarlo acá también.
+            await MainActor.run { initialContextReady = true }
             await loadCommunityPulseIfNeeded()
             return
         }
@@ -1316,6 +1367,7 @@ struct InicioView: View {
         // mostrar la actividad del trip aunque el selector ya mostrara
         // "Ubicación actual" (un ciclo de refresh atrasado).
         await refreshHomeCommunityContext()
+        await MainActor.run { initialContextReady = true }
         await loadRecentHelp(force: true)
         await loadRecentHelpPerTrip()
         // Comunidad viva es global — no depende de trip ni de GPS resuelto,
@@ -1407,11 +1459,8 @@ struct InicioView: View {
             recentHelp = []; recentHelpDestId = nil; return
         }
 
-        // Anti re-entrada: una sola petición en vuelo a la vez
-        if isLoadingRecentHelp { return }
-
         // Throttle: no refetchar el mismo destino en < 30 s (salvo force).
-        // Esto corta el loop de llamadas idénticas disparadas por re-renders.
+        // Esto corta las llamadas repetidas ESPACIADAS en el tiempo.
         if !force,
            recentHelpDestId == destId,
            let at = recentHelpLoadedAt,
@@ -1419,8 +1468,30 @@ struct InicioView: View {
             return
         }
 
-        isLoadingRecentHelp = true
-        defer { isLoadingRecentHelp = false }
+        // Y esto corta las SIMULTÁNEAS, que el throttle de arriba no puede ver:
+        // el reloj se escribe cuando la petición vuelve, así que dos dueños que
+        // disparan con milisegundos de diferencia lo atraviesan los dos. En el
+        // log del arranque se vio exacto — recent-help/f1601ca6 pedido dos veces
+        // (reqId 60A14936 y 127FC12A) con el throttle de 30s puesto.
+        //
+        // La clave es el destino: pedir OTRO destino sigue siendo trabajo nuevo
+        // y no queda absorbido por el que ya vuela.
+        await inflight.recentHelp.run(destId, replaceExisting: force) { [self] in
+            await self._loadRecentHelpBody(destId: destId)
+        }
+
+        // Si nos enganchamos a una carga lanzada por loadRecentHelpPerTrip —que
+        // escribe recentHelpByDest pero no recentHelp— hay que hidratar desde
+        // ahí. Sin esto, deduplicar dejaría Comunidad viva vacía justo cuando el
+        // dato SÍ llegó.
+        if recentHelpDestId != destId, let ya = recentHelpByDest[destId] {
+            recentHelp = ya
+            recentHelpDestId = destId
+            recentHelpLoadedAt = Date()
+        }
+    }
+
+    private func _loadRecentHelpBody(destId: String) async {
         do {
             let result = try await APIClient.shared.fetchRecentHelp(destinationId: destId)
             // Solo actualiza si el destino sigue siendo el mismo (anti carrera con
@@ -1432,6 +1503,12 @@ struct InicioView: View {
             recentHelpDestId = destId
             recentHelpLoadedAt = Date()
             recentHelpFetchedAt[destId] = Date()
+            // El destino efectivo también es uno de los trips vivos, así que su
+            // card del carrusel se alimenta del mismo dato: escribirlo acá evita
+            // que loadRecentHelpPerTrip lo vuelva a pedir.
+            if !result.isEmpty || recentHelpByDest[destId] == nil {
+                recentHelpByDest[destId] = result
+            }
         } catch {
             // Error transitorio (p. ej. al hacer pull-to-refresh): preserva la
             // info actual en vez de borrarla.
@@ -1445,27 +1522,29 @@ struct InicioView: View {
         // Solo los que no se hayan pedido en los últimos 30s — el mismo criterio
         // que loadRecentHelp, y con el mismo reloj, así ninguna de las dos repite
         // lo que la otra acaba de traer.
-        let destIds = force ? todos : todos.filter { id in
+        var destIds = force ? todos : todos.filter { id in
             guard let at = recentHelpFetchedAt[id] else { return true }
             return Date().timeIntervalSince(at) >= 30
         }
+        // El destino efectivo siempre está entre los trips vivos, así que esta
+        // función y loadRecentHelp compiten por el mismo id. Antes lo pedían las
+        // dos; ahora comparten el registro y la segunda se engancha a la primera.
+        destIds = destIds.filter { !inflight.recentHelp.enVuelo($0) || force }
         guard !destIds.isEmpty else { return }
-        await withTaskGroup(of: (String, [APIRecentHelp]).self) { group in
+        await withTaskGroup(of: Void.self) { group in
             for id in destIds {
-                group.addTask {
-                    let r = (try? await APIClient.shared.fetchRecentHelp(destinationId: id)) ?? []
-                    return (id, r)
+                group.addTask { @MainActor in
+                    await inflight.recentHelp.run(id, replaceExisting: force) {
+                        let r = (try? await APIClient.shared.fetchRecentHelp(destinationId: id)) ?? []
+                        // Conserva lo previo si llega vacío por un blip (no parpadear)
+                        if !r.isEmpty || recentHelpByDest[id] == nil {
+                            recentHelpByDest[id] = r
+                        }
+                        recentHelpFetchedAt[id] = Date()
+                    }
                 }
             }
-            var collected: [String: [APIRecentHelp]] = [:]
-            for await (id, r) in group { collected[id] = r }
-            await MainActor.run {
-                // Conserva lo previo si algo llega vacío por un blip (no parpadear)
-                for (id, r) in collected where !r.isEmpty || recentHelpByDest[id] == nil {
-                    recentHelpByDest[id] = r
-                }
-                for id in collected.keys { recentHelpFetchedAt[id] = Date() }
-            }
+            await group.waitForAll()
         }
     }
 
