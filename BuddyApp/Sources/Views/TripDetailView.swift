@@ -383,14 +383,30 @@ struct TripDetailView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Google Maps") { openInGoogleMaps() }
-            Button("Waze") { openInWaze() }
+            // Solo lo que está instalado. Ofrecer Waze en un teléfono sin Waze
+            // llevaba a la web, que no navega: parecía que el botón no hacía
+            // nada. Apple Maps siempre está.
+            if TripDetailView.tieneApp("comgooglemaps") {
+                Button("Google Maps") { openInGoogleMaps() }
+            }
+            if TripDetailView.tieneApp("waze") {
+                Button("Waze") { openInWaze() }
+            }
             Button("Apple Maps") { openInAppleMaps() }
             Button("Cancelar", role: .cancel) { navigationTarget = nil }
         }
     }
 
     // MARK: – Navegación externa (Google Maps / Waze / Apple Maps)
+
+    /// Si el esquema tiene quien lo atienda. Requiere declararlo en
+    /// LSApplicationQueriesSchemes del Info.plist, que es justo por lo que se
+    /// añadió: sin esto la app no puede distinguir "Waze abrió" de "iOS aceptó
+    /// la URL y no pasó nada", y `open()` devuelve true en los dos casos.
+    static func tieneApp(_ esquema: String) -> Bool {
+        guard let u = URL(string: "\(esquema)://") else { return false }
+        return UIApplication.shared.canOpenURL(u)
+    }
 
     /// Mismo criterio que Waze: esquema propio primero, web de respaldo.
     ///
@@ -442,15 +458,19 @@ struct TripDetailView: View {
         }
         let ll = String(format: "%.6f,%.6f", locale: Locale(identifier: "en_US_POSIX"),
                         p.latitude, p.longitude)
-        print("🧭 [ComoLlegar] waze → place=\(p.name) ll=\(ll)")
+        // La coma va percent-encoded: así la escribe la documentación de Waze
+        // en sus propios ejemplos, y una coma cruda es un sub-delimitador que
+        // algunos parsers de query cortan.
+        let llEncoded = ll.replacingOccurrences(of: ",", with: "%2C")
+        print("🧭 [ComoLlegar] waze → place=\(p.name) ll=\(ll) instalado=\(TripDetailView.tieneApp("waze"))")
 
-        let nativa = URL(string: "waze://?ll=\(ll)&navigate=yes")!
+        let nativa = URL(string: "waze://?ll=\(llEncoded)&navigate=yes")!
         UIApplication.shared.open(nativa) { ok in
             if ok {
                 print("🧭 [ComoLlegar] waze ✅ abierto con esquema nativo")
                 return
             }
-            let web = URL(string: "https://waze.com/ul?ll=\(ll)&navigate=yes")!
+            let web = URL(string: "https://waze.com/ul?ll=\(llEncoded)&navigate=yes")!
             print("🧭 [ComoLlegar] waze — sin app instalada, abriendo web: \(web.absoluteString)")
             UIApplication.shared.open(web) { ok2 in
                 print(ok2 ? "🧭 [ComoLlegar] waze ✅ abierto en web" : "🧭 [ComoLlegar] waze ❌ open falló")
