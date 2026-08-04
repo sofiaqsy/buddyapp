@@ -61,6 +61,10 @@ final class UserProfileViewModel: ObservableObject {
     @Published private(set) var journeys: [APIJourney] = []
     @Published private(set) var shares: [APIPlaceCard] = []
     @Published private(set) var tripsHasMore = false
+    /// Si los trips llegaron de verdad. Sin esto, `journeys.count == 0` es
+    /// ambiguo: puede ser "no tiene viajes" o "todavía no sé" — y la cabecera
+    /// las pintaba igual, afirmando "0 trips" sobre alguien con siete.
+    @Published private(set) var tripsConocidos = false
     @Published private(set) var isLoadingMoreTrips = false
     @Published private(set) var loadFailed = false
 
@@ -121,6 +125,7 @@ final class UserProfileViewModel: ObservableObject {
             journeys        = page.items
             tripsNextCursor = page.nextCursor
             tripsHasMore    = page.hasMore
+            tripsConocidos  = true
         } else {
             print("👤 [UserProfileVM] ⚠️ trips no llegaron")
         }
@@ -148,6 +153,7 @@ final class UserProfileViewModel: ObservableObject {
     private func apply(_ s: UserProfileRepository.Snapshot) {
         user = s.user; stickers = s.stickers; journeys = s.journeys; shares = s.shares
         tripsNextCursor = s.tripsNextCursor; tripsHasMore = s.tripsHasMore
+        tripsConocidos = true
     }
 
     // MARK: Paginación de trips — mismo criterio que el tab Yo

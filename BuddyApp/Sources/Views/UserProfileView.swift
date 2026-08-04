@@ -120,9 +120,12 @@ struct UserProfileView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(metaLine)
+                // "3 trips · 2 stickers" es solo relleno para que la línea
+                // ocupe su sitio; va redactada, así que no se lee.
+                Text(metaLine ?? "3 trips · 2 stickers")
                     .font(BT.footnote)
                     .foregroundStyle(Color.inkMuted)
+                    .redacted(reason: metaLine == nil ? .placeholder : [])
                 if let since = vm.user?.memberSince {
                     Text("Viajando desde \(UserProfileView.memberSince(since))")
                         .font(BT.caption1)
@@ -133,7 +136,17 @@ struct UserProfileView: View {
         }
     }
 
-    private var metaLine: String {
+    /// Nunca afirma un número que todavía no se conoce.
+    ///
+    /// Antes calculaba `journeys.count` sin más, así que mientras cargaba —y
+    /// también si los trips fallaban— la cabecera decía "0 trips" de alguien
+    /// con siete. No es un problema de pulido: es información falsa sobre una
+    /// persona real, y alguien que abra y cierre rápido se queda con ella.
+    ///
+    /// Mientras no se sabe se devuelve nil y la línea se pinta redactada: el
+    /// hueco se reserva igual, sin decir nada.
+    private var metaLine: String? {
+        guard vm.tripsConocidos else { return nil }
         let trips = vm.journeys.count
         let tripsLabel = trips == 1 ? "1 trip" : "\(trips) trips"
         let stickersLabel = vm.stickers.isEmpty ? nil

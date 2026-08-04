@@ -129,10 +129,39 @@ struct TripsView: View {
                     if !Session.hasSession {
                         anonymousTripState
                     } else if isLoading && !hasLoadedOnce {
-                        SkeletonBox(cornerRadius: 16)
-                            .frame(height: 480)
-                            .padding(.horizontal, Spacing.edge)
-                            .padding(.top, Spacing.md)
+                        // Mismo esqueleto de TripFeedCard: encabezado (avatar 40
+                        // + 10 arriba y abajo) sobre la foto, y la foto con el
+                        // alto DERIVADO del ancho, no un número fijo.
+                        //
+                        // El 480 anterior no estaba lejos —en un iPhone de 393pt
+                        // la card real mide ~491— pero era un número suelto: no
+                        // seguía al ancho del dispositivo ni a la proporción del
+                        // memoir, así que en cualquier pantalla distinta el
+                        // parecido se perdía. PublishedTripCard.memoirRatio se
+                        // hizo static exactamente para compartir este cálculo.
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 10) {
+                                SkeletonBox(cornerRadius: 20).frame(width: 40, height: 40)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    SkeletonBox(cornerRadius: 4).frame(width: 130, height: 13)
+                                    SkeletonBox(cornerRadius: 4).frame(width: 72, height: 11)
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, Spacing.md)
+                            .padding(.vertical, 10)
+
+                            SkeletonBox(cornerRadius: 0)
+                                .aspectRatio(1 / PublishedTripCard.memoirRatio, contentMode: .fit)
+                        }
+                        // El mismo chrome que TripFeedCard: sin esto el esqueleto
+                        // y la card no comparten ni el radio ni la sombra.
+                        .background(Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                        .cardShadow()
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.top, Spacing.md)
+                        .skeletonPulse()
                     } else if let journey = selectedTrip {
                         tripCard(for: journey)
                             .id("\(journey.id)-\(journey.status ?? "")")
