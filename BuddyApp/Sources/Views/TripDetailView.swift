@@ -1337,6 +1337,18 @@ struct PlaceGuideDetailSheet: View {
     // MARK: Buddies
 
     @ViewBuilder
+    /// Los buddies del destino, en fila horizontal.
+    ///
+    /// Antes era una lista vertical con divisores, y esa forma dice "registro":
+    /// se lee de arriba abajo, una entrada por renglón, como una tabla. Estos no
+    /// son registros — son las personas que están ahí, y en el mapa la pregunta
+    /// es "¿quién hay?", no "¿quiénes son, en orden?". La fila responde eso de un
+    /// vistazo: caras grandes, todas al mismo nivel, sin jerarquía entre ellas.
+    ///
+    /// Además la hoja del lugar es baja (~265pt para las tres pestañas). En
+    /// vertical entraban dos buddies y medio y el resto quedaba fuera de cuadro
+    /// sin nada que lo insinuara; en horizontal el que asoma en el borde derecho
+    /// dice solo que hay más.
     private var buddiesTab: some View {
         VStack(alignment: .leading, spacing: 0) {
             if destinationId == nil {
@@ -1346,36 +1358,54 @@ struct PlaceGuideDetailSheet: View {
             } else if buddies.isEmpty {
                 emptyState(icon: "person.2", text: "Todavía no hay buddies en este destino")
             } else {
-                ForEach(Array(buddies.enumerated()), id: \.offset) { i, buddy in
-                    if i > 0 { Divider().padding(.leading, 66) }
-                    HStack(spacing: 12) {
-                        ZStack(alignment: .bottomTrailing) {
-                            CachedImage(urlString: buddy.avatarUrl) { img in
-                                img.resizable().scaledToFill()
-                            } placeholder: {
-                                Circle().fill(Color.sandLight)
-                                    .overlay(Text(buddy.initial).font(.system(size: 15, weight: .bold)).foregroundStyle(Color.ink))
-                            }
-                            .frame(width: 40, height: 40)
-                            .clipShape(Circle())
-
-                            if buddy.isAvailable == true {
-                                Circle().fill(Color.onlineGreen).frame(width: 11, height: 11)
-                                    .overlay(Circle().strokeBorder(Color.surface, lineWidth: 2))
-                            }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: Spacing.lg) {
+                        ForEach(Array(buddies.enumerated()), id: \.offset) { _, buddy in
+                            buddyAvatar(buddy)
                         }
-                        Text(buddy.fullName ?? "Buddy")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Spacer()
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.vertical, Spacing.md)
                 }
             }
         }
         .padding(.top, 4)
         .padding(.bottom, 12)
+    }
+
+    /// Cara + nombre. El ancho fijo es lo que mantiene la fila pareja: sin él,
+    /// "Leo Leonardo" ensancha su columna y los círculos dejan de estar a paso
+    /// regular, que es justo lo que hace legible una fila de caras.
+    private func buddyAvatar(_ buddy: APIPlaceBuddy) -> some View {
+        VStack(spacing: Spacing.sm) {
+            ZStack(alignment: .bottomTrailing) {
+                CachedImage(urlString: buddy.avatarUrl) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Circle().fill(Color.sandLight)
+                        .overlay(Text(buddy.initial)
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(Color.ink))
+                }
+                .frame(width: 82, height: 82)
+                .clipShape(Circle())
+
+                // El aro del color de fondo separa el punto del avatar: sobre una
+                // foto clara, verde contra verde se perdía.
+                if buddy.isAvailable == true {
+                    Circle().fill(Color.onlineGreen)
+                        .frame(width: 18, height: 18)
+                        .overlay(Circle().strokeBorder(Color.surface, lineWidth: 3))
+                }
+            }
+
+            Text(buddy.fullName ?? "Buddy")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(width: 92)
     }
 
     private func emptyState(icon: String, text: String) -> some View {
