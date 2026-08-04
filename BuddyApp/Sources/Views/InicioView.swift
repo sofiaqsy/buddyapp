@@ -791,6 +791,10 @@ struct InicioView: View {
                         items: Array(communityPulse.filter { $0.type == "helped" }.prefix(3)),
                         esEsqueleto: false)
                         .padding(.top, Spacing.md)
+                } else {
+                    // Sin esta rama la sección desaparecía tras el esqueleto.
+                    communityLiveEmpty
+                        .padding(.top, Spacing.md)
                 }
 
                 communitySection
@@ -1583,13 +1587,7 @@ struct InicioView: View {
         // distancias eran iguales y el header se leía como un cuarto ítem de la
         // lista. Separar la estructura del contenido agrupa las filas entre sí.
         VStack(alignment: .leading, spacing: 16) {
-            // Mismo tratamiento que "HISTORIAS DE VIAJEROS": son secciones
-            // hermanas y deben pesar igual. El 75% que tenía antes venía de
-            // cuando el punto verde acompañaba al título — sin el punto, la
-            // línea quedaba atenuada y corta, y se leía como una nota al pie.
-            Text("COMUNIDAD VIVA")
-                .font(BT.eyebrow).tracking(1.5)
-                .foregroundStyle(Color.ink)
+            communityLiveHeader
 
             VStack(spacing: 10) {
                 ForEach(items) { item in
@@ -1597,6 +1595,44 @@ struct InicioView: View {
                 }
             }
             .redacted(reason: esEsqueleto ? .placeholder : [])
+        }
+        .padding(.horizontal, Spacing.edge)
+    }
+
+    /// Mismo tratamiento que "HISTORIAS DE VIAJEROS": son secciones hermanas y
+    /// deben pesar igual. El 75% que tenía antes venía de cuando el punto verde
+    /// acompañaba al título — sin el punto, la línea quedaba atenuada y corta, y
+    /// se leía como una nota al pie.
+    ///
+    /// Extraída para que el estado vacío la comparta en vez de copiarla: dos
+    /// cabeceras duplicadas se separan en cuanto alguien retoca una.
+    private var communityLiveHeader: some View {
+        Text("COMUNIDAD VIVA")
+            .font(BT.eyebrow).tracking(1.5)
+            .foregroundStyle(Color.ink)
+    }
+
+    /// El tercer eslabón de la cadena, que faltaba.
+    ///
+    /// El diseño ya decidió que esta sección es parte fija del Home: por eso
+    /// existe el pulso global como respaldo de la actividad local. Pero la
+    /// cadena tenía dos eslabones y no tres —local → global → nada—, así que
+    /// cuando el pulso no traía ninguna ayuda la sección se DESVANECÍA después
+    /// de haber dibujado su esqueleto, y todo el feed saltaba hacia arriba.
+    ///
+    /// El problema nunca fue que estuviera vacía: fue que el esqueleto prometió
+    /// algo que después no llegaba.
+    ///
+    /// El texto es neutro a propósito. "Sé el primero en ayudar" convertiría una
+    /// sección informativa en un anuncio, y esto se lee en el arranque, antes de
+    /// que nadie haya pedido nada.
+    private var communityLiveEmpty: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            communityLiveHeader
+            Text("Todavía no hay actividad reciente en esta zona. Las próximas ayudas aparecerán aquí.")
+                .font(BT.footnote)
+                .foregroundStyle(Color.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, Spacing.edge)
     }
