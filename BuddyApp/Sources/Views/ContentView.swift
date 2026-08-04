@@ -41,9 +41,12 @@ struct RootView: View {
     @EnvironmentObject var router: AppRouter
     @StateObject private var chatStore = ChatStore.shared
     @Environment(\.scenePhase) private var scenePhase
+    /// Sonda TEMPORAL de diagnóstico — ver LifecycleProbe. Borrar al cerrar.
+    @StateObject private var probe = LifecycleProbe("ContentView")
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        let _ = probe.render()
+        return ZStack(alignment: .bottom) {
             // Tab content — keep all views alive to preserve scroll/nav state
             TabView(selection: $router.selectedTab) {
                 InicioView().tag(AppTab.inicio)

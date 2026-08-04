@@ -20,6 +20,8 @@ struct InicioView: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var locationService: LocationService
+    /// Sonda TEMPORAL de diagnóstico — ver LifecycleProbe. Borrar al cerrar.
+    @StateObject private var probe = LifecycleProbe("InicioView")
     @State private var navPath = NavigationPath()
     @State private var showPendingContactSheet  = false
     @State private var isFindingBuddy           = false   // creando/reusando trip en background
@@ -131,6 +133,7 @@ struct InicioView: View {
     }
 
     var body: some View {
+        let _ = probe.render()
         NavigationStack(path: $navPath) {
             scrollContent
         }
@@ -590,11 +593,14 @@ struct InicioView: View {
                     stringDestination(route: route)
                 }
                 .task {
+                    probe.evento("⏩ .task DISPARADO (hasLoaded=\(hasLoaded))")
                     guard !hasLoaded else { return }
                     hasLoaded = true
                     await loadData()
                 }
+                .onDisappear { probe.evento("👋 onDisappear") }
                 .onAppear {
+                    probe.evento("👁 onAppear (hasLoaded=\(hasLoaded), tab=\(router.selectedTab))")
                     if hasLoaded {
                         if skipNextRefresh { skipNextRefresh = false; return }
                         // En TabView los tabs ocultos reciben onAppear en re-renders
