@@ -84,4 +84,8 @@ final class HomeInFlight: ObservableObject {
     /// Clave: destinationId. `recent-help` se pide por destino y es el que más
     /// se duplicaba: dos dueños distintos pedían el mismo id a la vez.
     let recentHelp = InFlightRegistry<String>()
+    /// El pulso global. Clave: el traveler, porque es lo único que lo distingue
+    /// (no depende de destino). Mismo problema que los otros dos: su throttle de
+    /// 60s tampoco ve una petición que aún no volvió.
+    let pulse = InFlightRegistry<String>()
 }

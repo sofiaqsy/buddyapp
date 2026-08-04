@@ -1725,6 +1725,17 @@ struct InicioView: View {
             print("🌐 [loadCommunityPulseIfNeeded] throttled — usando cache de \(communityPulse.count) item(s)")
             return
         }
+        // Mismo caso que el contexto y recent-help: el throttle de 60s se escribe
+        // al volver la respuesta, así que dos dueños simultáneos lo atraviesan
+        // los dos. Antes quedaba oculto porque el contexto los serializaba; al
+        // deduplicar ése, las dos colas llegaron acá a la vez y el arranque pidió
+        // /community/pulse dos veces.
+        await inflight.pulse.run(Session.travelerId ?? "anon") { [self] in
+            await self._loadCommunityPulseBody()
+        }
+    }
+
+    private func _loadCommunityPulseBody() async {
         do {
             let pulse = try await APIClient.shared.fetchCommunityPulse()
             print("🌐 [loadCommunityPulseIfNeeded] ✅ \(pulse.count) item(s): \(pulse.map { "\($0.type)@\($0.city)" })")
