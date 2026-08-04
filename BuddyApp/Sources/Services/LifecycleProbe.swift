@@ -113,3 +113,88 @@ enum RenderMetrics {
         }
     }
 }
+
+/// Traza TEMPORAL del ciclo completo de `loadData`.
+///
+/// Responde cuatro preguntas que ningún log contestaba, y que hay que contestar
+/// ANTES de tocar la estrategia de cancelación:
+///
+///   1. ¿quién dispara cada carga?
+///   2. ¿qué carga cancela?
+///   3. ¿en qué punto de ejecución la cancela?
+///   4. ¿el nuevo llamador necesitaba de verdad una recarga completa?
+///
+/// La cuarta es la decisiva y es la que nadie mide: si la carga que cancela
+/// produce EXACTAMENTE el mismo estado que la anterior, entonces no se estaba
+/// "reemplazando trabajo obsoleto" —se estaba repitiendo trabajo idéntico— y el
+/// problema es de coordinación entre dueños, no de cancelar mejor.
+///
+/// La firma se compara con la de la carga anterior COMPLETADA. Si son iguales,
+/// la recarga no aportó nada observable.
+@MainActor
+enum LoadDataTrace {
+    private struct EnCurso {
+        let id: Int
+        let caller: String
+        let inicio: Date
+        var fase: String
+    }
+
+    private static var siguienteId = 1
+    private static var enCurso: EnCurso?
+    private static var ultimaFirma: String?
+    private static var completadas = 0
+    private static var canceladas = 0
+
+    /// Llamar al entrar en loadData, ANTES de cancelar la anterior.
+    static func inicia(_ caller: String) -> Int {
+        let id = siguienteId
+        siguienteId += 1
+
+        if let previa = enCurso {
+            let ms = Date().timeIntervalSince(previa.inicio) * 1000
+            canceladas += 1
+            print(String(format: "🏠 [loadData #%d] ← %@  ⚠️ CANCELA #%d (← %@) en fase «%@» tras %.0f ms",
+                         id, caller, previa.id, previa.caller, previa.fase, ms))
+        } else {
+            print("🏠 [loadData #\(id)] ← \(caller)")
+        }
+
+        enCurso = EnCurso(id: id, caller: caller, inicio: Date(), fase: "arranque")
+        return id
+    }
+
+    /// Marca en qué punto va la carga. Es lo que convierte "se canceló" en
+    /// "se canceló habiendo pagado ya journeys y matches".
+    static func fase(_ id: Int, _ nombre: String) {
+        guard enCurso?.id == id else { return }   // una carga vieja no pisa la actual
+        enCurso?.fase = nombre
+    }
+
+    /// - Parameter firma: estado observable resultante. Si coincide con la de la
+    ///   última carga completada, esta recarga no cambió nada.
+    static func termina(_ id: Int, cancelada: Bool, firma: String) {
+        guard enCurso?.id == id else {
+            // Otra carga ya tomó el relevo: esta murió cancelada y su final no
+            // dice nada del estado actual.
+            return
+        }
+        let ms = Date().timeIntervalSince(enCurso!.inicio) * 1000
+        let fase = enCurso!.fase
+        enCurso = nil
+
+        if cancelada {
+            print(String(format: "🏠 [loadData #%d] ✂️ cancelada en fase «%@» tras %.0f ms", id, fase, ms))
+            return
+        }
+
+        completadas += 1
+        let igual = (firma == ultimaFirma)
+        ultimaFirma = firma
+        print(String(format: "🏠 [loadData #%d] ✅ completa en %.0f ms — %@",
+                     id, ms,
+                     igual ? "estado IDÉNTICO al anterior · la recarga no cambió nada ⚠️"
+                           : "estado distinto · la recarga sí aportó"))
+        print("🏠 [loadData] acumulado: \(completadas) completada(s), \(canceladas) cancelada(s)")
+    }
+}

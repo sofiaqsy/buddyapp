@@ -1258,17 +1258,40 @@ struct InicioView: View {
     /// Ojo con la semántica: esto NO deduplica, CANCELA. Un segundo llamador
     /// mata el ciclo en vuelo y empieza otro desde cero, así que dos disparos
     /// seguidos no cuestan una carga: cuestan una carga tirada más otra entera.
+    /// - Parameter caller: #function evaluado en el sitio de llamada. Hay ONCE
+    ///   puntos que llaman a esto.
+    ///
+    /// Ojo con la semántica: esto NO deduplica, CANCELA. Un segundo llamador
+    /// mata el ciclo en vuelo y empieza otro desde cero. Antes de cambiar eso
+    /// hay que saber si lo que se cancela era trabajo OBSOLETO (y entonces
+    /// cancelar está bien) o trabajo IDÉNTICO (y entonces el problema es que
+    /// hay varios dueños arrancando el mismo flujo). LoadDataTrace lo mide.
     private func loadData(caller: String = #function) async {
-        let habiaEnVuelo = loadDataTask != nil && !(loadDataTask?.isCancelled ?? true)
-        print("🏠 [loadData] ← \(caller)\(habiaEnVuelo ? "  ⚠️ CANCELA una carga en vuelo" : "")")
+        let traceId = await MainActor.run { LoadDataTrace.inicia(caller) }
         // Cancel any in-flight loadData — only the latest matters.
         loadDataTask?.cancel()
-        let task = Task<Void, Never> { [self] in await _loadDataBody() }
+        let task = Task<Void, Never> { [self] in await _loadDataBody(traceId: traceId) }
         loadDataTask = task
         await task.value
+
+        // La firma es el estado OBSERVABLE que produjo la carga. Si dos cargas
+        // seguidas dan la misma, la segunda no aportó nada al usuario.
+        let firma = await MainActor.run {
+            [
+                liveJourneys.map { "\($0.id):\($0.status ?? "")" }.sorted().joined(separator: ","),
+                activeJourney?.id ?? "nil",
+                activeMatch?.id ?? "nil",
+                "dest=\(destinations.count)",
+                "explore=\(exploreCards.count)",
+                "feed=\(publicJourneys.map(\.id).joined(separator: "|"))",
+            ].joined(separator: " · ")
+        }
+        await MainActor.run {
+            LoadDataTrace.termina(traceId, cancelada: task.isCancelled, firma: firma)
+        }
     }
 
-    private func _loadDataBody() async {
+    private func _loadDataBody(traceId: Int = 0) async {
         guard !Task.isCancelled else { return }
         await MainActor.run { loadDataFailed = false }
         // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
@@ -1278,6 +1301,7 @@ struct InicioView: View {
         // fotos y recién after eso salta al carrusel, un flash visible.
         async let dests = APIClient.shared.fetchDestinations()
         async let explore = APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng)
+        await MainActor.run { LoadDataTrace.fase(traceId, "destinos+explore") }
         let fetchedDests = (try? await dests) ?? []
         let fetchedExplore = (try? await explore) ?? []
         await MainActor.run {
@@ -1306,6 +1330,7 @@ struct InicioView: View {
             // fetchTravelerJourneys usa el JWT (traveler o Supabase) — válido para ambos.
             let snapshotId = Session.travelerId   // capturar ANTES del await
             print("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
+            await MainActor.run { LoadDataTrace.fase(traceId, "journeys") }
             let journeys = try await APIClient.shared.fetchTravelerJourneys()
             guard !Task.isCancelled else { return }
             print("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
@@ -1348,6 +1373,7 @@ struct InicioView: View {
 
             let shouldFetchMatch = await MainActor.run { activeJourney != nil }
             if shouldFetchMatch {
+                await MainActor.run { LoadDataTrace.fase(traceId, "matches") }
                 let matches = try await APIClient.shared.fetchMatches(statuses: APIClient.estadosVigentes)
                 guard !Task.isCancelled else { return }
                 print("🏠 [loadData] \(matches.count) match(es) vigente(s): \(matches.map { "\($0.status ?? "?")" })")
@@ -1358,6 +1384,7 @@ struct InicioView: View {
                 let myId = Session.travelerId
                 let found = matches.first(where: { $0.travelerId == myId })
                 await MainActor.run { activeMatch = found }
+                await MainActor.run { LoadDataTrace.fase(traceId, "chatStore") }
                 await chatStore.load()
             }
         } catch {
@@ -1377,6 +1404,7 @@ struct InicioView: View {
 
         // Feed de trips publicados — con un reintento: un timeout puntual
         // no puede dejar la comunidad vacía en silencio
+        await MainActor.run { LoadDataTrace.fase(traceId, "feed") }
         await loadFeed()
 
         // Buddies cerca para el composer de la Home + resolvedLocation fresco.
@@ -1384,6 +1412,7 @@ struct InicioView: View {
         // depende de resolvedLocation — sin este orden, Comunidad Viva podía
         // mostrar la actividad del trip aunque el selector ya mostrara
         // "Ubicación actual" (un ciclo de refresh atrasado).
+        await MainActor.run { LoadDataTrace.fase(traceId, "contexto") }
         await refreshHomeCommunityContext()
         await MainActor.run { initialContextReady = true }
         await loadRecentHelp(force: true)
