@@ -1133,7 +1133,8 @@ struct InicioView: View {
 
     /// Revalida solo el estado del trip (activo/pendiente) — barato y frecuente.
     /// Cancela la llamada anterior si llegan múltiples disparos en ráfaga (post-creación de trip).
-    private func refreshTripState() async {
+    private func refreshTripState(caller: String = #function) async {
+        print("🔄 [refreshTripState] ← \(caller)")
         refreshStateTask?.cancel()
         let t = Task<Void, Never> { await _refreshTripStateBody() }
         refreshStateTask = t
@@ -1249,7 +1250,17 @@ struct InicioView: View {
         }
     }
 
-    private func loadData() async {
+    /// - Parameter caller: #function evaluado en el sitio de llamada. Hay ONCE
+    ///   puntos que llaman a esto y el log no decía cuál disparaba cada ciclo
+    ///   completo —destinos, place-shares, journeys, matches, feed—. Sin el
+    ///   nombre, "loadData corrió tres veces" no permite decidir nada.
+    ///
+    /// Ojo con la semántica: esto NO deduplica, CANCELA. Un segundo llamador
+    /// mata el ciclo en vuelo y empieza otro desde cero, así que dos disparos
+    /// seguidos no cuestan una carga: cuestan una carga tirada más otra entera.
+    private func loadData(caller: String = #function) async {
+        let habiaEnVuelo = loadDataTask != nil && !(loadDataTask?.isCancelled ?? true)
+        print("🏠 [loadData] ← \(caller)\(habiaEnVuelo ? "  ⚠️ CANCELA una carga en vuelo" : "")")
         // Cancel any in-flight loadData — only the latest matters.
         loadDataTask?.cancel()
         let task = Task<Void, Never> { [self] in await _loadDataBody() }
