@@ -410,11 +410,18 @@ final class APIClient {
     /// - `source=spot` acota a ese sitio — sin eso devolvería las fotos de toda la ciudad.
     /// - `travelerId` acota a una persona: es lo que abre el perfil, donde la
     ///   sección habla de lo que ESA persona recomienda, no de la comunidad.
-    func fetchSpotGallery(spotId: String, travelerId: String? = nil, limit: Int = 20) async throws -> APIPlaceGallery {
+    /// - `cursor`: el `nextCursor` de la página anterior. Nil pide la primera.
+    func fetchSpotGallery(spotId: String, travelerId: String? = nil,
+                          limit: Int = 20, cursor: String? = nil) async throws -> APIPlaceGallery {
         var path = "/places/\(spotId)/gallery?source=spot&limit=\(limit)"
         if let travelerId { path += "&traveler_id=\(travelerId)" }
+        // El cursor es base64url y puede traer '-' y '_', que son seguros en un
+        // query, pero se codifica igual por si el formato cambia.
+        if let cursor, let enc = cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            path += "&cursor=\(enc)"
+        }
         let gallery: APIPlaceGallery = try await request(path: path)
-        print("🖼️ [APIClient] spotGallery \(spotId.prefix(8)) traveler=\(travelerId?.prefix(8) ?? "todos") → visitas=\(gallery.visits.count) fotos=\(gallery.totalPhotos)")
+        print("🖼️ [APIClient] spotGallery \(spotId.prefix(8)) traveler=\(travelerId?.prefix(8) ?? "todos") cursor=\(cursor?.prefix(12) ?? "primera") → visitas=\(gallery.visits.count) fotos=\(gallery.totalPhotos) hasMore=\(gallery.hasMore)")
         return gallery
     }
 

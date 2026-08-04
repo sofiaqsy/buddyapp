@@ -930,6 +930,19 @@ struct PlaceGuideDetailSheet: View {
     /// significa "cerrar" (volver a mostrar la lista).
     let onClose: () -> Void
 
+    init(place: Place, destinationId: String?, buddyPresenceText: String?,
+         isFavorite: Bool, onToggleFavorite: @escaping () -> Void,
+         onNavigate: @escaping () -> Void, onClose: @escaping () -> Void) {
+        self.place = place
+        self.destinationId = destinationId
+        self.buddyPresenceText = buddyPresenceText
+        self.isFavorite = isFavorite
+        self.onToggleFavorite = onToggleFavorite
+        self.onNavigate = onNavigate
+        self.onClose = onClose
+        _galleryVM = StateObject(wrappedValue: SpotGalleryViewModel(spotId: place.id.uuidString))
+    }
+
     private enum Tab: String, CaseIterable {
         case fotos = "Fotos", info = "Info", buddies = "Buddies"
         var icon: String {
@@ -942,66 +955,18 @@ struct PlaceGuideDetailSheet: View {
     }
     @State private var tab: Tab = .fotos
 
-    @State private var gallery: APIPlaceGallery?
-    @State private var isLoadingGallery = true
+    @StateObject private var galleryVM: SpotGalleryViewModel
     @State private var buddies: [APIPlaceBuddy] = []
     @State private var isLoadingBuddies = true
     @State private var showFullGallery = false
 
-    /// Una foto en la fila, sabiendo de quién es y qué página ocupa. La fila
-    /// necesita las tres cosas juntas: la URL para pintarla, el dueño para
-    /// ordenar y decidir si se puede borrar, y la página para pedir el borrado.
-    struct GalleryPhoto: Identifiable {
-        let url: String
-        let journeyId: String
-        let pageIndex: Int?
-        /// UUID de la página en el libro. Estable; es por donde va el borrado.
-        /// Nil en fotos publicadas antes de la migración, que solo tienen índice.
-        let clientPageId: String?
-        let isMine: Bool
-        var id: String { "\(journeyId)#\(clientPageId ?? pageIndex.map(String.init) ?? url)" }
-        /// Se puede borrar si el servidor dio con qué referirse a ella.
-        var isDeletable: Bool { clientPageId != nil || pageIndex != nil }
-    }
-
-    /// Fotos del lugar con LAS MÍAS PRIMERO. Un buddy entra a esta ficha a ver
-    /// cómo quedó lo que aportó, y con orden estricto por recencia lo suyo se
-    /// pierde entre lo de todos. El resto conserva el orden que trae el server.
-    private var galleryPhotos: [GalleryPhoto] {
-        let me = Session.travelerId
-        let visits = gallery?.visits ?? []
-        let flatten: (APIPlaceVisit) -> [GalleryPhoto] = { visit in
-            let mine = visit.travelerId != nil && visit.travelerId == me
-            // photoPages cuando el server la manda; si no, las URLs sueltas y
-            // sin página — se ven igual, solo que no se pueden borrar.
-            if let pages = visit.photoPages, !pages.isEmpty {
-                return pages.map { GalleryPhoto(url: $0.url, journeyId: visit.journeyId,
-                                                pageIndex: $0.pageIndex, clientPageId: $0.clientPageId,
-                                                isMine: mine) }
-            }
-            return visit.photos.map { GalleryPhoto(url: $0, journeyId: visit.journeyId,
-                                                   pageIndex: nil, clientPageId: nil, isMine: mine) }
-        }
-        return visits.filter { $0.travelerId == me }.flatMap(flatten)
-             + visits.filter { $0.travelerId != me }.flatMap(flatten)
-    }
-
-    private var allPhotos: [String] { galleryPhotos.map(\.url) }
-
     @State private var photoPendingDeletion: GalleryPhoto? = nil
     @State private var isDeletingPhoto = false
+    @State private var deleteFailed = false
 
-    /// Mi propia recomendación de este lugar, si soy buddy aprobado.
-    ///
-    /// Sale de la galería y no de una llamada aparte: cada visita ya trae
-    /// traveler_id y is_buddy —que el backend calcula contra buddy_profile con
-    /// verification_status='approved'—, así que las dos condiciones se leen de
-    /// datos que esta vista ya tenía cargados. Su journeyId es al que se le
-    /// suma la foto: la recomendación existe, no hay que crear ninguna.
-    private var myBuddyRecommendation: APIPlaceVisit? {
-        guard let me = Session.travelerId else { return nil }
-        return gallery?.visits.first { $0.travelerId == me && $0.isBuddy == true }
-    }
+    /// Mi propia recomendación de este lugar, si soy buddy aprobado. La resuelve
+    /// el ViewModel mirando TODAS las páginas cargadas, no solo la primera.
+    private var myBuddyRecommendation: APIPlaceVisit? { galleryVM.myVisit }
 
     @State private var editingJourney: APIJourney? = nil
     @State private var isOpeningEditor = false
@@ -1036,16 +1001,21 @@ struct PlaceGuideDetailSheet: View {
         }
         .padding(.top, 10)
         .task {
-            async let galleryTask: APIPlaceGallery? = try? APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
-            async let buddiesTask: [APIPlaceBuddy]? = fetchBuddiesIfPossible()
-            let (g, b) = await (galleryTask, buddiesTask)
-            gallery = g
-            isLoadingGallery = false
-            buddies = b ?? []
+            // La galería la pide el ViewModel: si el lugar ya se abrió antes,
+            // pinta lo cacheado sin tocar la red.
+            galleryVM.loadFirstPageIfNeeded()
+            buddies = await fetchBuddiesIfPossible() ?? []
             isLoadingBuddies = false
         }
         .sheet(isPresented: $showFullGallery) {
-            PlaceFullGallerySheet(placeName: place.name, photos: allPhotos)
+            // El VM entero y no un array de URLs: la hoja pagina igual que la
+            // fila —una galería de 500 fotos se abre igual de rápido— y como
+            // recibe GalleryPhoto tiene la identidad de cada página, así que
+            // desde "Ver todas" también se puede borrar. Antes solo se podían
+            // borrar las 12 de la fila.
+            PlaceFullGallerySheet(placeName: place.name, vm: galleryVM) { photo in
+                photoPendingDeletion = photo
+            }
         }
         .fullScreenCover(item: $editingJourney) { journey in
             // publishesOnSave: acá no existe el paso posterior de "publicar el
@@ -1070,10 +1040,14 @@ struct PlaceGuideDetailSheet: View {
         } message: {
             Text("Se quitará de este lugar para siempre.")
         }
+        .alert("No se pudo eliminar la foto", isPresented: $deleteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Verifica tu conexión e inténtalo de nuevo.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
-            Task {
-                gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
-            }
+            // Se publicó una foto nueva: la primera página cacheada quedó vieja.
+            galleryVM.refresh()
         }
     }
 
@@ -1218,8 +1192,11 @@ struct PlaceGuideDetailSheet: View {
                     try await APIClient.shared.deleteJourneyPage(journeyId: photo.journeyId, pageIndex: pageIndex)
                     await MainActor.run { MemoirPersistence.shared.removePublishedPage(at: pageIndex, journeyId: photo.journeyId) }
                 }
-                gallery = try? await APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
                 await MainActor.run {
+                    // Se quita de la lista en vez de refetchear la galería: con
+                    // paginación, recargar volvería a la primera página y el
+                    // usuario perdería el sitio donde venía desplazando.
+                    galleryVM.removeLocally(photo)
                     Haptic.success()
                     // Solo esta foto. Su URL ya no va a aparecer en ninguna
                     // lista, pero la ruta en Storage se recicla —page_N.jpg con
@@ -1234,6 +1211,9 @@ struct PlaceGuideDetailSheet: View {
                 }
             } catch {
                 print("❌ [deletePhoto] journey=\(photo.journeyId) page=\(photo.clientPageId ?? photo.pageIndex.map(String.init) ?? "?"): \(error)")
+                // Antes esto solo se imprimía: la foto seguía ahí y el usuario
+                // no tenía forma de saber que el borrado no ocurrió.
+                await MainActor.run { deleteFailed = true }
             }
             await MainActor.run { isDeletingPhoto = false }
         }
@@ -1242,16 +1222,19 @@ struct PlaceGuideDetailSheet: View {
     @ViewBuilder
     private var fotosTab: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if isLoadingGallery {
+            if galleryVM.isLoadingFirstPage {
                 ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
-            } else if allPhotos.isEmpty {
+            } else if galleryVM.photos.isEmpty {
                 if myBuddyRecommendation != nil {
                     HStack { addPhotoTile; Spacer() }.padding(.horizontal, 20)
                 } else {
                     emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
                 }
             } else {
-                if allPhotos.count > 6 {
+                // El total del lugar, no el de lo cargado: con paginación
+                // "Ver todas" tiene que ofrecerse desde la primera página,
+                // aunque acá solo haya 20 de 500.
+                if galleryVM.totalPhotos > 6 {
                     HStack {
                         Spacer()
                         Button { showFullGallery = true } label: {
@@ -1267,10 +1250,15 @@ struct PlaceGuideDetailSheet: View {
                 }
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    // LazyHStack y no HStack: el normal construye TODAS las
+                    // celdas al aparecer, así que cada foto de la lista arranca
+                    // su descarga aunque esté a diez pantallas de distancia. Con
+                    // 20 se notaba poco; con 500 es la diferencia entre decenas
+                    // de megas y unos pocos.
+                    LazyHStack(spacing: 8) {
                         addPhotoTile
 
-                        ForEach(galleryPhotos.prefix(12)) { photo in
+                        ForEach(galleryVM.photos) { photo in
                             Button { showFullGallery = true } label: {
                                 CachedImage(urlString: photo.url) { img in
                                     img.resizable().scaledToFill()
@@ -1294,6 +1282,12 @@ struct PlaceGuideDetailSheet: View {
                                     }
                                 }
                             }
+                            .onAppear { galleryVM.photoAppeared(photo) }
+                        }
+
+                        if galleryVM.hasMore {
+                            ProgressView()
+                                .frame(width: 60, height: 115)
                         }
                     }
                     .padding(.horizontal, 20)
@@ -1424,11 +1418,17 @@ struct PlaceGuideDetailSheet: View {
     }
 }
 
-/// "Ver todas" desde la pestaña Fotos — grid simple de TODAS las fotos ya
-/// cargadas (no vuelve a pedirlas al server).
+/// "Ver todas" desde la pestaña Fotos.
+///
+/// Comparte el ViewModel con la fila en vez de recibir una copia de las URLs:
+/// abrirla no vuelve a pedir nada —lo ya paginado está—, y seguir desplazando
+/// acá trae las páginas siguientes, que quedan también para la fila al cerrar.
+/// Como recibe `GalleryPhoto` y no `String`, cada foto conserva su identidad y
+/// se puede borrar desde aquí; antes solo se podían borrar las de la fila.
 struct PlaceFullGallerySheet: View {
     let placeName: String
-    let photos: [String]
+    @ObservedObject var vm: SpotGalleryViewModel
+    let onDelete: (GalleryPhoto) -> Void
 
     @Environment(\.dismiss) private var dismiss
     private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
@@ -1437,19 +1437,37 @@ struct PlaceFullGallerySheet: View {
         NavigationStack {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 3) {
-                    ForEach(Array(photos.enumerated()), id: \.offset) { _, url in
-                        CachedImage(urlString: url) { img in
+                    ForEach(vm.photos) { photo in
+                        CachedImage(urlString: photo.url) { img in
                             img.resizable().scaledToFill()
                         } placeholder: {
                             Rectangle().fill(Color.sandLight)
                         }
                         .aspectRatio(1, contentMode: .fill)
                         .clipped()
+                        .contextMenu {
+                            if photo.isMine, photo.isDeletable {
+                                Button(role: .destructive) {
+                                    dismiss()
+                                    onDelete(photo)
+                                } label: {
+                                    Label("Eliminar foto", systemImage: "trash")
+                                }
+                            }
+                        }
+                        // Mismo gancho que la fila: el VM decide si toca pedir
+                        // la siguiente página y qué precargar.
+                        .onAppear { vm.photoAppeared(photo) }
                     }
+                }
+
+                if vm.isLoadingMore {
+                    ProgressView().padding(.vertical, Spacing.lg)
                 }
             }
             .navigationTitle(placeName)
             .navigationBarTitleDisplayMode(.inline)
+            .refreshable { vm.refresh() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cerrar") { dismiss() }

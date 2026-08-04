@@ -497,6 +497,10 @@ struct APIPlaceGallery: Decodable {
     let buddyCount: Int
     let travelerCount: Int
     let hasMore: Bool
+    /// Cursor opaco de la siguiente página. El servidor lo manda desde siempre;
+    /// hasta ahora este modelo no lo declaraba, así que se descartaba al
+    /// decodificar y la galería se quedaba con la primera página para siempre.
+    let nextCursor: String?
 }
 
 // Página del feed "Historias de viajeros" (cursor pagination)
