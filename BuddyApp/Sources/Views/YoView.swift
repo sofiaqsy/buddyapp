@@ -245,13 +245,44 @@ struct YoView: View {
                     navPath.append(existing)
                     return
                 }
-                // Caso 2 — lugar nuevo: el journey nace con trip_id=null y sin
-                // publicar, así que todavía no puede aparecer en la sección
-                // (place_cards_by_traveler exige is_public, completed y fotos).
-                // La recarga sola no alcanza; falta encadenar el editor.
-                guard pendingShareJourney != nil else { return }
+                // Caso 2 — lugar nuevo: se abre su ficha, igual que el Caso 1.
+                //
+                // El journey nace sin publicar y sin fotos, y la sección exige
+                // las tres cosas (is_public, completed y al menos una foto), así
+                // que recargar la lista no podía mostrar nada: el lugar se
+                // guardaba bien y desaparecía de la vista. Añadir un lugar y no
+                // ver nada se lee como que no se guardó.
+                //
+                // Llevar a la ficha cierra el flujo donde tiene que cerrarse: es
+                // la pantalla donde vive "Añadir foto", que es lo único que le
+                // falta al lugar para existir para los demás.
+                guard let journey = pendingShareJourney else { return }
                 pendingShareJourney = nil
                 Task { await vm.load(force: true) }
+
+                guard let spot = journey.spot else {
+                    // Sin spot no hay ficha que abrir. No debería pasar por esta
+                    // vía —"Compartir un lugar" siempre elige uno del catálogo—
+                    // pero callarlo dejaría al usuario en la misma pantalla sin
+                    // explicación, que es justo el síntoma que se está
+                    // corrigiendo.
+                    print("🌍 [YoView] ⚠️ journey \(journey.id.prefix(8)) sin spot — no se puede abrir la ficha")
+                    return
+                }
+                print("🌍 [YoView] lugar nuevo → abriendo su ficha para añadir la primera foto")
+                navPath.append(APIPlaceCard(
+                    id: spot.id, name: spot.name,
+                    destinationId: journey.destination?.id ?? journey.destinationId,
+                    destinationName: journey.destination?.name,
+                    lat: spot.lat, lng: spot.lng,
+                    coverUrl: spot.coverUrl, coverUrls: nil,
+                    coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+                    category: nil,
+                    // El estado real del spot, para que la ficha sepa que puede
+                    // seguir pendiente de aprobación.
+                    status: spot.status,
+                    photoCount: 0, isNew: true,
+                    buddyCount: 0, buddies: []))
             }) {
                 CompartirLugarSheet(
                     alreadyRecommended: Set(vm.shares.map { $0.id.lowercased() }),

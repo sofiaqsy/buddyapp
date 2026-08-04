@@ -2761,6 +2761,24 @@ struct NearbyPlaceCard: View {
                 )
 
                 VStack(alignment: .leading, spacing: 8) {
+                    // Un lugar propuesto y aún sin aprobar. Va sobre el nombre y
+                    // no debajo del pie porque cambia cómo se lee TODA la
+                    // tarjeta: lo que muestra existe solo para ti hasta que se
+                    // apruebe. Enterarse al final sería enterarse tarde.
+                    //
+                    // Sin icono de alerta: no hay nada que corregir ni nada que
+                    // hacer. Es un estado de espera, y un triángulo amarillo lo
+                    // convertiría en un problema del usuario.
+                    if place.estaPendiente {
+                        Text("PENDIENTE DE APROBACIÓN")
+                            .font(BT.caption2)
+                            .tracking(0.5)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.black.opacity(0.45), in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.5))
+                    }
                     Text(place.name)
                         .font(BT.footnoteBold)
                         .foregroundStyle(.white)

@@ -457,6 +457,16 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
     /// Nombre de la categoría del spot ("Alojamiento", "Café"…). Viene del
     /// catálogo curado, no de las categorías de ayuda: dice qué ES el lugar.
     let category: String?
+    /// "approved" | "pending". Un lugar propuesto por un buddy nace pendiente:
+    /// no sale en el mapa ni en la guía hasta que se apruebe, pero su autor sí
+    /// lo ve en su propio perfil y puede seguir sumándole fotos mientras tanto.
+    ///
+    /// Opcional porque los endpoints que solo devuelven lugares aprobados no lo
+    /// mandan; nil se lee como aprobado.
+    let status: String?
+    /// Todavía esperando aprobación. Solo debería llegar true en el perfil de
+    /// quien lo propuso: el backend no manda pendientes a nadie más.
+    var estaPendiente: Bool { status == "pending" }
     let photoCount: Int
     let isNew: Bool
     let buddyCount: Int
@@ -481,7 +491,7 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
                 destinationId: nil, destinationName: nil, lat: nil, lng: nil,
                 coverUrl: nil, coverUrls: nil,
                 coverAuthorName: "Buddy", coverAuthorAvatarUrl: nil,
-                category: "Categoría", photoCount: 0, isNew: false,
+                category: "Categoría", status: nil, photoCount: 0, isNew: false,
                 buddyCount: 0, buddies: [])
         }
     }
