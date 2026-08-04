@@ -155,11 +155,6 @@ struct TripDetailView: View {
     private var displayedPlaces: [Place] { Array(orderedPlaces.prefix(visibleCount)) }
     private var hasMorePlaces: Bool { visibleCount < livePlaces.count }
 
-    /// Estado de favorito en vivo (selectedPlace es una copia que puede quedar stale)
-    private func isFav(_ place: Place) -> Bool {
-        routeStore.route.places.first(where: { $0.id == place.id })?.isFavorite ?? place.isFavorite
-    }
-
     private func loadMore() {
         guard hasMorePlaces else { return }
         withAnimation(.easeInOut(duration: 0.3)) {
@@ -564,13 +559,7 @@ struct TripDetailView: View {
                             ))
                         }
                     } label: {
-                        PlacePhotoCard(place: place, index: i,
-                                       isFavorite: isFav(place),
-                                       onToggleFavorite: {
-                                           if let jid = journey?.id {
-                                               routeStore.toggleFavorite(placeId: place.id, journeyId: jid)
-                                           }
-                                       })
+                        PlacePhotoCard(place: place, index: i)
                     }
                     .buttonStyle(.pressable)
                 }
@@ -799,8 +788,6 @@ struct RecommendationPin: View {
 struct PlacePhotoCard: View {
     let place: Place
     let index: Int
-    var isFavorite: Bool = false
-    var onToggleFavorite: () -> Void = {}
 
     private let palettes: [[Color]] = [
         [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
@@ -845,19 +832,6 @@ struct PlacePhotoCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
 
-                // Favorito — círculo blanco siempre legible sobre cualquier foto
-                Button(action: onToggleFavorite) {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(isFavorite ? Color.errorRed : Color.ink.opacity(0.45))
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(.white))
-                        .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
-                        .symbolEffect(.bounce, value: isFavorite)
-                }
-                .buttonStyle(.plain)
-                .padding(8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
             .frame(height: 90)
 
