@@ -61,7 +61,16 @@ final class UserProfileViewModel: ObservableObject {
         tripsHasMore    = page?.hasMore ?? false
         shares = await sharesTask ?? []
 
-        print("👤 [UserProfileVM] \(travelerId.prefix(8)) → trips=\(journeys.count) lugares=\(shares.count) stickers=\(stickers.count)")
+        // Se loguea lo que la pantalla VA A PINTAR, no lo que llegó: si la
+        // tarjeta sale con una sola zona, este renglón dice si es porque la
+        // persona cubre una o porque el dato no vino.
+        let bp = user?.buddyProfile
+        let cobertura = bp?.coverageNames ?? []
+        print("""
+        👤 [UserProfileVM] \(travelerId.prefix(8)) "\(user?.fullName ?? "?")" \
+        trips=\(journeys.count) lugares=\(shares.count) stickers=\(stickers.count) \
+        buddy=\(bp == nil ? "no" : "sí") zonas=\(cobertura.count) [\(cobertura.joined(separator: " · "))]
+        """)
     }
 
     // MARK: Paginación de trips — mismo criterio que el tab Yo

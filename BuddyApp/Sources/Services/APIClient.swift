@@ -745,7 +745,19 @@ final class APIClient {
     // MARK: – Users
 
     func fetchUser(id: String) async throws -> APIUser {
-        try await request(path: "/users/\(id)")
+        let u: APIUser = try await request(path: "/users/\(id)")
+        // La cobertura se loguea entera y con el conteo crudo: es el dato que
+        // distingue "el buddy solo cubre un destino" de "el backend todavía no
+        // manda destinations". Sin esto, las dos cosas se ven igual en pantalla.
+        if let bp = u.buddyProfile {
+            let crudos = bp.destinations?.count
+            print("👤 [APIClient] user \(id.prefix(8)) \"\(u.fullName ?? "?")\" buddy=sí disponible=\(bp.isAvailable) apoyos=\(bp.totalHelps ?? 0)")
+            let cobertura = bp.coverageNames.isEmpty ? "(ninguna)" : bp.coverageNames.joined(separator: " · ")
+            print("👤 [APIClient]   cobertura=\(cobertura) destinations=\(crudos.map(String.init) ?? "AUSENTE — backend sin desplegar") destination=\(bp.destination?.name ?? "nil")")
+        } else {
+            print("👤 [APIClient] user \(id.prefix(8)) \"\(u.fullName ?? "?")\" buddy=no")
+        }
+        return u
     }
 
     /// Perfil del usuario autenticado — resuelve la identidad desde el JWT.
