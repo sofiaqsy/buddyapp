@@ -50,3 +50,39 @@ final class LifecycleProbe: ObservableObject {
         print("🧬 [\(nombre)] \(que) — tras \(renders) render(s)")
     }
 }
+
+/// Medición TEMPORAL de coste de render por tipo de vista.
+///
+/// Nació de un error de lectura que conviene no repetir: en el log, un mismo
+/// StoryCard imprimía 5–6 líneas y de ahí se concluyó "el body se evalúa 5–6
+/// veces". Falso. Esa línea vivía en la propiedad computada `thumbs`, que el
+/// body consulta 5–7 veces por evaluación — así que 5–6 líneas eran UNA sola
+/// evaluación. Contar líneas de log no es medir renders.
+///
+/// Acá se separan las dos cosas explícitamente:
+///   `render`   — el body se evaluó (una vez por evaluación, con su tiempo)
+///   `derivado` — una propiedad computada se recalculó (varias por render)
+@MainActor
+enum RenderMetrics {
+    private static var renders: [String: Int] = [:]
+    private static var nanos: [String: UInt64] = [:]
+    private static var derivados: [String: Int] = [:]
+
+    /// - Parameter nanos: solo el tiempo de CONSTRUIR el árbol de vistas. No
+    ///   incluye layout ni dibujado, que es donde suele estar el coste real de
+    ///   una tarjeta con imágenes. Sirve para comparar tarjetas entre sí, no
+    ///   para afirmar cuánto cuesta pintarlas.
+    static func render(_ tipo: String, _ id: String, _ ns: UInt64) {
+        let k = "\(tipo)/\(id)"
+        renders[k, default: 0] += 1
+        nanos[k, default: 0] += ns
+        let n = renders[k]!
+        let der = derivados[k] ?? 0
+        print(String(format: "⏱ [%@ %@] render #%d — %.2f ms (acum %.2f ms) · derivadas=%d",
+                     tipo, id, n, Double(ns) / 1_000_000, Double(nanos[k]!) / 1_000_000, der))
+    }
+
+    static func derivado(_ tipo: String, _ id: String) {
+        derivados["\(tipo)/\(id)", default: 0] += 1
+    }
+}

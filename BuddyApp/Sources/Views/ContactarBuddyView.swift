@@ -3130,7 +3130,7 @@ struct BuddyChatView: View {
             }
         }
         Haptic.success()
-        Task { await ChatStore.shared.load() }
+        Task { await ChatStore.shared.load(force: true) }
         NotificationCenter.default.post(name: .helpCompleted, object: nil)
         dismiss()
     }
@@ -3139,7 +3139,7 @@ struct BuddyChatView: View {
     private func closeAsHelper() async {
         try? await APIClient.shared.updateMatchStatus(matchId: match.id, status: "completed")
         Haptic.success()
-        Task { await ChatStore.shared.load() }
+        Task { await ChatStore.shared.load(force: true) }
         NotificationCenter.default.post(name: .helpCompleted, object: nil)
         dismiss()
     }
@@ -3206,7 +3206,7 @@ struct BuddyChatView: View {
                                                 NotificationCenter.default.post(name: .matchCompleted, object: nil)
                                             }
                                         }
-                                        await ChatStore.shared.load()
+                                        await ChatStore.shared.load(force: true)
                                     }
                                 } else if eventType == "presence",
                                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

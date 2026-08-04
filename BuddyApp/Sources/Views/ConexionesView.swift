@@ -283,7 +283,39 @@ final class ChatStore: ObservableObject {
         hasLoadedOnce       = false
     }
 
-    func load() async {
+    /// Registro de carga en vuelo. Estático y @MainActor porque ChatStore es un
+    /// singleton y la exclusión tiene que ser global: el problema no era una
+    /// pantalla llamando dos veces, sino varias pantallas llamando a la vez.
+    @MainActor private static let inflight = InFlightRegistry<String>("chatStore")
+
+    /// Carga chats, matches, offers y solicitudes.
+    ///
+    /// ÚNICA puerta de entrada, con deduplicación de trabajo CONCURRENTE.
+    ///
+    /// Hay 20 sitios que llaman a esto y ninguno sabe de los otros. En el log
+    /// del arranque coincidieron tres, y como cada load() pide cuatro recursos,
+    /// eso fueron 12 peticiones donde correspondían 4:
+    ///
+    ///     /matching/matches             ×3
+    ///     /messages/:id                 ×3
+    ///     /matching/my-offers           ×3
+    ///     /matching/requests/for-buddy  ×3
+    ///
+    /// `hasLoadedOnce` no podía evitarlo: se escribe al TERMINAR, así que tres
+    /// llamadas que salen con milisegundos de diferencia lo atraviesan las tres.
+    /// Por eso esto no es un throttle por tiempo — es dedupe de trabajo en vuelo:
+    /// el segundo llamador espera la MISMA Task y no dispara ni una petición.
+    ///
+    /// - Parameter force: para quien acaba de cambiar el mundo (aceptar un
+    ///   apoyo, mandar un mensaje, pull-to-refresh). Sin esto se engancharía a
+    ///   una carga que salió ANTES de su cambio y vería datos ya viejos.
+    func load(force: Bool = false) async {
+        await ChatStore.inflight.run(Session.travelerId ?? "anon", replaceExisting: force) { [self] in
+            await self._loadBody()
+        }
+    }
+
+    private func _loadBody() async {
         guard Session.hasSession else {
             // Sin sesión todavía: no dejar el spinner colgado para siempre
             await MainActor.run { hasLoadedOnce = true }
@@ -570,7 +602,7 @@ struct ConexionesView: View {
                 await chatStore.refreshAvailableHelp()
             }
         }
-        .sheet(item: $chatTarget, onDismiss: { Task { await chatStore.load() } }) { item in
+        .sheet(item: $chatTarget, onDismiss: { Task { await chatStore.load(force: true) } }) { item in
             if let journey = SyntheticJourney.make(for: item.match) {
                 BuddyChatView(match: item.match, journey: journey).equatable()
             }
@@ -846,7 +878,7 @@ struct ConexionesView: View {
                                     let item = ChatStore.ConnectionItem(match: match, lastMessage: nil, unreadCount: 0)
                                     chatTarget = item
                                 },
-                                onHandled: { Task { await chatStore.load() } }
+                                onHandled: { Task { await chatStore.load(force: true) } }
                             )
                             .transition(.move(edge: .top).combined(with: .opacity))
                         }
@@ -887,7 +919,7 @@ struct ConexionesView: View {
             .padding(.bottom, 100)
         }
         .background(Color.canvas)
-        .refreshable { await chatStore.load() }
+        .refreshable { await chatStore.load(force: true) }
     }
 
     @ViewBuilder

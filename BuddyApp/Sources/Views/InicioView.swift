@@ -2417,10 +2417,25 @@ struct PublishedTripCard: View {
 
     private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
     private var authorName: String { (journey.users?.fullName ?? "Buddy").capitalized }
+    /// Las urls de las páginas, filtrando vacíos.
+    ///
+    /// El body consulta esto entre 5 y 7 veces por evaluación (indicador,
+    /// isEmpty, count==1, el ForEach…), así que cada acceso repetía un filter y
+    /// —peor— un print que interpolaba TODAS las urls. Ese print era, él solo,
+    /// buena parte del coste que veníamos atribuyendo a "demasiados renders".
+    ///
+    /// Ahora las urls se imprimen UNA vez por journey (el dato de diagnóstico
+    /// que necesitábamos para el bug de fotos sigue estando) y el resto solo
+    /// suma al contador de derivadas.
+    private static var urlsLogueadas = Set<String>()
     private var thumbs: [String] {
         let raw = journey.pageThumbs ?? []
         let filtered = raw.filter { !$0.isEmpty }
-        print("🖼️ [StoryCard] id=\(journey.id.prefix(8)) pageThumbs.raw=\(raw.count) filtered=\(filtered.count) urls=\(filtered)")
+        RenderMetrics.derivado("StoryCard", String(journey.id.prefix(8)))
+        if !PublishedTripCard.urlsLogueadas.contains(journey.id) {
+            PublishedTripCard.urlsLogueadas.insert(journey.id)
+            print("🖼️ [StoryCard] id=\(journey.id.prefix(8)) pageThumbs.raw=\(raw.count) filtered=\(filtered.count) urls=\(filtered)")
+        }
         return filtered
     }
     private var durationLine: String? {
@@ -2442,7 +2457,9 @@ struct PublishedTripCard: View {
     private var memoirRatio: CGFloat { PublishedTripCard.memoirRatio }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Mide SOLO la construcción del árbol, no layout ni dibujado.
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let vista = VStack(alignment: .leading, spacing: 0) {
             carousel
             footer
         }
@@ -2451,6 +2468,9 @@ struct PublishedTripCard: View {
         .cardShadow()
         .padding(.horizontal, Spacing.edge)
         .sheet(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+        let _ = RenderMetrics.render("StoryCard", String(journey.id.prefix(8)),
+                                     DispatchTime.now().uptimeNanoseconds - t0)
+        return vista
     }
 
     // Height is derived from the actual container width via aspectRatio — zero

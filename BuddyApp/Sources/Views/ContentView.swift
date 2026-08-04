@@ -114,7 +114,7 @@ private struct RootViewEvents: ViewModifier {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .helpOfferReceived)) { _ in
-                if authState.isLoggedIn { Task { await chatStore.load() } }
+                if authState.isLoggedIn { Task { await chatStore.load(force: true) } }
             }
             .onAppear {
                 if authState.isLoggedIn { chatStore.startEventStream() }
