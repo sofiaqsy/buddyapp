@@ -988,17 +988,20 @@ struct InicioView: View {
             await MainActor.run { openRequest = nil }
             return
         }
-        let destId = effectiveTripJourney.flatMap { $0.destination?.id ?? $0.destinationId }
-            ?? resolvedLocation?.destinationId
-        guard let destId else {
-            await MainActor.run { openRequest = nil }
-            return
-        }
-        let myId = Session.travelerId
-        let requests = (try? await APIClient.shared.fetchOpenRequests(destinationId: destId)) ?? []
-        let mine = requests.first { $0.travelerId == myId && $0.isActive }
+        // Se pregunta por MI solicitud, no por las del destino.
+        //
+        // Antes se pedía la lista de solicitudes del destino y se buscaba la
+        // propia dentro. Ese endpoint es la vista del BUDDY —lo que podría
+        // atender— y excluye al que pregunta, así que la búsqueda no devolvía
+        // nada nunca: el Home no podía enterarse de que ya había una búsqueda
+        // en curso, y por eso dejaba iniciar otra desde cero.
+        //
+        // Ya no depende del destino: una solicitud activa lo es aunque el
+        // contexto del Home haya cambiado mientras tanto, y perderla de vista
+        // por haber cambiado de ciudad era otra forma del mismo problema.
+        let mine = try? await APIClient.shared.fetchMyActiveRequest()
         await MainActor.run { openRequest = mine }
-        print("🏠 [refreshOpenRequest] destId=\(destId.prefix(8)) → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
+        print("🏠 [refreshOpenRequest] → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
     }
 
     /// ÚNICA puerta de entrada para actualizar el contexto de comunidad del Home.

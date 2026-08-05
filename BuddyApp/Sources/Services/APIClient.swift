@@ -978,8 +978,20 @@ final class APIClient {
         return try await request(path: "/matching/request", method: "POST", body: body)
     }
 
+    /// Solicitudes de OTROS en ese destino — la vista del buddy. Excluye al que
+    /// pregunta, así que NO sirve para saber si uno mismo tiene una en curso;
+    /// para eso está `fetchMyActiveRequest`.
     func fetchOpenRequests(destinationId: String) async throws -> [APIHelpRequest] {
         try await request(path: "/matching/requests/\(destinationId)")
+    }
+
+    /// MI solicitud activa, o nil.
+    ///
+    /// El Home preguntaba esto con fetchOpenRequests y buscaba la suya en el
+    /// resultado; como ese endpoint excluye al que pregunta, la respuesta era
+    /// siempre nil. No fallaba a veces: no podía funcionar nunca.
+    func fetchMyActiveRequest() async throws -> APIHelpRequest? {
+        try await request(path: "/matching/my-request")
     }
 
     /// "Solicitudes de ayuda" — solicitudes dentro de la cobertura del buddy,

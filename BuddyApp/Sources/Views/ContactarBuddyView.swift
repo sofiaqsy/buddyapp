@@ -280,10 +280,19 @@ struct ContactarBuddyView: View {
             print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
             // La encuesta pendiente la presenta RootView globalmente (en cualquier
             // tab y en tiempo real), así que aquí no hace falta detectarla.
-            let destIdOpt: String? = resolvedDestinationId
-            guard let destId = destIdOpt else { phase = .selectCategory; return }
-            let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
-            if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
+            // MI solicitud activa, preguntada como tal.
+            //
+            // Antes se pedía la lista de solicitudes del destino y se buscaba la
+            // propia dentro; ese endpoint es la vista del buddy y excluye al que
+            // pregunta, así que jamás encontraba nada. Por eso "retomar la
+            // búsqueda" no ocurría nunca y cada visita empezaba de cero: quien
+            // volvía acá con una búsqueda viva pedía otra encima.
+            //
+            // Tampoco depende ya del destino resuelto: la solicitud es una por
+            // viajero, y exigir un destId hacía que sin él se cayera al selector
+            // aunque hubiera una búsqueda en curso.
+            let mia = try await APIClient.shared.fetchMyActiveRequest()
+            if let open = mia, open.isActive {
                 print("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) cat=\(open.category) → retomando conversación")
                 activeRequestId = open.id
                 isExpandingSearch = false
@@ -912,7 +921,11 @@ struct CategoryPickerView: View {
     /// cambiara al deslizar, y eso le enseñaría al usuario que las fotos SÍ son
     /// un selector — justo lo contrario de lo que el carrusel comunica.
     private var consultCTA: some View {
-        Button {
+        // TEMPORAL. El dato llega al Home —refreshOpenRequest lo confirma— pero
+        // el botón no lo refleja, y sin ver la pantalla no puedo distinguir
+        // "no llegó a esta vista" de "llegó y decidí mal". Esto lo dice.
+        let _ = print("🎯 [consultCTA] searching=\(searchingCategoryKey ?? "nil") buddy=\(activeBuddyName ?? "nil") destino=\(destinationName ?? "nil") → título=\(activeBuddyName != nil ? "buddy asignado" : (searchingCategoryKey != nil ? "BUSCANDO" : "consultar"))")
+        return Button {
             Haptic.medium()
             if activeBuddyName != nil { onOpenBuddyChat?() } else { onStartConversation?() }
         } label: {
