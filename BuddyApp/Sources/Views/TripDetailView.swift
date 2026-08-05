@@ -213,7 +213,15 @@ struct TripDetailView: View {
             ContactarBuddyView(
                 journey: journey,
                 destinationId: journey == nil ? (resolvedDestinationId ?? destinationId) : nil,
-                destinationName: journey == nil ? route.city : nil
+                destinationName: journey == nil ? route.city : nil,
+                // La conversación, no el selector de categorías.
+                //
+                // Es el mismo componente que abre "Consultar en {ciudad}" en el
+                // Home; lo único que los separaba era esta bandera, que decide
+                // entre phase = .composing y phase = .selectCategory. Sin ella,
+                // el mismo botón con el mismo icono llevaba a dos pantallas
+                // distintas según desde dónde se tocara.
+                startsConversation: true
             )
         }
         .fullScreenCover(isPresented: $showQRScanner) {
