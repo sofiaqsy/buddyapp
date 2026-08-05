@@ -251,6 +251,11 @@ struct UserProfileView: View {
                         NavigationLink(value: place) {
                             NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel) {}
                                 .allowsHitTesting(false)
+                                // La misma medida que en el tab Yo: es la misma
+                                // sección vista desde el otro lado, y que una
+                                // mida distinto delataría dos pantallas donde
+                                // debería haber una sola lectura.
+                                .containerRelativeFrame(.horizontal, count: 3, spacing: 3)
                         }
                         .buttonStyle(.plain)
                         .onAppear { vm.shareAppeared(place) }
