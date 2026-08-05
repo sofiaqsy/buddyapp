@@ -557,6 +557,16 @@ struct APIPlaceGallery: Decodable {
     /// hasta ahora este modelo no lo declaraba, así que se descartaba al
     /// decodificar y la galería se quedaba con la primera página para siempre.
     let nextCursor: String?
+    /// MI recomendación de este lugar, publicada o no y con fotos o sin ellas.
+    ///
+    /// Antes la vista la deducía de `visits`, que solo trae journeys publicados
+    /// y con fotos. Eso cerraba el círculo: "Añadir foto" solo aparecía si ya
+    /// había una foto, así que un lugar recién añadido no tenía por dónde
+    /// recibir la primera. El servidor la calcula sin ese filtro.
+    ///
+    /// Opcional porque un servidor anterior no la manda; en ese caso se sigue
+    /// deduciendo como antes.
+    let myVisit: APIPlaceVisit?
 }
 
 // Página del feed "Historias de viajeros" (cursor pagination)

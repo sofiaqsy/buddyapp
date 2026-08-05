@@ -195,7 +195,13 @@ final class SpotGalleryViewModel: ObservableObject {
         hasMore     = page.hasMore && page.nextCursor != nil
         totalPhotos = page.totalPhotos
 
-        if myVisit == nil, let me = Session.travelerId {
+        // Lo que manda el servidor manda: incluye mi recomendación aunque no
+        // esté publicada ni tenga fotos, que es justo el caso en que hace falta
+        // ofrecer "Añadir foto".
+        if let mia = page.myVisit {
+            myVisit = mia
+        } else if myVisit == nil, let me = Session.travelerId {
+            // Respaldo para servidores anteriores a my_visit.
             myVisit = page.visits.first { $0.travelerId == me && $0.isBuddy == true }
         }
 
