@@ -657,10 +657,7 @@ struct YoView: View {
                     // Siempre primero: es la acción, no un elemento más de la
                     // colección. Al final habría que arrastrar toda la lista
                     // para encontrarla, y crece con cada lugar que se suma.
-                    if canRecommendPlaces {
-                        addPlaceCard
-                            .containerRelativeFrame(.horizontal, count: 3, spacing: 3)
-                    }
+                    if canRecommendPlaces { addPlaceCard }
 
                     ForEach(vm.shares, id: \.id) { place in
                         // En el perfil el pie es cuántas fotos aportó a ese
@@ -668,11 +665,6 @@ struct YoView: View {
                         NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel) {
                             navPath.append(place)
                         }
-                        // Tres por pantalla, medido sobre el CONTENEDOR real y
-                        // no sobre UIScreen: en un iPad en split view o en
-                        // multitarea la pantalla miente sobre el ancho que esta
-                        // fila tiene de verdad.
-                        .containerRelativeFrame(.horizontal, count: 3, spacing: 3)
                         .onAppear { vm.shareAppeared(place) }
                     }
                 }
@@ -697,11 +689,7 @@ struct YoView: View {
                     .font(BT.caption1)
                     .foregroundStyle(Color.inkMuted)
             }
-            // Misma proporción que NearbyPlaceCard y el mismo ancho de
-            // contenedor: es una tarjeta más de la fila, y si midiera distinto
-            // la fila entera se leería descuadrada.
-            .frame(maxWidth: .infinity)
-            .aspectRatio(NearbyPlaceCard.aspecto, contentMode: .fit)
+            .frame(width: 132, height: 158)
             .background(Color.surface)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .overlay(

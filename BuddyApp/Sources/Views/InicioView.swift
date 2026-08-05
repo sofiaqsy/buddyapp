@@ -2742,17 +2742,11 @@ struct NearbyPlaceCard: View {
     /// de la app sin excepción — un push dentro del stack existente no.
     var onTap: () -> Void
 
-    /// La tarjeta ya no fija su ancho: lo toma del contenedor y deriva el alto
-    /// de esa misma proporción.
-    ///
-    /// Antes eran 132×158 clavados, así que en pantalla entraban dos y media y
-    /// el número real dependía del ancho del dispositivo. Con el ancho puesto
-    /// desde fuera (containerRelativeFrame), "que entren tres" se cumple igual
-    /// en un SE que en un Pro Max, y la proporción de la foto se conserva
-    /// porque es lo único que queda fijo.
-    ///
-    /// 132/158 es la relación original — respetarla era el requisito.
-    static let aspecto: CGFloat = 132.0 / 158.0
+    /// Un solo ancho para la imagen y el pie. Cuando el texto llevaba su propio
+    /// frame MÁS el padding, la tarjeta terminaba más ancha que la foto y el
+    /// fondo asomaba como una franja blanca al costado.
+    private let cardWidth: CGFloat = 132
+    private let previewHeight: CGFloat = 158
     private let textInset: CGFloat = 12
 
     var body: some View {
@@ -2811,11 +2805,11 @@ struct NearbyPlaceCard: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(width: cardWidth - textInset * 2, alignment: .leading)
                 .padding(.horizontal, textInset)
                 .padding(.vertical, 12)
             }
-            .aspectRatio(NearbyPlaceCard.aspecto, contentMode: .fit)
+            .frame(width: cardWidth, height: previewHeight)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
         }
@@ -2829,8 +2823,7 @@ struct NearbyPlaceCard: View {
         } placeholder: {
             Rectangle().fill(Color.sandLight)
         }
-        .aspectRatio(NearbyPlaceCard.aspecto, contentMode: .fill)
-        .clipped()
+        .frame(width: cardWidth, height: previewHeight)
         .clipped()
     }
 
