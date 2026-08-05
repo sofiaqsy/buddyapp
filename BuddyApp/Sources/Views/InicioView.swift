@@ -1915,7 +1915,8 @@ struct InicioView: View {
                     // Scroll infinito: al acercarse al final, carga el siguiente lote.
                     ForEach(publicJourneys) { journey in
                         PublishedTripCard(journey: journey,
-                                          onOpenAuthor: { navPath.append($0) })
+                                          onOpenAuthor: { navPath.append($0) },
+                                          onOpenDestination: { navPath.append($0) })
                             .equatable()  // skip re-render if journey.id + flags unchanged
                             .onAppear {
                                 if journey.id == publicJourneys.suffix(4).first?.id {
@@ -2506,11 +2507,23 @@ struct PublishedTripCard: View {
     /// Abrir el perfil del autor. Lo resuelve quien contiene la tarjeta, que es
     /// quien tiene el NavigationStack; la card no conoce rutas.
     var onOpenAuthor: ((TravelerProfileRoute) -> Void)? = nil
+    /// Abrir el mapa del destino. Lo resuelve quien contiene la tarjeta —el que
+    /// tiene el NavigationStack—, igual que con el autor: la card no conoce
+    /// rutas.
+    var onOpenDestination: ((DestinationMapRoute) -> Void)? = nil
 
     @State private var showStory = false
     @State private var page = 0
 
     private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
+    /// Nil cuando la historia no tiene un destino del catálogo detrás — hay
+    /// journeys que solo llevan `place` o un título suelto, y ahí no existe
+    /// guía que abrir. Sin este guard el nombre invitaría a tocar para llegar a
+    /// un mapa vacío.
+    private var destinoRoute: DestinationMapRoute? {
+        guard let id = journey.destination?.id ?? journey.destinationId else { return nil }
+        return DestinationMapRoute(destinationId: id, name: destName)
+    }
     private var authorName: String { (journey.users?.fullName ?? "Buddy").capitalized }
     /// Las urls de las páginas, filtrando vacíos.
     ///
@@ -2594,6 +2607,16 @@ struct PublishedTripCard: View {
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 14)
                                     .padding(.top, 12)
+                                    // Solo el texto, no la fila entera: el resto
+                                    // de la foto abre la historia, y una zona
+                                    // táctil que se comiera todo el ancho
+                                    // robaría ese toque sin avisar.
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        guard let ruta = destinoRoute else { return }
+                                        Haptic.light()
+                                        onOpenDestination?(ruta)
+                                    }
                                 Spacer()
                             }
                             Spacer()
