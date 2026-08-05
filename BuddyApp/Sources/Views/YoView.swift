@@ -689,7 +689,9 @@ struct YoView: View {
                     .font(BT.caption1)
                     .foregroundStyle(Color.inkMuted)
             }
-            .frame(width: 132, height: 158)
+            // Las mismas medidas que NearbyPlaceCard: comparte fila con las
+            // tarjetas de lugar y si midiera distinto la descuadraría.
+            .frame(width: 119, height: 142)
             .background(Color.surface)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .overlay(
