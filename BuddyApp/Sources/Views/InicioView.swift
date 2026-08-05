@@ -2776,6 +2776,11 @@ struct NearbyPlaceCard: View {
                             .font(BT.caption2)
                             .tracking(0.5)
                             .foregroundStyle(.white)
+                            // Centrado al partirse en dos líneas. La tarjeta
+                            // alinea todo a la izquierda, y con eso la segunda
+                            // línea quedaba colgando bajo la primera; centradas
+                            // se leen como un sello y no como texto cortado.
+                            .multilineTextAlignment(.center)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
                             .background(Color.black.opacity(0.45), in: Capsule())
