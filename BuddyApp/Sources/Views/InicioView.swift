@@ -1689,9 +1689,9 @@ struct InicioView: View {
     @ViewBuilder
     private func communityRow(_ item: APIPulseItem) -> some View {
         let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
-        // La cara y la frase llevan al perfil de quien ayudó; la línea de
-        // metadatos no. Así queda una zona de la fila que no navega, y el gesto
-        // no se dispara al leer la hora o la ciudad.
+        // La cara y la frase llevan al perfil de quien ayudó; el lugar, al mapa
+        // de ese lugar. La hora no navega: hace falta una zona muerta para
+        // poder leer la fila sin disparar nada.
         //
         // La frase entera y no solo el nombre: va concatenada con la acción en
         // un mismo Text para que fluya y parta de línea sola, y dentro de un
@@ -1752,11 +1752,29 @@ struct InicioView: View {
 
                     Spacer(minLength: 8)
 
+                    // El lugar lleva al mapa, igual que el nombre del destino en
+                    // las historias: el gesto ya está aprendido ahí y aquí
+                    // responde la misma pregunta —"¿dónde es eso?"— sobre el
+                    // mismo tipo de dato.
+                    //
+                    // Cuando no hay destino navegable se queda exactamente como
+                    // estaba: mismo tamaño, mismo color, sin gesto. Un nombre
+                    // que a veces navega y a veces no es aceptable; uno que
+                    // parece navegable y no lo hace, no.
+                    let lugarRuta = item.destinationId.map {
+                        DestinationMapRoute(destinationId: $0, name: item.city)
+                    }
                     Text(item.city)
                         .font(BT.caption2)
-                        .foregroundStyle(Color.inkMuted)
+                        .foregroundStyle(lugarRuta == nil ? Color.inkMuted : Color.ink)
                         .lineLimit(1)
                         .layoutPriority(1)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard let lugarRuta else { return }
+                            Haptic.light()
+                            navPath.append(lugarRuta)
+                        }
                 }
             }
         }

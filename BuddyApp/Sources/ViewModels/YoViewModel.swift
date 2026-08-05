@@ -363,18 +363,44 @@ final class YoViewModel: ObservableObject {
         }
     }
 
-    /// Optimista: se quita del grid al instante y el backend la despublica
-    /// (cancelled + is_public=false), con lo que también sale del feed.
+    /// Optimista: se quita del grid al instante y el backend cancela el viaje
+    /// entero —sus lugares y los apoyos en curso—, con lo que sale del feed.
+    ///
+    /// El id que llega es de un TRIP, no de un journey. `/users/:id/trips`
+    /// agrupa los journeys por viaje y `feed_trip_json_by_trip` devuelve
+    /// `'id', j_group.trip_id`: una publicación del perfil es un viaje, no un
+    /// lugar suelto. Esto llamaba a `cancelJourney` con ese id, así que el
+    /// servidor no encontraba ningún journey y respondía 403 SIEMPRE — el
+    /// borrado nunca funcionó, solo lo parecía.
+    ///
+    /// Y si falla, la fila vuelve. Antes desaparecía igual: la vista afirmaba
+    /// un hecho que el servidor había rechazado, y el siguiente arranque la
+    /// traía de vuelta sin explicación.
     func deletePublication(_ journey: APIJourney) {
+        let anteriores = journeys
         journeys.removeAll { $0.id == journey.id }
         TripsRepository.shared.cache.write(
             .init(items: journeys, nextCursor: tripsNextCursor, hasMore: tripsHasMore))
         Haptic.success()
         Task {
-            do { try await APIClient.shared.cancelJourney(journeyId: journey.id) }
-            catch { print("❌ [YoVM] deletePublication \(error)") }
+            do {
+                try await APIClient.shared.cancelTrip(tripId: journey.id)
+                print("🗑️ [YoVM] publicación \(journey.id.prefix(8)) eliminada")
+            } catch {
+                print("❌ [YoVM] deletePublication \(error) — restaurando")
+                await MainActor.run {
+                    journeys = anteriores
+                    TripsRepository.shared.cache.write(
+                        .init(items: journeys, nextCursor: tripsNextCursor, hasMore: tripsHasMore))
+                    deletePublicationFailed = true
+                }
+            }
         }
     }
+
+    /// Lo enciende el fallo de borrado; lo apaga la vista al mostrar el aviso.
+    /// Sin esto la fila reaparecía sola y parecía un bug distinto.
+    @Published var deletePublicationFailed = false
 
     /// El perfil de buddy lo edita otra pantalla (BuddyProfileView), que
     /// devuelve la versión nueva. Se acepta desde fuera en vez de refetchear:

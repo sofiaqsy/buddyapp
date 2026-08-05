@@ -167,6 +167,14 @@ struct YoView: View {
             } message: {
                 Text("Se quitará de tu perfil y del feed de la comunidad. No se puede deshacer.")
             }
+            // La publicación ya volvió al grid cuando esto aparece. El aviso
+            // explica por qué reapareció: sin él, la vuelta se lee como un bug
+            // y el usuario intenta borrarla otra vez.
+            .alert("No se pudo eliminar", isPresented: $vm.deletePublicationFailed) {
+                Button("Entendido", role: .cancel) {}
+            } message: {
+                Text("La publicación sigue en tu perfil. Revisa tu conexión e inténtalo de nuevo.")
+            }
             .confirmationDialog("¿Cerrar sesión?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
                 Button("Cerrar sesión", role: .destructive) {
                     performLogout()

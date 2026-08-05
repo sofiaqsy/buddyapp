@@ -589,6 +589,10 @@ struct APIRecentHelp: Decodable, Identifiable {
 struct APIPulseItem: Decodable, Identifiable {
     let type: String
     let city: String
+    /// El destino del catálogo detrás de `city`. Nil cuando el backend no lo
+    /// trae: ahí el nombre se muestra igual pero no navega, en vez de abrir un
+    /// mapa vacío. Los items "traveling" no lo llevan.
+    let destinationId: String?
     let count: Int?
     let at: Date?
     /// Enum crudo de help_request.category — el texto lo arma la vista.
@@ -613,7 +617,7 @@ extension APIPulseItem {
     /// mínimas y el bloque no reservaba el alto real de dos líneas.
     static func placeholders(_ n: Int = 3) -> [APIPulseItem] {
         (0..<n).map { i in
-            APIPulseItem(type: "helped", city: "Ciudad", count: nil,
+            APIPulseItem(type: "helped", city: "Ciudad", destinationId: nil, count: nil,
                          at: Date(timeIntervalSince1970: TimeInterval(i)),
                          category: "general",
                          buddyId: nil, buddyName: "Nombre", buddyAvatarUrl: nil)
