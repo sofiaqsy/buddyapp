@@ -270,7 +270,14 @@ struct TripDetailView: View {
                 let buddyActive = (buddyCount ?? 0) > 0 || match != nil || unreadCount > 0
                 VStack(spacing: 0) {
                     ZStack(alignment: .topTrailing) {
-                        MapIconButton(icon: "person.wave.2.fill") {
+                        // El mismo icono que el CTA "Consultar en {ciudad}" del
+                        // Home (ContactarBuddyView.ctaLeading). Los dos abren el
+                        // mismo flujo —elegir la intención y buscar buddy— y
+                        // hasta ahora lo anunciaban con dibujos distintos: acá
+                        // una persona saludando, allá un globo de chat. Un
+                        // mismo destino tiene que verse igual esté donde esté,
+                        // o se lee como dos funciones que no lo son.
+                        MapIconButton(icon: "bubble.left.fill") {
                             if match != nil { showChat = true }
                             else if journey != nil { showContactar = true }
                         }
