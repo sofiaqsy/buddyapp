@@ -311,6 +311,27 @@ struct ContactarBuddyView: View {
                 phase = .selectCategory
                 await handleRequest(category: seed.category, description: seed.description)
             } else {
+                // Sin solicitud viva, la conversación EMPIEZA: la intención es
+                // lo primero que hay que ver.
+                //
+                // pendingCategoryKey es @State y sobrevive a cerrar y reabrir la
+                // hoja mientras SwiftUI conserve la identidad de la vista. Si
+                // una búsqueda anterior lo dejó puesto y esa solicitud ya no
+                // existe, PendingConversationView entraba directo al hilo
+                // —muestra el selector solo cuando chosenCategory == nil— y el
+                // chat se abría sin intención que elegir. Eso es el "a veces no
+                // sale": no es aleatorio, pasa justo después de haber buscado
+                // antes en la misma sesión de la vista.
+                //
+                // Limpiarlo acá y no al cerrar: checkStatus corre en CADA
+                // apertura y es el único punto que sabe si la solicitud sigue
+                // viva. Confiar en la limpieza al salir deja fuera todos los
+                // caminos de cierre que no la ejecutan.
+                if pendingCategoryKey != nil {
+                    print("🧹 [checkStatus] descartando intención vieja \(pendingCategoryKey!) — su solicitud ya no existe")
+                }
+                pendingCategoryKey = nil
+                chosenCategory = nil
                 print("📋 [checkStatus] sin match ni solicitud → \(startsConversation ? "conversación" : "selector de categoría")")
                 phase = startsConversation ? .composing : .selectCategory
             }
@@ -921,11 +942,7 @@ struct CategoryPickerView: View {
     /// cambiara al deslizar, y eso le enseñaría al usuario que las fotos SÍ son
     /// un selector — justo lo contrario de lo que el carrusel comunica.
     private var consultCTA: some View {
-        // TEMPORAL. El dato llega al Home —refreshOpenRequest lo confirma— pero
-        // el botón no lo refleja, y sin ver la pantalla no puedo distinguir
-        // "no llegó a esta vista" de "llegó y decidí mal". Esto lo dice.
-        let _ = print("🎯 [consultCTA] searching=\(searchingCategoryKey ?? "nil") buddy=\(activeBuddyName ?? "nil") destino=\(destinationName ?? "nil") → título=\(activeBuddyName != nil ? "buddy asignado" : (searchingCategoryKey != nil ? "BUSCANDO" : "consultar"))")
-        return Button {
+        Button {
             Haptic.medium()
             if activeBuddyName != nil { onOpenBuddyChat?() } else { onStartConversation?() }
         } label: {
