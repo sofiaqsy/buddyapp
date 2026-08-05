@@ -1175,9 +1175,18 @@ struct TripGridCell: View {
     @State private var localThumb: UIImage? = nil
 
     var body: some View {
-        // Celda cuadrada: Color.clear define el layout, la imagen solo rellena
+        // Misma proporción que las tarjetas de "Lugares que recomiendas"
+        // (119×142): las dos secciones son colecciones del mismo perfil y una
+        // cuadrada junto a otra vertical se leían como dos rejillas distintas.
+        //
+        // La proporción y no las medidas exactas: el grid reparte el ancho
+        // disponible entre tres columnas, así que su celda mide ~116 y no 119.
+        // Forzar 119 desbordaría la fila (3×119 + separaciones > ancho útil) o
+        // dejaría las columnas sin llegar al margen.
+        //
+        // Color.clear define el layout, la imagen solo rellena.
         Color.clear
-            .aspectRatio(1, contentMode: .fit)
+            .aspectRatio(119.0 / 142.0, contentMode: .fit)
             .overlay {
                 if let img = localThumb {
                     Image(uiImage: img)
