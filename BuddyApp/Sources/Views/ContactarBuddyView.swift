@@ -375,14 +375,19 @@ struct ContactarBuddyView: View {
 
     private func cancelSearch() {
         cancelActiveRequestOnServer()
-        // Si vino de la Home (sin pasar por el selector) → cerrar y volver al
-        // inicio. Si vino del selector → volver a elegir categoría.
-        if initialRequest != nil {
-            onCancelled?()
-            dismiss()
-        } else {
-            phase = .selectCategory
-        }
+        // Cancelar cierra, venga de donde venga.
+        //
+        // Antes solo cerraba si la solicitud traía initialRequest (el camino de
+        // la Home); en el resto devolvía al selector de categorías suelto. Esa
+        // pantalla ya no es un destino: quien cancela una búsqueda está
+        // diciendo "ahora no", no "quiero elegir otra intención", y devolverlo
+        // a elegir le pide justo lo que acaba de rechazar.
+        //
+        // onCancelled sin condicionar: hoy solo lo pasa la Home —y siempre
+        // junto a initialRequest—, así que para ese llamador no cambia nada; el
+        // resto simplemente no tiene nada que deshacer.
+        onCancelled?()
+        dismiss()
     }
 
     private func startPolling() {
