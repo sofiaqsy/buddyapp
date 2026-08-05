@@ -72,12 +72,19 @@ final class ProfileRepository {
         return try? await APIClient.shared.fetchCurrentUser()
     }
 
-    func fetchRest(travelerId: String) async -> (buddy: APIBuddyMe?, stickers: [APIUserSticker], destinations: [APIDestination]) {
+    /// Devuelve nil por bloque que NO llegó, sin convertirlo en vacío.
+    ///
+    /// Antes hacía `s ?? []` y `d ?? []` acá mismo, así que el llamador no podía
+    /// distinguir "no tienes stickers" de "la petición falló". Con `try?` una
+    /// CANCELACIÓN también cae en esa rama, y las tareas de .refreshable se
+    /// cancelan de rutina: bastaba eso para que un refresco escribiera vacíos
+    /// encima de datos buenos.
+    func fetchRest(travelerId: String) async -> (buddy: APIBuddyMe?, stickers: [APIUserSticker]?, destinations: [APIDestination]?) {
         async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
         async let stickersTask = try? APIClient.shared.fetchUserStickers(travelerId: travelerId)
         async let destsTask    = try? APIClient.shared.fetchDestinations()
         let (b, s, d) = await (buddyTask, stickersTask, destsTask)
-        return (b, s ?? [], d ?? [])
+        return (b, s, d)
     }
 }
 
@@ -206,11 +213,27 @@ final class YoViewModel: ObservableObject {
         isLoadingProfile = false   // ← la cabecera ya se puede pintar
 
         let rest = await repo.fetchRest(travelerId: me.id)
-        buddyMe      = rest.buddy
-        stickers     = rest.stickers
-        destinations = rest.destinations
-        repo.cache.write(.init(user: me, buddyMe: rest.buddy,
-                               stickers: rest.stickers, destinations: rest.destinations))
+
+        // Un bloque que no llegó NO se escribe como vacío.
+        //
+        // buddyMe manda si se puede recomendar lugares (canRecommendPlaces mira
+        // verificationStatus), así que ponerlo a nil hacía desaparecer la
+        // tarjeta "Añadir lugar" — se leía como si se hubiera salido de un modo
+        // edición. Y bastaba un refresco para provocarlo: .refreshable cancela
+        // su tarea de rutina, `try?` convierte esa cancelación en nil, y nil se
+        // escribía encima del perfil bueno.
+        //
+        // nil aquí SIEMPRE significa "no lo sé": dejar de ser buddy llega como
+        // una respuesta válida con isBuddy=false, no como fallo.
+        if let b = rest.buddy { buddyMe = b } else { print("👤 [YoVM] ⚠️ buddy/me no llegó — conservo el anterior") }
+        if let s = rest.stickers { stickers = s } else { print("👤 [YoVM] ⚠️ stickers no llegaron — conservo los anteriores") }
+        if let d = rest.destinations { destinations = d } else { print("👤 [YoVM] ⚠️ destinos no llegaron — conservo los anteriores") }
+
+        // A la caché va lo que la pantalla está mostrando, no la respuesta
+        // cruda: guardar los nil convertiría un fallo puntual en un perfil
+        // mutilado que sobrevive al siguiente arranque.
+        repo.cache.write(.init(user: me, buddyMe: buddyMe,
+                               stickers: stickers, destinations: destinations))
     }
 
     private func loadTrips(travelerId: String, force: Bool) async {
