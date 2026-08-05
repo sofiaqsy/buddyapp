@@ -2783,8 +2783,17 @@ struct NearbyPlaceCard: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
-                            .background(Color.black.opacity(0.45), in: Capsule())
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.5))
+                            // Rectángulo redondeado y no cápsula: una cápsula
+                            // está pensada para una sola línea, y con dos sus
+                            // extremos se curvan tanto que la etiqueta parece
+                            // una píldora hinchada. Un radio fijo mantiene la
+                            // forma de sello sin importar cuántas líneas ocupe.
+                            .background(Color.black.opacity(0.45),
+                                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
+                            )
                     }
                     Text(place.name)
                         .font(BT.footnoteBold)
