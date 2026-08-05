@@ -206,9 +206,15 @@ struct TripDetailView: View {
             }
         }
         .sheet(isPresented: $showContactar) {
-            if let journey {
-                ContactarBuddyView(journey: journey)
-            }
+            // journey opcional a propósito: con él la solicitud queda atada al
+            // viaje en curso; sin él basta el destino. Antes este `if let`
+            // presentaba una hoja VACÍA cuando no había journey — y una hoja
+            // vacía es peor que no abrir nada, porque parece que se rompió.
+            ContactarBuddyView(
+                journey: journey,
+                destinationId: journey == nil ? (resolvedDestinationId ?? destinationId) : nil,
+                destinationName: journey == nil ? route.city : nil
+            )
         }
         .fullScreenCover(isPresented: $showQRScanner) {
             QRScannerView(
@@ -279,7 +285,19 @@ struct TripDetailView: View {
                         // o se lee como dos funciones que no lo son.
                         MapIconButton(icon: "bubble.left.fill") {
                             if match != nil { showChat = true }
-                            else if journey != nil { showContactar = true }
+                            // Antes esta rama exigía `journey != nil`, y esta
+                            // pantalla se abre SIN journey cuando llega desde la
+                            // ficha de un lugar (PlaceGuideMapSheet no pasa
+                            // ninguno). Resultado: el botón se veía activo
+                            // —buddyActive solo mira el conteo de buddies— y al
+                            // tocarlo no pasaba nada.
+                            //
+                            // Sin journey se pide ayuda solo con el destino, que
+                            // es el mismo camino que ya usa la Home cuando no
+                            // hay trip previo: el trip lo crea el backend recién
+                            // cuando un buddy acepta, así que cancelar no deja
+                            // ningún trip huérfano.
+                            else { showContactar = true }
                         }
                         .disabled(!buddyActive)
                         .opacity(buddyActive ? 1 : 0.38)
