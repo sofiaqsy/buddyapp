@@ -70,10 +70,26 @@ struct BuddyAppApp: App {
 }
 
 extension BuddyAppApp {
-    /// El id del spot de una URL `…/place/<uuid>`, o nil si no es de las
-    /// nuestras. Se valida que sea un UUID: la ruta la puede escribir
-    /// cualquiera, y con basura se abriría una ficha vacía.
+    /// Hosts cuyos enlaces abrimos.
+    ///
+    /// El apex y el www: los enlaces que emitimos llevan www, pero alguien
+    /// puede escribir el dominio a secas y iOS compara el host EXACTO. Los dos
+    /// están declarados en el entitlement, así que los dos tienen que
+    /// reconocerse acá también.
+    private static let hostsPropios: Set<String> = ["buddyapp.biz", "www.buddyapp.biz"]
+
+    /// El id del spot de una URL `https://www.buddyapp.biz/place/<uuid>`, o nil
+    /// si no es de las nuestras.
+    ///
+    /// Se comprueba el HOST y no solo la ruta. iOS solo entrega enlaces de los
+    /// dominios asociados, pero `onOpenURL` recibe también esquemas propios y
+    /// cualquier cosa que otra app abra en Buddy: sin verificar el host, un
+    /// `loquesea://place/<uuid>` de fuera navegaría igual.
+    ///
+    /// Y se valida que el id sea un UUID: la ruta la escribe cualquiera, y con
+    /// basura se abriría una ficha vacía.
     static func spotIdDeEnlace(_ url: URL) -> String? {
+        guard let host = url.host()?.lowercased(), hostsPropios.contains(host) else { return nil }
         let partes = url.pathComponents.filter { $0 != "/" }
         guard partes.count >= 2, partes[0] == "place" else { return nil }
         let candidato = partes[1]

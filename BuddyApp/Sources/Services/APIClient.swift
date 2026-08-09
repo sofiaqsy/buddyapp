@@ -8,10 +8,19 @@ final class APIClient {
     static let shared = APIClient()
 
     let baseURL = "https://buddy-core-504b393f8333.herokuapp.com/v1"
-    /// Sin /v1: la raíz sirve las páginas públicas que se comparten fuera de la
-    /// app (buddy.app/place/…) y el apple-app-site-association. No son llamadas
-    /// de la app, son URLs que la gente ve y toca en WhatsApp.
-    var publicBaseURL: String { baseURL.replacingOccurrences(of: "/v1", with: "") }
+    /// El sitio público: las páginas de lugar que se comparten fuera de la app
+    /// y el apple-app-site-association.
+    ///
+    /// Constante y NO derivada de baseURL a propósito. Son dos cosas distintas:
+    /// baseURL es infraestructura (hoy Heroku, mañana lo que sea) y este es el
+    /// dominio que la gente ve en un WhatsApp y que queda escrito en su
+    /// historial durante años. Que el primero cambie no puede arrastrar al
+    /// segundo.
+    ///
+    /// Con www: es el host que se comparte. El apex también abre la app —está
+    /// declarado en el entitlement— pero los enlaces que emitimos usan uno solo
+    /// para que las vistas previas se cacheen bajo la misma URL.
+    let publicBaseURL = "https://www.buddyapp.biz"
     private let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpcmhjamZ1Z2Zoa3Nrenpxa2NlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjI5MzMsImV4cCI6MjA5NjU5ODkzM30.E4mk6bcNal61wLN6zvj2TVgSoVdo2ka_2OdX56jBwsk"
     private let supabaseURL = "https://virhcjfugfhkskzzqkce.supabase.co"
 

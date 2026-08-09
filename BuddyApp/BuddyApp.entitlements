@@ -2,13 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Universal Links de los lugares compartidos. Dominio provisional: el de
-	     Heroku, para poder probar el flujo completo hoy. Al pasar a un dominio
-	     propio se cambia acá y en el AASA de buddy-core (routes/share.js) — los
-	     dos a la vez, o los enlaces dejan de abrir la app EN SILENCIO. -->
+	<!-- Universal Links de los lugares compartidos.
+	     Los dos hosts: los enlaces se comparten con www, pero alguien puede
+	     escribir el dominio a secas y iOS compara el host EXACTO — sin el apex
+	     declarado, ese enlace abriría Safari.
+	     Cada host tiene que servir su propio /.well-known/apple-app-site-association
+	     por HTTPS y SIN redirección. Un 301 de apex a www basta para que iOS
+	     descarte el archivo, y no avisa: el enlace simplemente deja de abrir
+	     la app. -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:buddy-core-504b393f8333.herokuapp.com</string>
+		<string>applinks:buddyapp.biz</string>
+		<string>applinks:www.buddyapp.biz</string>
 	</array>
 	<key>aps-environment</key>
 	<string>development</string>
