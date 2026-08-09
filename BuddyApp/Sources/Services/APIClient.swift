@@ -8,6 +8,10 @@ final class APIClient {
     static let shared = APIClient()
 
     let baseURL = "https://buddy-core-504b393f8333.herokuapp.com/v1"
+    /// Sin /v1: la raíz sirve las páginas públicas que se comparten fuera de la
+    /// app (buddy.app/place/…) y el apple-app-site-association. No son llamadas
+    /// de la app, son URLs que la gente ve y toca en WhatsApp.
+    var publicBaseURL: String { baseURL.replacingOccurrences(of: "/v1", with: "") }
     private let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpcmhjamZ1Z2Zoa3Nrenpxa2NlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjI5MzMsImV4cCI6MjA5NjU5ODkzM30.E4mk6bcNal61wLN6zvj2TVgSoVdo2ka_2OdX56jBwsk"
     private let supabaseURL = "https://virhcjfugfhkskzzqkce.supabase.co"
 
@@ -606,8 +610,13 @@ final class APIClient {
         try await requestVoid(path: "/journeys/\(journeyId)", method: "PATCH", body: ["status": status])
     }
 
-    func publishJourney(journeyId: String, tripId: String?, pages: [CollagePage]) async throws {
-        try await uploadAndSavePages(journeyId: journeyId, pages: pages)
+    /// `localKey` es la carpeta de disco de donde salen las miniaturas. Por
+    /// defecto es el propio journey —el caso de siempre—, pero cuando se acaba
+    /// de publicar un borrador las fotos todavía viven bajo su id de borrador:
+    /// se suben al journey nuevo y recién después se renombra la carpeta.
+    func publishJourney(journeyId: String, tripId: String?, pages: [CollagePage],
+                        localKey: String? = nil) async throws {
+        try await uploadAndSavePages(journeyId: journeyId, localKey: localKey ?? journeyId, pages: pages)
         try await requestVoid(
             path: "/journeys/\(journeyId)",
             method: "PATCH",
@@ -627,8 +636,8 @@ final class APIClient {
     /// Reutilizable para publicar journey por journey dentro de un trip.
     // Sube las miniaturas del memoir a través de buddy-core (service_role),
     // evitando el RLS de Supabase Storage que rechaza tokens anon.
-    private func uploadAndSavePages(journeyId: String, pages: [CollagePage]) async throws {
-        print("⬆️ [uploadAndSavePages] journeyId=\(journeyId) pages.count=\(pages.count)")
+    private func uploadAndSavePages(journeyId: String, localKey: String, pages: [CollagePage]) async throws {
+        print("⬆️ [uploadAndSavePages] journeyId=\(journeyId) localKey=\(localKey) pages.count=\(pages.count)")
 
         // Recolectar los JPEG de cada página antes de armar el multipart
         var parts: [(index: Int, clientPageId: String, data: Data)] = []
@@ -638,7 +647,7 @@ final class APIClient {
                 print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — thumbnailFileName is nil")
                 continue
             }
-            guard let image = MemoirPersistence.shared.loadThumbnail(filename, journeyId: journeyId) else {
+            guard let image = MemoirPersistence.shared.loadThumbnail(filename, draftId: localKey) else {
                 print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — loadThumbnail returned nil for file=\(filename)")
                 continue
             }
@@ -697,7 +706,9 @@ final class APIClient {
     /// trip → todos sus journeys quedan completados como UNA sola historia.
     func publishTrip(tripId: String, places: [(journeyId: String, pages: [CollagePage])]) async throws {
         for place in places {
-            try await uploadAndSavePages(journeyId: place.journeyId, pages: place.pages)
+            // Un viaje ya existe cuando se publica, así que su carpeta local ya
+            // se llama como el journey: la clave de disco es la misma.
+            try await uploadAndSavePages(journeyId: place.journeyId, localKey: place.journeyId, pages: place.pages)
         }
         try await requestVoid(
             path: "/trips/\(tripId)",

@@ -10,7 +10,7 @@ struct TripBookContainerView: View {
 
     init(journey: APIJourney) {
         self.journey = journey
-        _bookVM = StateObject(wrappedValue: TripBookViewModel(journeyId: journey.id))
+        _bookVM = StateObject(wrappedValue: TripBookViewModel(draftId: journey.id))
     }
 
     var body: some View {
@@ -268,7 +268,7 @@ struct TripPageDisplayView: View {
         guard let filename = page.thumbnailFileName else { return }
         let jId = journeyId
         Task.detached(priority: .userInitiated) {
-            let img = MemoirPersistence.shared.loadThumbnail(filename, journeyId: jId)
+            let img = MemoirPersistence.shared.loadThumbnail(filename, draftId: jId)
             await MainActor.run { thumbnail = img }
         }
     }
@@ -277,7 +277,7 @@ struct TripPageDisplayView: View {
         guard let filename = page.backgroundImageFile else { bgImage = nil; return }
         let jId = journeyId
         Task.detached(priority: .userInitiated) {
-            let img = MemoirPersistence.shared.loadBackground(filename, journeyId: jId)
+            let img = MemoirPersistence.shared.loadBackground(filename, draftId: jId)
             await MainActor.run { bgImage = img }
         }
     }
@@ -325,7 +325,7 @@ struct TripPageThumbnailCard: View {
         guard let filename = page.thumbnailFileName else { return }
         let jId = journeyId
         Task.detached(priority: .userInitiated) {
-            let img = MemoirPersistence.shared.loadThumbnail(filename, journeyId: jId)
+            let img = MemoirPersistence.shared.loadThumbnail(filename, draftId: jId)
             await MainActor.run { thumbnail = img }
         }
     }

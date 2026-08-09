@@ -2,6 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Universal Links de los lugares compartidos. Dominio provisional: el de
+	     Heroku, para poder probar el flujo completo hoy. Al pasar a un dominio
+	     propio se cambia acá y en el AASA de buddy-core (routes/share.js) — los
+	     dos a la vez, o los enlaces dejan de abrir la app EN SILENCIO. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:buddy-core-504b393f8333.herokuapp.com</string>
+	</array>
 	<key>aps-environment</key>
 	<string>development</string>
 	<key>com.apple.developer.applesignin</key>

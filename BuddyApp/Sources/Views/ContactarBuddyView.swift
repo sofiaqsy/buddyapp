@@ -962,7 +962,12 @@ struct CategoryPickerView: View {
                 ctaTrailing
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            // 13 y no 10: +10% de alto, pedido de diseño. El contenido más alto
+            // es el avatar (34pt), así que la fila medía 34 + 10·2 = 54; con 13
+            // pasa a 60. Se toca el padding y no un frame fijo para que la fila
+            // siga creciendo sola si el subtítulo se va a dos líneas con
+            // Dynamic Type.
+            .padding(.vertical, 13)
             .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.sm))
             .overlay(RoundedRectangle(cornerRadius: Radius.sm).strokeBorder(Color.border, lineWidth: 1))
         }
@@ -1082,9 +1087,22 @@ struct CategoryPickerView: View {
         // lo que permite que sea el MISMO componente y no una réplica.
         let fuente = (isSkeleton && placeCards.isEmpty) ? APIPlaceCard.placeholders() : placeCards
         return fuente.flatMap { place -> [ExplorePhoto] in
+            // cover_photos manda cuando viene: es la única fuente que sabe de
+            // quién es cada foto. coverUrls queda como respaldo para los
+            // endpoints que no lo mandan (el perfil, donde además todas son de
+            // la misma persona) y para respuestas viejas en caché.
+            if let fotos = place.coverPhotos, !fotos.isEmpty {
+                return fotos.enumerated().map { i, foto in
+                    ExplorePhoto(id: "\(place.id)-\(i)", url: foto.url, place: place,
+                                 authorName: foto.authorName,
+                                 authorAvatarUrl: foto.authorAvatarUrl)
+                }
+            }
             let urls = (place.coverUrls?.isEmpty == false ? place.coverUrls! : [place.coverUrl].compactMap { $0 })
             return urls.enumerated().map { i, url in
-                ExplorePhoto(id: "\(place.id)-\(i)", url: url, place: place)
+                ExplorePhoto(id: "\(place.id)-\(i)", url: url, place: place,
+                             authorName: place.coverAuthorName,
+                             authorAvatarUrl: place.coverAuthorAvatarUrl)
             }
         }
     }
@@ -1342,6 +1360,11 @@ private struct ExplorePhoto: Identifiable {
     let id: String
     let url: String
     let place: APIPlaceCard
+    /// Quién aportó ESTA foto. Un lugar puede estar documentado por varias
+    /// personas y cada tarjeta es una foto, así que el autor no puede salir de
+    /// la tarjeta del lugar: así se firmaban todas con quien publicó la última.
+    let authorName: String?
+    let authorAvatarUrl: String?
 }
 
 // MARK: – Conversación pendiente (antes de que exista un match)
@@ -1722,8 +1745,11 @@ private struct ExploreCarouselCard: View {
     /// de una persona concreta pesa más como prueba social que un conteo, y
     /// encadena con el subtítulo ("Lugares que recomiendan los buddies de
     /// Lima"). El nombre va en negrita para que se lea antes que el prefijo.
+    /// El autor DE ESTA FOTO, no el del lugar.
+    private var authorFullName: String? { photo.authorName }
+    private var authorAvatarUrl: String? { photo.authorAvatarUrl }
     private var authorFirstName: String? {
-        guard let full = place.coverAuthorName?.trimmingCharacters(in: .whitespaces),
+        guard let full = authorFullName?.trimmingCharacters(in: .whitespaces),
               !full.isEmpty else { return nil }
         return full.components(separatedBy: " ").first ?? full
     }
@@ -1783,9 +1809,9 @@ private struct ExploreCarouselCard: View {
                     .minimumScaleFactor(0.7)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if let author = place.coverAuthorName {
+                    if let author = authorFullName {
                         Group {
-                            if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
+                            if let urlStr = authorAvatarUrl, let url = URL(string: urlStr) {
                                 AsyncImage(url: url) { img in
                                     img.resizable().scaledToFill()
                                 } placeholder: { Color.sandLight }
@@ -3342,6 +3368,7 @@ struct BuddyMessageBubble: View {
         let isImage    = message.type == "image" && message.imageUrl != nil
         let isLocation = message.content?.hasPrefix("location:") == true
         let isPlace    = message.content?.hasPrefix("place:") == true
+        let tarjeta    = ChatCard.decodePlace(message.content)
         let isCategory = message.content?.hasPrefix("category_card:") == true
 
         let timeStr = message.createdAt.map { shortTime($0) }
@@ -3370,6 +3397,11 @@ struct BuddyMessageBubble: View {
                 } else if isCategory, let content = message.content {
                     categoryCard(content: content, isMe: isMe)
                     // Cards keep time below (compact)
+                    if let t = timeStr {
+                        Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
+                    }
+                } else if let tarjeta {
+                    lugarRecomendadoCard(tarjeta)
                     if let t = timeStr {
                         Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
                     }
@@ -3486,6 +3518,82 @@ struct BuddyMessageBubble: View {
         .frame(maxWidth: 260, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(isMe ? "Pedí ayuda con" : "Pide ayuda con") \(info.label): \(info.subtitle)")
+    }
+
+    /// Un lugar recomendado compartido en el chat.
+    ///
+    /// Con foto y no como la fila de texto de `placeCard`: lo que se comparte
+    /// es un sitio que le gustó a alguien, y eso lo cuenta la imagen. Una fila
+    /// con un pin se lee como una dirección.
+    ///
+    /// Los datos salen del MENSAJE, no del servidor. Es un registro de lo que
+    /// se dijo: si el lugar se renombra o se le borra la foto, la tarjeta sigue
+    /// mostrando lo que se envió.
+    private func lugarRecomendadoCard(_ card: ChatCard.Place) -> some View {
+        Button {
+            Haptic.light()
+            AppRouter.shared.openPlace(lat: card.lat ?? 0, lng: card.lng ?? 0,
+                                       name: card.name,
+                                       spotId: card.spotId,
+                                       destinationId: card.destinationId)
+            onDismissSheet?()
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                if let url = card.photoUrl {
+                    CachedImage(urlString: url) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        Rectangle().fill(Color.sandLight)
+                    }
+                    .frame(height: 132)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    if let cat = card.category, !cat.isEmpty {
+                        Text(cat.uppercased())
+                            .font(.system(size: 9, weight: .semibold))
+                            .tracking(0.6)
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    Text(card.name)
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    // El autor y no un conteo: la recomendación de una persona
+                    // concreta pesa más como prueba social.
+                    if let autor = card.authorName?.components(separatedBy: " ").first,
+                       !autor.isEmpty {
+                        Text("Recomendado por \(autor)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
+
+                    HStack(spacing: 4) {
+                        Text("Ver lugar")
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.brand)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.brand)
+                    }
+                    .padding(.top, 2)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: 240, alignment: .leading)
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Lugar recomendado: \(card.name)")
+        .accessibilityHint("Abre la ficha del lugar")
     }
 
     private func placeCard(content: String) -> some View {

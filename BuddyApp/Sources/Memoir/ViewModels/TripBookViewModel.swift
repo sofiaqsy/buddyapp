@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor
 final class TripBookViewModel: ObservableObject {
 
-    let journeyId: String
+    let draftId: String
 
     @Published var pages: [CollagePage] = []
     @Published var currentPageIndex: Int = 0
@@ -14,9 +14,9 @@ final class TripBookViewModel: ObservableObject {
     private var vmCache: [UUID: CanvasViewModel] = [:]
     private let persistence = MemoirPersistence.shared
 
-    init(journeyId: String) {
-        self.journeyId = journeyId
-        pages = persistence.load(journeyId: journeyId)
+    init(draftId: String) {
+        self.draftId = draftId
+        pages = persistence.load(draftId: draftId)
         if pages.isEmpty { pages.append(CollagePage()) }
         assignBackgroundStrips()
     }
@@ -43,8 +43,8 @@ final class TripBookViewModel: ObservableObject {
     }
 
     func exitEdit(canvasSize: CGSize = .zero) {
-        let jId = journeyId
-        print("📓 [exitEdit] journeyId=\(jId) pageCount=\(pages.count) canvasSize=\(canvasSize)")
+        let dId = draftId
+        print("📓 [exitEdit] draftId=\(dId) pageCount=\(pages.count) canvasSize=\(canvasSize)")
         if canvasSize != .zero { editingVM.canvasSize = canvasSize }
         print("📓 [exitEdit] vm.canvasSize after update=\(editingVM.canvasSize) items=\(editingVM.items.count)")
         vmCache[pages[currentPageIndex].id] = editingVM
@@ -82,13 +82,13 @@ final class TripBookViewModel: ObservableObject {
         isLoadingPage = true
         let page    = pages[index]
         let pageId  = page.id
-        let jId     = journeyId
+        let dId     = draftId
 
         Task {
             let (items, bgImage) = await Task.detached(priority: .userInitiated) {
-                let items   = MemoirPersistence.shared.buildItems(from: page, journeyId: jId)
+                let items   = MemoirPersistence.shared.buildItems(from: page, draftId: dId)
                 let bgImage = page.backgroundImageFile
-                    .flatMap { MemoirPersistence.shared.loadBackground($0, journeyId: jId) }
+                    .flatMap { MemoirPersistence.shared.loadBackground($0, draftId: dId) }
                 return (items, bgImage)
             }.value
 
@@ -116,7 +116,7 @@ final class TripBookViewModel: ObservableObject {
         let stripFile = "bg_strip_\(pages.count % 3).jpg"
         if persistence.backgroundStripExists(stripFile) {
             newPage.backgroundImageFile = stripFile
-            newVM.backgroundImage = persistence.loadBackground(stripFile, journeyId: journeyId)
+            newVM.backgroundImage = persistence.loadBackground(stripFile, draftId: draftId)
         }
         pages.append(newPage)
         pageAddedThisSession = newPage.id
@@ -161,17 +161,17 @@ final class TripBookViewModel: ObservableObject {
     }
 
     private func flushCacheToDisk() {
-        print("📓 [flushCacheToDisk] journeyId=\(journeyId) vmCache.count=\(vmCache.count)")
+        print("📓 [flushCacheToDisk] draftId=\(draftId) vmCache.count=\(vmCache.count)")
         for (pageId, vm) in vmCache {
             guard let idx = pages.firstIndex(where: { $0.id == pageId }) else {
                 print("📓 [flushCacheToDisk] WARN pageId=\(pageId) not found in pages — skipped")
                 continue
             }
             print("📓 [flushCacheToDisk] page[\(idx)] id=\(pageId) vm.items=\(vm.items.count) vm.canvasSize=\(vm.canvasSize) vm.backgroundImage=\(vm.backgroundImage != nil ? "YES" : "nil")")
-            var snap = persistence.snapshot(from: vm, existing: pages[idx], journeyId: journeyId)
+            var snap = persistence.snapshot(from: vm, existing: pages[idx], draftId: draftId)
             print("📓 [flushCacheToDisk] page[\(idx)] snapshot.itemSnapshots=\(snap.itemSnapshots.count)")
             let thumb = persistence.generateThumbnail(
-                vm: vm, canvasSize: vm.canvasSize, pageId: pageId, journeyId: journeyId)
+                vm: vm, canvasSize: vm.canvasSize, pageId: pageId, draftId: draftId)
             print("📓 [flushCacheToDisk] page[\(idx)] generateThumbnail → \(thumb ?? "NIL — canvasSize was \(vm.canvasSize)")")
             if let thumb {
                 snap.thumbnailFileName = thumb
@@ -196,14 +196,14 @@ final class TripBookViewModel: ObservableObject {
 
     private func saveAsync() {
         let p   = pages
-        let jId = journeyId
+        let dId = draftId
         Task.detached(priority: .utility) {
-            MemoirPersistence.shared.save(p, journeyId: jId)
+            MemoirPersistence.shared.save(p, draftId: dId)
             // Notificar DESPUÉS de que el guardado termine
             await MainActor.run {
                 NotificationCenter.default.post(
                     name: .memoirPageSaved,
-                    object: jId
+                    object: dId
                 )
             }
         }

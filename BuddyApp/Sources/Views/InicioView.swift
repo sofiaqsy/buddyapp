@@ -637,7 +637,20 @@ struct InicioView: View {
                     }
                 }
                 .onChange(of: placeDeepLink.pending != nil) { _, hasPending in
-                    if hasPending, let journey = activeJourney ?? pendingJourney {
+                    guard hasPending else { return }
+                    // Con destino conocido se abre su guía directamente. Antes
+                    // esto exigía tener un trip vivo —empujaba el journey y
+                    // TripDetailView consumía el pendiente—, así que tocar un
+                    // lugar compartido no hacía NADA para quien no estuviera
+                    // viajando, que es la mayoría de la gente que lo recibe.
+                    if let destId = placeDeepLink.pending?.destinationId {
+                        navPath = NavigationPath()
+                        navPath.append(DestinationMapRoute(
+                            destinationId: destId,
+                            name: placeDeepLink.pending?.name ?? ""))
+                        return
+                    }
+                    if let journey = activeJourney ?? pendingJourney {
                         navPath = NavigationPath()
                         navPath.append(journey)
                     }
@@ -1151,10 +1164,11 @@ struct InicioView: View {
 
         // Mark refresh time to throttle scenePhase changes
         await MainActor.run { lastRefreshTripStateAt = Date() }
-        guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else {
+        guard let todos = try? await APIClient.shared.fetchTravelerJourneys() else {
             print("❌ [refreshTripState] fetchTravelerJourneys falló")
             return
         }
+        let journeys = soloViajes(todos)
         print("🔄 [refreshTripState] \(journeys.count) journey(s): \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
         let active   = journeys.first(where: { $0.status == "active" })
         let planning = journeys.first(where: { $0.status == "planning" })
@@ -1198,9 +1212,29 @@ struct InicioView: View {
     }
 
     /// Fetch ligero para navegar al detalle rápido tras "Ya llegué"
+    /// Solo viajes de verdad. `/travelers/me/journeys` devuelve TODO lo vivo del
+    /// viajero, y eso incluye los journeys de "Compartir un lugar" (tripId=nil),
+    /// que son el contenedor de las fotos de una recomendación — no un viaje.
+    ///
+    /// Sin este filtro cada lugar recomendado aparecía como un viaje en curso:
+    /// el selector del Home ofrecía "Villa Rica" y "Lima" como si el usuario
+    /// tuviera dos trips abiertos cuando no había creado ninguno.
+    ///
+    /// TripsView y Android ya filtraban así; el Home era el único sitio que no.
+    /// El filtro no puede vivir en APIClient: TripsView SÍ necesita los
+    /// compartidos, en su propia sección.
+    private func soloViajes(_ journeys: [APIJourney]) -> [APIJourney] {
+        let viajes = journeys.filter { $0.tripId != nil }
+        if viajes.count != journeys.count {
+            print("🏠 [soloViajes] \(journeys.count - viajes.count) compartido(s) descartado(s) — no son viajes")
+        }
+        return viajes
+    }
+
     private func quickLoadForDetail() async {
         guard Session.hasSession else { return }
-        guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else { return }
+        guard let todos = try? await APIClient.shared.fetchTravelerJourneys() else { return }
+        let journeys = soloViajes(todos)
         let active = journeys.first(where: { $0.status == "active" })
 
         // Asegura que routeStore tenga la ruta
@@ -1334,7 +1368,7 @@ struct InicioView: View {
             let snapshotId = Session.travelerId   // capturar ANTES del await
             print("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
             await MainActor.run { LoadDataTrace.fase(traceId, "journeys") }
-            let journeys = try await APIClient.shared.fetchTravelerJourneys()
+            let journeys = soloViajes(try await APIClient.shared.fetchTravelerJourneys())
             guard !Task.isCancelled else { return }
             print("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
             // Anti cross-account guard: if identity was hydrated mid-flight (cold launch
@@ -2938,18 +2972,25 @@ struct PlaceGuideMapSheet: View {
     let name: String
     let lat: Double?
     let lng: Double?
+    /// Quien mira puede recomendar lugares. Lo sabe el perfil, no esta vista, y
+    /// sin él la ficha no ofrecería "Añadir foto" para un lugar todavía sin
+    /// recomendación — que es justo el caso desde "Compartir un lugar".
+    let canRecommend: Bool
 
-    init(destinationId: String?, focusPlaceId: String? = nil, name: String, lat: Double? = nil, lng: Double? = nil) {
+    init(destinationId: String?, focusPlaceId: String? = nil, name: String,
+         lat: Double? = nil, lng: Double? = nil, canRecommend: Bool = false) {
         self.destinationId = destinationId
         self.focusPlaceId  = focusPlaceId
         self.name          = name
         self.lat           = lat
         self.lng           = lng
+        self.canRecommend  = canRecommend
     }
 
-    init(place: APIPlaceCard) {
+    init(place: APIPlaceCard, canRecommend: Bool = false) {
         self.init(destinationId: place.destinationId, focusPlaceId: place.id,
-                  name: place.name, lat: place.lat, lng: place.lng)
+                  name: place.name, lat: place.lat, lng: place.lng,
+                  canRecommend: canRecommend)
     }
 
     @StateObject private var routeStore = RouteStore()
@@ -2971,7 +3012,8 @@ struct PlaceGuideMapSheet: View {
             case .guideAvailable:
                 // TripDetailView ya trae su propio botón de volver (chevron
                 // flotante sobre el mapa) — no hace falta agregar otro.
-                TripDetailView(route: routeStore.route, destinationId: destinationId, focusPlaceId: focusPlaceId)
+                TripDetailView(route: routeStore.route, destinationId: destinationId,
+                               focusPlaceId: focusPlaceId, canRecommend: canRecommend)
                     .environmentObject(routeStore)
             case .noGuide(let lat, let lng):
                 MapPinView(name: name, lat: lat, lng: lng, span: 0.003)

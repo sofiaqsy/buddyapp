@@ -41,10 +41,43 @@ struct BuddyAppApp: App {
                 // Validación en background: si el token almacenado ya no es válido,
                 // AuthState lo marca y la UI transiciona a estado anónimo.
                 .task { await authState.validate() }
+                // Universal Links: buddy.app/place/<spotId>?d=<destinationId>
+                //
+                // El enlace que sale por WhatsApp. Si Buddy está instalado, iOS
+                // entrega la URL acá y la web nunca llega a cargarse; si no,
+                // abre la página pública y esto no corre.
+                //
+                // Solo traduce la URL a la navegación que YA existía —
+                // AppRouter.openPlace, el mismo camino que usa una tarjeta de
+                // lugar compartida en el chat. Una entrada nueva a una carretera
+                // ya asfaltada.
+                .onOpenURL { url in
+                    guard let spotId = Self.spotIdDeEnlace(url) else {
+                        print("🔗 [openURL] no reconocida: \(url.absoluteString)")
+                        return
+                    }
+                    let destinationId = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first(where: { $0.name == "d" })?.value
+                    print("🔗 [openURL] lugar \(spotId.prefix(8)) destino=\(destinationId?.prefix(8) ?? "nil")")
+                    AppRouter.shared.openPlace(lat: 0, lng: 0, name: "",
+                                               spotId: spotId, destinationId: destinationId)
+                }
                 .tint(Color.brand)
                 .preferredColorScheme(.light)
                 .animation(.easeInOut(duration: 0.3), value: authState.isLoggedIn)
         }
+    }
+}
+
+extension BuddyAppApp {
+    /// El id del spot de una URL `…/place/<uuid>`, o nil si no es de las
+    /// nuestras. Se valida que sea un UUID: la ruta la puede escribir
+    /// cualquiera, y con basura se abriría una ficha vacía.
+    static func spotIdDeEnlace(_ url: URL) -> String? {
+        let partes = url.pathComponents.filter { $0 != "/" }
+        guard partes.count >= 2, partes[0] == "place" else { return nil }
+        let candidato = partes[1]
+        return UUID(uuidString: candidato) != nil ? candidato : nil
     }
 }
 

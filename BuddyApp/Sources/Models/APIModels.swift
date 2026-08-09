@@ -450,8 +450,16 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
     let lng: Double?
     let coverUrl: String?
     let coverUrls: [String]?
-    /// Quién documentó la foto de portada — "Recomendado por {nombre}" en el
-    /// carrusel de exploración.
+    /// Las mismas fotos que `coverUrls`, pero cada una CON SU AUTOR.
+    ///
+    /// Un lugar puede estar documentado por varias personas, y el carrusel
+    /// dibuja una tarjeta por foto: con un solo autor a nivel de tarjeta, todas
+    /// las fotos quedaban firmadas por quien publicó la última. Opcional porque
+    /// solo lo manda /feed/place-shares; donde falta se usa coverAuthorName.
+    let coverPhotos: [APIPlaceCoverPhoto]?
+    /// Autor de la portada. Sigue valiendo como respaldo cuando no hay
+    /// `coverPhotos` —el perfil, por ejemplo, donde todas son de la misma
+    /// persona— pero NO debe usarse para firmar una foto concreta si lo hay.
     let coverAuthorName: String?
     let coverAuthorAvatarUrl: String?
     /// Nombre de la categoría del spot ("Alojamiento", "Café"…). Viene del
@@ -489,7 +497,7 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
             APIPlaceCard(
                 id: "placeholder-\(i)", name: "Nombre del lugar",
                 destinationId: nil, destinationName: nil, lat: nil, lng: nil,
-                coverUrl: nil, coverUrls: nil,
+                coverUrl: nil, coverUrls: nil, coverPhotos: nil,
                 coverAuthorName: "Buddy", coverAuthorAvatarUrl: nil,
                 category: "Categoría", status: nil, photoCount: 0, isNew: false,
                 buddyCount: 0, buddies: [])
@@ -504,6 +512,13 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
         if let destinationName { return "\(buddyCount) \(noun) en \(destinationName)" }
         return "\(buddyCount) \(noun)"
     }
+}
+
+/// Una foto del carrusel con quién la aportó.
+struct APIPlaceCoverPhoto: Decodable, Hashable {
+    let url: String
+    let authorName: String?
+    let authorAvatarUrl: String?
 }
 
 struct APIPlaceCardsResponse: Decodable {

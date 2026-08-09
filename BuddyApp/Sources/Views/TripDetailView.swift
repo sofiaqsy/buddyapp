@@ -15,6 +15,14 @@ struct TripDetailView: View {
     /// tarjeta que abrió este mapa. Sin esto, se entra al mapa completo del
     /// destino sin foco, y hay que buscar el pin entre todos los demás.
     var focusPlaceId: String? = nil
+    /// Quien mira puede recomendar lugares (buddy aprobado). Sin esto la ficha
+    /// solo ofrecía "Añadir foto" cuando YA existía una recomendación suya, que
+    /// era el journey creado al elegir el lugar. Ahora el journey nace al
+    /// publicar, así que la acción tiene que existir antes que él.
+    ///
+    /// Por defecto false: desde el Home nadie sabe si eres buddy, y ahí la
+    /// ficha sigue comportándose exactamente como hasta hoy.
+    var canRecommend: Bool = false
     @EnvironmentObject var locationService: LocationService
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var router: AppRouter
@@ -37,13 +45,14 @@ struct TripDetailView: View {
     @State private var visibleCount = 10
     @State private var orderedIds: [UUID] = []   // orden congelado de la sesión
 
-    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil, focusPlaceId: String? = nil) {
+    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil, focusPlaceId: String? = nil, canRecommend: Bool = false) {
         self.route = route
         self.match = match
         self.journey = journey
         self.unreadCount = unreadCount
         self.destinationId = destinationId
         self.focusPlaceId = focusPlaceId
+        self.canRecommend = canRecommend
         // Si el destino no tiene spots curados, centrar el mapa en las coords explícitas
         // desde el inicio — sin esperar el delay de fitMap().
         if route.places.isEmpty, let center = route.explicitCenter {
@@ -127,7 +136,14 @@ struct TripDetailView: View {
         // Deep-link desde chat: seleccionar lugar sugerido por el buddy
         if let dp = PlaceDeepLink.shared.consume() {
             await MainActor.run {
-                let match = livePlaces.first { $0.name.localizedCaseInsensitiveCompare(dp.name) == .orderedSame }
+                // Por id primero: es la única forma de acertar cuando hay dos
+                // locales con el mismo nombre, o dos a veinte metros. El
+                // nombre y la cercanía siguen como respaldo para los mensajes
+                // viejos (`place:`), que nunca llevaron id.
+                let match = dp.spotId.flatMap { sid in
+                        livePlaces.first { $0.id.uuidString.caseInsensitiveCompare(sid) == .orderedSame }
+                    }
+                    ?? livePlaces.first { $0.name.localizedCaseInsensitiveCompare(dp.name) == .orderedSame }
                     ?? livePlaces.min(by: {
                         abs($0.latitude - dp.lat) + abs($0.longitude - dp.lng) <
                         abs($1.latitude - dp.lat) + abs($1.longitude - dp.lng)
@@ -544,6 +560,7 @@ struct TripDetailView: View {
                     place: place,
                     destinationId: resolvedDestinationId,
                     buddyPresenceText: buddyPresenceText,
+                    canRecommend: canRecommend,
                     onNavigate: { navigationTarget = place },
                     onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil } }
                 )
@@ -990,10 +1007,23 @@ struct MapIconButton: View {
 // esto es una ficha aparte, con sus propias pestañas — no cabía ni tenía
 // sentido forzarla dentro del panel horizontal de tarjetas. Reseñas queda
 // fuera a propósito: no existe ese sistema (calificar/comentar) todavía.
+/// Envoltorio Identifiable para poder abrir el editor con `fullScreenCover(item:)`
+/// llevando solo el id del spot — no hay journey todavía que pasar.
+private struct SpotEnEdicion: Identifiable { let id: String }
+
+/// Envoltorio Identifiable para presentar la hoja de compartir con
+/// `.sheet(item:)`, que exige identidad y ChatCard.Place es un valor puro.
+private struct TarjetaCompartible: Identifiable {
+    let card: ChatCard.Place
+    var id: String { card.spotId }
+}
+
 struct PlaceGuideDetailSheet: View {
     let place: Place
     let destinationId: String?
     let buddyPresenceText: String?
+    /// Ver el comentario homónimo en TripDetailView.
+    let canRecommend: Bool
     let onNavigate: () -> Void
     /// Embebido en el panel del mapa (no como sheet): @Environment(\.dismiss)
     /// no tiene nada que cerrar ahí, así que quién lo contiene decide qué
@@ -1001,10 +1031,12 @@ struct PlaceGuideDetailSheet: View {
     let onClose: () -> Void
 
     init(place: Place, destinationId: String?, buddyPresenceText: String?,
+         canRecommend: Bool = false,
          onNavigate: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.place = place
         self.destinationId = destinationId
         self.buddyPresenceText = buddyPresenceText
+        self.canRecommend = canRecommend
         self.onNavigate = onNavigate
         self.onClose = onClose
         _galleryVM = StateObject(wrappedValue: SpotGalleryViewModel(spotId: place.id.uuidString))
@@ -1039,7 +1071,35 @@ struct PlaceGuideDetailSheet: View {
     private var myBuddyRecommendation: APIPlaceVisit? { galleryVM.myVisit }
 
     @State private var editingJourney: APIJourney? = nil
+    /// Spot para el que se está creando una recomendación NUEVA. Mientras esto
+    /// tiene valor no existe ningún journey: solo un borrador en disco.
+    @State private var editingNewSpotId: String? = nil
     @State private var isOpeningEditor = false
+    /// Lugar que se está compartiendo. La tarjeta se arma en el momento del
+    /// toque y viaja entera: lo que se envía es lo que se ve ahora, no una
+    /// referencia que el destinatario tendría que resolver.
+    @State private var compartiendo: ChatCard.Place? = nil
+
+    /// La tarjeta de ESTE lugar, con la foto que se está viendo.
+    ///
+    /// La portada sale de mi propia recomendación si la hay, y si no de la
+    /// primera de la galería: es la foto que el destinatario verá en el chat.
+    private func tarjetaDelLugar() -> ChatCard.Place {
+        let primeraDeLaGaleria = galleryVM.photos.first
+        let foto = myBuddyRecommendation?.photos.first
+            ?? primeraDeLaGaleria?.url
+            ?? place.coverUrl
+        let autor = primeraDeLaGaleria?.buddyName
+        return ChatCard.Place(
+            spotId: place.id.uuidString,
+            destinationId: destinationId,
+            name: place.name,
+            category: place.categoryName,
+            photoUrl: foto,
+            lat: place.latitude,
+            lng: place.longitude,
+            authorName: autor)
+    }
 
     var body: some View {
         // Mismo espacio que ocupaba la lista de tarjetas (~265pt) — nada
@@ -1092,6 +1152,24 @@ struct PlaceGuideDetailSheet: View {
             // único gesto disponible tiene que dejarla visible.
             TripEditorSheet(journey: journey, initialPage: -1, publishesOnSave: true) {}
         }
+        // Recomendación nueva: el editor abre sobre un borrador local. El
+        // journey se crea al publicar y, si eso falla, se revierte — nunca
+        // queda un journey sin recomendación detrás.
+        .sheet(item: Binding(
+            get: { compartiendo.map(TarjetaCompartible.init) },
+            set: { if $0 == nil { compartiendo = nil } }
+        )) { envuelto in
+            // El compartir "hacia fuera" vive dentro de la hoja, con ShareLink:
+            // cerrarla para presentar un UIActivityViewController encima era una
+            // carrera contra la propia animación de cierre.
+            CompartirEnChatSheet(card: envuelto.card)
+        }
+        .fullScreenCover(item: Binding(
+            get: { editingNewSpotId.map(SpotEnEdicion.init) },
+            set: { if $0 == nil { editingNewSpotId = nil } }
+        )) { spot in
+            TripEditorSheet(spotId: spot.id, initialPage: -1) {}
+        }
         // Recargar con .journeyPublished y no con onDisappear del editor: el
         // cover se cierra apenas termina la edición, mientras la subida de las
         // páginas sigue en vuelo. La recarga salía antes que el POST y traía la
@@ -1137,6 +1215,22 @@ struct PlaceGuideDetailSheet: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer(minLength: 8)
+
+            // Compartir va junto a "cómo llegar" porque son las dos cosas que
+            // se hacen CON un lugar. En secundario: llegar es la acción del que
+            // ya decidió ir; compartir es para otra persona.
+            Button {
+                Haptic.light()
+                compartiendo = tarjetaDelLugar()
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.secondary.opacity(0.12)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Compartir \(place.name)")
 
             Button {
                 Haptic.light()
@@ -1198,19 +1292,28 @@ struct PlaceGuideDetailSheet: View {
     /// acción, no una foto más.
     @ViewBuilder
     private var addPhotoTile: some View {
-        if let mine = myBuddyRecommendation {
+        if myBuddyRecommendation != nil || canRecommend {
             Button {
                 Haptic.medium()
                 guard !isOpeningEditor else { return }
-                isOpeningEditor = true
-                Task {
-                    // El editor necesita el APIJourney completo (tripId incluido,
-                    // que publishJourney manda); la galería solo trae su id.
-                    let journey = try? await APIClient.shared.fetchJourney(id: mine.journeyId)
-                    await MainActor.run {
-                        isOpeningEditor = false
-                        editingJourney = journey
+                // Ya hay recomendación: se le suma una foto, como siempre.
+                if let mine = myBuddyRecommendation {
+                    isOpeningEditor = true
+                    Task {
+                        // El editor necesita el APIJourney completo (tripId
+                        // incluido, que publishJourney manda); la galería solo
+                        // trae su id.
+                        let journey = try? await APIClient.shared.fetchJourney(id: mine.journeyId)
+                        await MainActor.run {
+                            isOpeningEditor = false
+                            editingJourney = journey
+                        }
                     }
+                } else {
+                    // Recomendación nueva: NO se toca la red. El editor abre
+                    // sobre un borrador local y el journey nace al publicar —
+                    // si el usuario se arrepiente, no queda nada en el servidor.
+                    editingNewSpotId = place.id.uuidString
                 }
             } label: {
                 ZStack {
@@ -1248,11 +1351,11 @@ struct PlaceGuideDetailSheet: View {
                 // publicar, así que una página que quede en disco volvería.
                 if let clientPageId = photo.clientPageId, let uuid = UUID(uuidString: clientPageId) {
                     try await APIClient.shared.deleteJourneyPage(journeyId: photo.journeyId, clientPageId: clientPageId)
-                    await MainActor.run { MemoirPersistence.shared.removePage(id: uuid, journeyId: photo.journeyId) }
+                    await MainActor.run { MemoirPersistence.shared.removePage(id: uuid, draftId: photo.journeyId) }
                 } else if let pageIndex = photo.pageIndex {
                     // Foto anterior a client_page_id: no queda otra que el índice.
                     try await APIClient.shared.deleteJourneyPage(journeyId: photo.journeyId, pageIndex: pageIndex)
-                    await MainActor.run { MemoirPersistence.shared.removePublishedPage(at: pageIndex, journeyId: photo.journeyId) }
+                    await MainActor.run { MemoirPersistence.shared.removePublishedPage(at: pageIndex, draftId: photo.journeyId) }
                 }
                 await MainActor.run {
                     // Se quita de la lista en vez de refetchear la galería: con

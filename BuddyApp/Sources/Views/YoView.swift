@@ -15,10 +15,9 @@ struct YoView: View {
     /// sheet está abierta, qué se está editando, a dónde navega.
     @StateObject private var vm = YoViewModel()
     @State private var showCompartirLugar = false
-    /// Journey creado por la sheet, en espera del onDismiss para recargar. El
-    /// perfil no puede refrescar antes: la sheet sigue arriba y el usuario
-    /// vería la lista moverse debajo.
-    @State private var pendingShareJourney: APIJourney? = nil
+    /// Lugar elegido en la hoja, a la espera del onDismiss para navegar. El
+    /// perfil no puede navegar antes: la hoja sigue arriba.
+    @State private var pendingShareChoice: APIPlaceCard? = nil
     /// Lugar que el buddy eligió y que YA recomendaba — se abre su ficha al
     /// cerrarse la hoja, en vez de crear una recomendación duplicada.
     @State private var pendingExistingShare: APIPlaceCard? = nil
@@ -235,7 +234,7 @@ struct YoView: View {
                 Text("Tu foto de perfil no se actualizó. Verifica tu conexión e inténtalo de nuevo.")
             }
             .navigationDestination(for: APIPlaceCard.self) { place in
-                PlaceGuideMapSheet(place: place)
+                PlaceGuideMapSheet(place: place, canRecommend: canRecommendPlaces)
             }
             .navigationDestination(for: TravelerProfileRoute.self) { r in
                 UserProfileView(route: r)
@@ -255,42 +254,15 @@ struct YoView: View {
                 }
                 // Caso 2 — lugar nuevo: se abre su ficha, igual que el Caso 1.
                 //
-                // El journey nace sin publicar y sin fotos, y la sección exige
-                // las tres cosas (is_public, completed y al menos una foto), así
-                // que recargar la lista no podía mostrar nada: el lugar se
-                // guardaba bien y desaparecía de la vista. Añadir un lugar y no
-                // ver nada se lee como que no se guardó.
-                //
-                // Llevar a la ficha cierra el flujo donde tiene que cerrarse: es
-                // la pantalla donde vive "Añadir foto", que es lo único que le
-                // falta al lugar para existir para los demás.
-                guard let journey = pendingShareJourney else { return }
-                pendingShareJourney = nil
-                Task { await vm.load(force: true) }
-
-                guard let spot = journey.spot else {
-                    // Sin spot no hay ficha que abrir. No debería pasar por esta
-                    // vía —"Compartir un lugar" siempre elige uno del catálogo—
-                    // pero callarlo dejaría al usuario en la misma pantalla sin
-                    // explicación, que es justo el síntoma que se está
-                    // corrigiendo.
-                    print("🌍 [YoView] ⚠️ journey \(journey.id.prefix(8)) sin spot — no se puede abrir la ficha")
-                    return
-                }
-                print("🌍 [YoView] lugar nuevo → abriendo su ficha para añadir la primera foto")
-                navPath.append(APIPlaceCard(
-                    id: spot.id, name: spot.name,
-                    destinationId: journey.destination?.id ?? journey.destinationId,
-                    destinationName: journey.destination?.name,
-                    lat: spot.lat, lng: spot.lng,
-                    coverUrl: spot.coverUrl, coverUrls: nil,
-                    coverAuthorName: nil, coverAuthorAvatarUrl: nil,
-                    category: nil,
-                    // El estado real del spot, para que la ficha sepa que puede
-                    // seguir pendiente de aprobación.
-                    status: spot.status,
-                    photoCount: 0, isNew: true,
-                    buddyCount: 0, buddies: []))
+                // Nada se ha guardado todavía, ni hace falta: la ficha es donde
+                // vive "Añadir foto", y publicar esa foto es lo que crea la
+                // recomendación. Recargar la lista acá no mostraría nada —la
+                // sección exige publicado, completado y con foto— y ese vacío se
+                // leía como que no se había guardado.
+                guard let lugar = pendingShareChoice else { return }
+                pendingShareChoice = nil
+                print("🌍 [YoView] lugar nuevo → su ficha, para añadir la primera foto")
+                navPath.append(lugar)
             }) {
                 CompartirLugarSheet(
                     alreadyRecommended: Set(vm.shares.map { $0.id.lowercased() }),
@@ -299,9 +271,9 @@ struct YoView: View {
                             $0.id.caseInsensitiveCompare(spotId) == .orderedSame
                         }
                     }
-                ) { journey in
-                    print("🌍 [YoView] compartido creado journey=\(journey.id)")
-                    pendingShareJourney = journey
+                ) { lugar in
+                    print("🌍 [YoView] lugar elegido \(lugar.id.prefix(8)) — sin journey todavía")
+                    pendingShareChoice = lugar
                 }
             }
         }
@@ -1236,9 +1208,9 @@ struct TripGridCell: View {
             // Fallback local — disco, sin red
             let jId = journey.id
             let img = await Task.detached(priority: .userInitiated) { () -> UIImage? in
-                let localPages = MemoirPersistence.shared.load(journeyId: jId)
+                let localPages = MemoirPersistence.shared.load(draftId: jId)
                 guard let filename = localPages.first?.thumbnailFileName else { return nil }
-                return MemoirPersistence.shared.loadThumbnail(filename, journeyId: jId)
+                return MemoirPersistence.shared.loadThumbnail(filename, draftId: jId)
             }.value
             if let img { localThumb = img }
         }

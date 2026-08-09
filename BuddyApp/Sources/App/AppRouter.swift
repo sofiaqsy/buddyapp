@@ -18,8 +18,10 @@ final class AppRouter: ObservableObject {
         }
     }
 
-    func openPlace(lat: Double, lng: Double, name: String) {
-        PlaceDeepLink.shared.pending = .init(lat: lat, lng: lng, name: name)
+    func openPlace(lat: Double, lng: Double, name: String,
+                   spotId: String? = nil, destinationId: String? = nil) {
+        PlaceDeepLink.shared.pending = .init(lat: lat, lng: lng, name: name,
+                                             spotId: spotId, destinationId: destinationId)
         switchTo(.inicio)
     }
 

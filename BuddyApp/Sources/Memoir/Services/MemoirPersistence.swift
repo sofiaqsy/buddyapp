@@ -2,12 +2,23 @@ import SwiftUI
 
 /// Handles all file-based persistence for trip memoirs.
 ///
-/// Directory layout per journey:
-///   Documents/BuddyApp/memoirs/{journeyId}/
+/// Directory layout per borrador:
+///   Documents/BuddyApp/memoirs/{draftId}/
 ///     book.json
 ///     images/
 ///     thumbs/
 ///     backgrounds/
+///
+/// EL IDENTIFICADOR ES UNA CLAVE DE DISCO, NO UN JOURNEY
+///
+/// Se llamaba `journeyId` y eso obligaba a que existiera un journey en el
+/// servidor ANTES de que el usuario pusiera una sola foto: se creaba al elegir
+/// el lugar y quedaba huérfano si se arrepentía. Acá el string nunca se
+/// interpreta —solo se concatena a una ruta—, así que puede ser el id de un
+/// borrador local mientras se edita y el del journey una vez publicado.
+///
+/// `book.json` guarda NOMBRES de archivo, no rutas: por eso la carpeta se puede
+/// renombrar sin reescribir nada de su contenido (ver `rename`).
 final class MemoirPersistence {
 
     static let shared = MemoirPersistence()
@@ -15,33 +26,33 @@ final class MemoirPersistence {
         setupDefaultBackgroundIfNeeded()
     }
 
-    // MARK: - Per-journey paths
+    // MARK: - Per-draft paths
 
-    private func root(for journeyId: String) -> URL {
+    private func root(for draftId: String) -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return docs.appendingPathComponent("BuddyApp/memoirs/\(journeyId)")
+        return docs.appendingPathComponent("BuddyApp/memoirs/\(draftId)")
     }
 
-    private func imagesDir(for journeyId: String) -> URL {
-        let dir = root(for: journeyId).appendingPathComponent("images")
+    private func imagesDir(for draftId: String) -> URL {
+        let dir = root(for: draftId).appendingPathComponent("images")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    private func thumbsDir(for journeyId: String) -> URL {
-        let dir = root(for: journeyId).appendingPathComponent("thumbs")
+    private func thumbsDir(for draftId: String) -> URL {
+        let dir = root(for: draftId).appendingPathComponent("thumbs")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    private func bgDir(for journeyId: String) -> URL {
-        let dir = root(for: journeyId).appendingPathComponent("backgrounds")
+    private func bgDir(for draftId: String) -> URL {
+        let dir = root(for: draftId).appendingPathComponent("backgrounds")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    private func bookFile(for journeyId: String) -> URL {
-        let dir = root(for: journeyId)
+    private func bookFile(for draftId: String) -> URL {
+        let dir = root(for: draftId)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("book.json")
     }
@@ -55,13 +66,59 @@ final class MemoirPersistence {
         return dir
     }
 
+    // MARK: - Borrador → journey
+
+    /// Pasa la carpeta del borrador a llamarse como el journey recién creado.
+    ///
+    /// SOLO se llama cuando el servidor YA confirmó la publicación. Antes de
+    /// eso el borrador es lo único que existe: renombrarlo apuntando a un
+    /// journey que todavía puede fallar dejaría las fotos en una carpeta que
+    /// nadie va a volver a abrir.
+    ///
+    /// Después del renombrado, todo lo que ya existía sigue funcionando sin
+    /// enterarse de que hubo un borrador: la galería borra páginas por
+    /// `journeyId`, el perfil carga miniaturas por `journeyId` y reabrir el
+    /// editor de una recomendación publicada encuentra sus páginas. Las tres
+    /// cosas resuelven contra esta carpeta.
+    ///
+    /// Si el destino ya existe no se pisa: sería el libro de un journey real.
+    @discardableResult
+    func rename(from draftId: String, to journeyId: String) -> Bool {
+        guard draftId != journeyId else { return true }
+        let origen  = root(for: draftId)
+        let destino = root(for: journeyId)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: origen.path) else {
+            print("📓 [rename] no hay borrador \(draftId) que renombrar")
+            return false
+        }
+        if fm.fileExists(atPath: destino.path) {
+            print("📓 [rename] ⚠️ \(journeyId) ya tiene libro — el borrador se queda donde está")
+            return false
+        }
+        do {
+            try fm.moveItem(at: origen, to: destino)
+            print("📓 [rename] borrador \(draftId) → journey \(journeyId)")
+            return true
+        } catch {
+            print("📓 [rename] ❌ \(error)")
+            return false
+        }
+    }
+
+    /// Tira el borrador entero. Solo para el caso en que la publicación falló y
+    /// ya no hay nada que reintentar — nunca en el camino feliz.
+    func discardDraft(_ draftId: String) {
+        try? FileManager.default.removeItem(at: root(for: draftId))
+    }
+
     // MARK: - Save / Load pages
 
-    func save(_ pages: [CollagePage], journeyId: String) {
+    func save(_ pages: [CollagePage], draftId: String) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(pages) else { return }
-        try? data.write(to: bookFile(for: journeyId), options: .atomic)
+        try? data.write(to: bookFile(for: draftId), options: .atomic)
     }
 
     /// Quita una página del libro por su UUID, que es como la identifica el
@@ -69,15 +126,15 @@ final class MemoirPersistence {
     ///
     /// Preferir SIEMPRE esta sobre la variante por índice: el id no cambia al
     /// reordenar ni al filtrarse una página vacía al publicar.
-    func removePage(id: UUID, journeyId: String) {
-        var pages = load(journeyId: journeyId)
+    func removePage(id: UUID, draftId: String) {
+        var pages = load(draftId: draftId)
         guard let index = pages.firstIndex(where: { $0.id == id }) else {
-            print("📓 [removePage] journeyId=\(journeyId) id=\(id) no está en el libro (páginas=\(pages.count))")
+            print("📓 [removePage] draftId=\(draftId) id=\(id) no está en el libro (páginas=\(pages.count))")
             return
         }
         pages.remove(at: index)
-        save(pages, journeyId: journeyId)
-        print("📓 [removePage] journeyId=\(journeyId) id=\(id) → quedan \(pages.count) página(s)")
+        save(pages, draftId: draftId)
+        print("📓 [removePage] draftId=\(draftId) id=\(id) → quedan \(pages.count) página(s)")
     }
 
     /// Variante por posición, SOLO para fotos anteriores a client_page_id.
@@ -86,17 +143,17 @@ final class MemoirPersistence {
     /// publicar se filtran las páginas vacías, así que basta una página sin
     /// contenido antes para desfasarlos. Sin esta traducción se borraba la
     /// página equivocada y la siguiente publicación resucitaba la foto.
-    func removePublishedPage(at publishedIndex: Int, journeyId: String) {
-        var pages = load(journeyId: journeyId)
+    func removePublishedPage(at publishedIndex: Int, draftId: String) {
+        var pages = load(draftId: draftId)
         let published = pages.indices.filter { MemoirPersistence.isPublishable(pages[$0]) }
         guard published.indices.contains(publishedIndex) else {
-            print("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) fuera de rango (publicables=\(published.count) de \(pages.count))")
+            print("📓 [removePublishedPage] draftId=\(draftId) page_index=\(publishedIndex) fuera de rango (publicables=\(published.count) de \(pages.count))")
             return
         }
         let index = published[publishedIndex]
         pages.remove(at: index)
-        save(pages, journeyId: journeyId)
-        print("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) → local[\(index)] → quedan \(pages.count) página(s)")
+        save(pages, draftId: draftId)
+        print("📓 [removePublishedPage] draftId=\(draftId) page_index=\(publishedIndex) → local[\(index)] → quedan \(pages.count) página(s)")
     }
 
     /// Qué páginas llegan al servidor. Vive acá para que el mapeo de índices y
@@ -105,16 +162,16 @@ final class MemoirPersistence {
         !page.itemSnapshots.isEmpty || page.backgroundImageFile != nil
     }
 
-    func load(journeyId: String) -> [CollagePage] {
-        let url = bookFile(for: journeyId)
+    func load(draftId: String) -> [CollagePage] {
+        let url = bookFile(for: draftId)
         guard let data = try? Data(contentsOf: url) else {
-            print("📖 [MemoirPersistence.load] journeyId=\(journeyId) — book.json NOT FOUND at \(url.path)")
+            print("📖 [MemoirPersistence.load] draftId=\(draftId) — book.json NOT FOUND at \(url.path)")
             return []
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let pages = (try? decoder.decode([CollagePage].self, from: data)) ?? []
-        print("📖 [MemoirPersistence.load] journeyId=\(journeyId) — loaded \(pages.count) page(s)")
+        print("📖 [MemoirPersistence.load] draftId=\(draftId) — loaded \(pages.count) page(s)")
         for (i, p) in pages.enumerated() {
             print("📖 [MemoirPersistence.load]   page[\(i)] id=\(p.id) itemSnapshots=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumbFile=\(p.thumbnailFileName ?? "nil")")
         }
@@ -124,13 +181,13 @@ final class MemoirPersistence {
     // MARK: - CanvasViewModel ↔ CollagePage
 
     @MainActor
-    func snapshot(from vm: CanvasViewModel, existing page: CollagePage, journeyId: String) -> CollagePage {
+    func snapshot(from vm: CanvasViewModel, existing page: CollagePage, draftId: String) -> CollagePage {
         var p = page
         p.backgroundRGBA = rgba(of: vm.canvasBackground)
         p.itemSnapshots = vm.items.map { item in
-            let imgFile      = writeImage(item.image,         name: "\(item.id)_img",  journeyId: journeyId, force: true)
-            let origFile     = writeImage(item.originalImage, name: "\(item.id)_orig", journeyId: journeyId, force: false)
-            let borderedFile = item.cachedBorderedImage.map { writeImage($0, name: "\(item.id)_bordered", journeyId: journeyId, force: true) }
+            let imgFile      = writeImage(item.image,         name: "\(item.id)_img",  draftId: draftId, force: true)
+            let origFile     = writeImage(item.originalImage, name: "\(item.id)_orig", draftId: draftId, force: false)
+            let borderedFile = item.cachedBorderedImage.map { writeImage($0, name: "\(item.id)_bordered", draftId: draftId, force: true) }
             return CollageItemSnapshot(
                 id: item.id,
                 imageFile: imgFile,
@@ -151,19 +208,19 @@ final class MemoirPersistence {
     }
 
     @MainActor
-    func restoreVM(from page: CollagePage, journeyId: String) -> CanvasViewModel {
+    func restoreVM(from page: CollagePage, draftId: String) -> CanvasViewModel {
         let vm = CanvasViewModel()
         vm.canvasBackground = color(from: page.backgroundRGBA)
-        vm.backgroundImage  = page.backgroundImageFile.flatMap { loadBackground($0, journeyId: journeyId) }
-        vm.items = buildItems(from: page, journeyId: journeyId)
+        vm.backgroundImage  = page.backgroundImageFile.flatMap { loadBackground($0, draftId: draftId) }
+        vm.items = buildItems(from: page, draftId: draftId)
         return vm
     }
 
-    func buildItems(from page: CollagePage, journeyId: String) -> [CollageItem] {
+    func buildItems(from page: CollagePage, draftId: String) -> [CollageItem] {
         page.itemSnapshots.compactMap { snap in
-            guard let img  = readImage(snap.imageFile,         journeyId: journeyId),
-                  let orig = readImage(snap.originalImageFile, journeyId: journeyId) else { return nil }
-            let bordered = snap.cachedBorderedFile.flatMap { readImage($0, journeyId: journeyId) }
+            guard let img  = readImage(snap.imageFile,         draftId: draftId),
+                  let orig = readImage(snap.originalImageFile, draftId: draftId) else { return nil }
+            let bordered = snap.cachedBorderedFile.flatMap { readImage($0, draftId: draftId) }
             let type: CollageItemType = snap.isSticker ? .sticker(img) : .photo(img)
             var item = CollageItem(
                 id: snap.id,
@@ -189,7 +246,7 @@ final class MemoirPersistence {
     // MARK: - Thumbnails
 
     @MainActor
-    func generateThumbnail(vm: CanvasViewModel, canvasSize: CGSize, pageId: UUID, journeyId: String) -> String? {
+    func generateThumbnail(vm: CanvasViewModel, canvasSize: CGSize, pageId: UUID, draftId: String) -> String? {
         guard canvasSize != .zero else { return nil }
         let bgImage = vm.backgroundImage
 
@@ -214,21 +271,21 @@ final class MemoirPersistence {
         guard let img = renderer.uiImage else { return nil }
         guard let data = img.jpegData(compressionQuality: 0.82) else { return nil }
         let filename = "\(pageId)_thumb.jpg"
-        try? data.write(to: thumbsDir(for: journeyId).appendingPathComponent(filename))
+        try? data.write(to: thumbsDir(for: draftId).appendingPathComponent(filename))
         return filename
     }
 
-    func loadThumbnail(_ filename: String, journeyId: String) -> UIImage? {
-        guard let data = try? Data(contentsOf: thumbsDir(for: journeyId).appendingPathComponent(filename))
+    func loadThumbnail(_ filename: String, draftId: String) -> UIImage? {
+        guard let data = try? Data(contentsOf: thumbsDir(for: draftId).appendingPathComponent(filename))
         else { return nil }
         return UIImage(data: data)
     }
 
     // MARK: - Background strips
 
-    func loadBackground(_ filename: String, journeyId: String) -> UIImage? {
+    func loadBackground(_ filename: String, draftId: String) -> UIImage? {
         // Try journey-specific first, then global
-        let journeyUrl = bgDir(for: journeyId).appendingPathComponent(filename)
+        let journeyUrl = bgDir(for: draftId).appendingPathComponent(filename)
         if let data = try? Data(contentsOf: journeyUrl) { return UIImage(data: data) }
         let globalUrl = globalBgDir.appendingPathComponent(filename)
         guard let data = try? Data(contentsOf: globalUrl) else { return nil }
@@ -275,10 +332,10 @@ final class MemoirPersistence {
     // MARK: - Image helpers
 
     @discardableResult
-    private func writeImage(_ image: UIImage, name: String, journeyId: String, force: Bool = false) -> String {
+    private func writeImage(_ image: UIImage, name: String, draftId: String, force: Bool = false) -> String {
         let ext      = image.hasAlpha ? "png" : "jpg"
         let filename = "\(name).\(ext)"
-        let url      = imagesDir(for: journeyId).appendingPathComponent(filename)
+        let url      = imagesDir(for: draftId).appendingPathComponent(filename)
         if force || !FileManager.default.fileExists(atPath: url.path) {
             let data = image.hasAlpha ? image.pngData() : image.jpegData(compressionQuality: 0.82)
             try? data?.write(to: url)
@@ -286,8 +343,8 @@ final class MemoirPersistence {
         return filename
     }
 
-    private func readImage(_ filename: String, journeyId: String) -> UIImage? {
-        guard let data = try? Data(contentsOf: imagesDir(for: journeyId).appendingPathComponent(filename))
+    private func readImage(_ filename: String, draftId: String) -> UIImage? {
+        guard let data = try? Data(contentsOf: imagesDir(for: draftId).appendingPathComponent(filename))
         else { return nil }
         return UIImage(data: data)
     }

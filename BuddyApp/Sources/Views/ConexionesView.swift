@@ -70,6 +70,9 @@ final class ChatStore: ObservableObject {
             case "audio": return "Mensaje de voz"
             default:
                 let content = msg.content ?? ""
+                // El sobre nuevo primero: sin esto la lista mostraría el JSON
+                // crudo como si fuera lo que alguien escribió.
+                if let resumen = ChatCard.resumen(content) { return resumen }
                 if content.hasPrefix("location:") { return "Ubicación actual" }
                 if content.hasPrefix("place:") {
                     let parts = content.dropFirst("place:".count).split(separator: "|")

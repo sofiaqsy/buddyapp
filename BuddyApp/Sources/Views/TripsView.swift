@@ -1015,7 +1015,7 @@ struct TripFeedCard: View {
         Haptic.success()
         let jId = journey.id
         Task.detached(priority: .utility) {
-            MemoirPersistence.shared.save(updated, journeyId: jId)
+            MemoirPersistence.shared.save(updated, draftId: jId)
             do {
                 try await APIClient.shared.deleteJourneyPage(journeyId: jId, clientPageId: pageId.uuidString)
                 // Las mismas fotos se pintan en Home y en el perfil, que no tienen
@@ -1036,7 +1036,7 @@ struct TripFeedCard: View {
     private func loadPages() {
         let jId = journey.id
         Task.detached(priority: .userInitiated) {
-            let loaded = MemoirPersistence.shared.load(journeyId: jId)
+            let loaded = MemoirPersistence.shared.load(draftId: jId)
             await MainActor.run { pages = loaded }
         }
     }
@@ -1163,8 +1163,8 @@ struct TripPageThumbnailFeed: View {
         let hasContent = pageHasContent
         Task.detached(priority: .userInitiated) {
             // Solo cargamos el thumbnail si la página tiene contenido real
-            let thumb = hasContent ? tFile.flatMap { MemoirPersistence.shared.loadThumbnail($0, journeyId: jId) } : nil
-            let bg    = bFile.flatMap { MemoirPersistence.shared.loadBackground($0, journeyId: jId) }
+            let thumb = hasContent ? tFile.flatMap { MemoirPersistence.shared.loadThumbnail($0, draftId: jId) } : nil
+            let bg    = bFile.flatMap { MemoirPersistence.shared.loadBackground($0, draftId: jId) }
             await MainActor.run { thumbnail = thumb; bgImage = bg }
         }
     }
@@ -1173,7 +1173,6 @@ struct TripPageThumbnailFeed: View {
 // MARK: - TripEditorSheet (editor directo sin book view)
 
 struct TripEditorSheet: View {
-    let journey: APIJourney
     let initialPage: Int
     /// Sumar una foto a una recomendación publica en el mismo gesto: el lugar la
     /// muestra recién cuando el journey está publicado, así que dejarla guardada
@@ -1184,25 +1183,104 @@ struct TripEditorSheet: View {
     @StateObject private var bookVM: TripBookViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var didStart = false
+    /// Falló la publicación y el borrador sigue intacto — se puede reintentar.
+    @State private var publishFailed = false
+
+    /// El journey al que pertenece este libro, si ya existe. Nil para una
+    /// recomendación nueva: ahí el journey NACE AL PUBLICAR, no antes.
+    private let journey: APIJourney?
+    /// Spot que se está recomendando, para crear el journey al publicar.
+    private let spotId: String?
+    /// Carpeta de disco del libro. Para un journey existente es su propio id
+    /// —así reabrir una recomendación publicada encuentra sus páginas—; para un
+    /// borrador, un UUID nuevo.
+    private let draftId: String
 
     init(journey: APIJourney, initialPage: Int, publishesOnSave: Bool = false, onDismiss: @escaping () -> Void) {
         self.journey = journey
+        self.spotId = journey.spot?.id
+        self.draftId = journey.id
         self.initialPage = initialPage
         self.publishesOnSave = publishesOnSave
         self.onDismiss = onDismiss
-        _bookVM = StateObject(wrappedValue: TripBookViewModel(journeyId: journey.id))
+        _bookVM = StateObject(wrappedValue: TripBookViewModel(draftId: journey.id))
     }
 
+    /// Recomendación NUEVA: no hay journey todavía y puede que nunca lo haya.
+    ///
+    /// El borrador es local y su id no significa nada fuera de este dispositivo
+    /// — a propósito. Derivarlo del spot habría dado "reabrir el borrador
+    /// gratis", pero también habría metido en el sistema de archivos la regla
+    /// de que un lugar tiene una sola recomendación, que es una decisión de
+    /// producto y puede cambiar.
+    init(spotId: String, initialPage: Int, onDismiss: @escaping () -> Void) {
+        self.journey = nil
+        self.spotId = spotId
+        let nuevo = UUID().uuidString
+        self.draftId = nuevo
+        self.initialPage = initialPage
+        self.publishesOnSave = true
+        self.onDismiss = onDismiss
+        _bookVM = StateObject(wrappedValue: TripBookViewModel(draftId: nuevo))
+    }
+
+    /// Publicar es lo que hace existir la recomendación en el servidor.
+    ///
+    ///     crear journey → subir → PATCH → ¿ok?
+    ///                                      sí → renombrar el borrador
+    ///                                      no → cancelar el journey, conservar
+    ///                                           el borrador, ofrecer reintento
+    ///
+    /// El renombrado va DESPUÉS de que el servidor confirmó, nunca antes: si se
+    /// hiciera al crear el journey o entre la subida y el PATCH, un fallo
+    /// dejaría las fotos en una carpeta que ya nadie vuelve a abrir.
+    ///
+    /// Y si algo falla después de crear el journey, se cancela. Sin eso, cada
+    /// corte de red intermitente dejaría exactamente el huérfano que todo este
+    /// cambio viene a evitar.
     private func publish() {
-        // Mismo filtro que el resto de las publicaciones: las páginas vacías no
-        // llegan al servidor.
         let pages = bookVM.pages.filter(MemoirPersistence.isPublishable)
-        let jId = journey.id
+        let existente = journey
+        let borrador = draftId
+        let spot = spotId
         Task {
-            try? await APIClient.shared.publishJourney(journeyId: jId, tripId: journey.tripId, pages: pages)
-            await MainActor.run {
-                Haptic.success()
-                NotificationCenter.default.post(name: .journeyPublished, object: jId)
+            var creado: APIJourney? = nil
+            do {
+                let destino: APIJourney
+                if let existente {
+                    destino = existente
+                } else {
+                    guard let spot else {
+                        print("📓 [publish] ❌ sin journey y sin spot — no hay dónde publicar")
+                        await MainActor.run { publishFailed = true }
+                        return
+                    }
+                    destino = try await APIClient.shared.createJourney(spotId: spot, attachToTrip: false)
+                    creado = destino
+                    print("📓 [publish] journey creado al publicar: \(destino.id.prefix(8))")
+                }
+
+                try await APIClient.shared.publishJourney(
+                    journeyId: destino.id, tripId: destino.tripId,
+                    pages: pages, localKey: borrador)
+
+                // Recién acá: el servidor ya aceptó la recomendación.
+                MemoirPersistence.shared.rename(from: borrador, to: destino.id)
+
+                await MainActor.run {
+                    Haptic.success()
+                    NotificationCenter.default.post(name: .journeyPublished, object: destino.id)
+                }
+            } catch {
+                print("📓 [publish] ❌ \(error)")
+                if let creado {
+                    // Compensación: el journey nació en ESTE intento y no llegó
+                    // a publicarse. Se cancela para no dejarlo suelto; el
+                    // borrador queda intacto y el reintento crea uno nuevo.
+                    print("📓 [publish] revirtiendo journey \(creado.id.prefix(8)) — la publicación no se completó")
+                    try? await APIClient.shared.cancelJourney(journeyId: creado.id)
+                }
+                await MainActor.run { publishFailed = true }
             }
         }
     }
@@ -1233,6 +1311,13 @@ struct TripEditorSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .onChange(of: bookVM.isEditing) { _, editing in
                 if !editing { dismiss() }
+            }
+            // El borrador sigue en disco: reintentar no vuelve a pedir las fotos.
+            .alert("No pudimos publicar", isPresented: $publishFailed) {
+                Button("Reintentar") { publish() }
+                Button("Ahora no", role: .cancel) {}
+            } message: {
+                Text("Tus fotos siguen guardadas. Revisa tu conexión e inténtalo de nuevo.")
             }
     }
 }

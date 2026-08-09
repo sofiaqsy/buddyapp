@@ -184,6 +184,16 @@ final class PlaceDeepLink: ObservableObject {
         let lat: Double
         let lng: Double
         let name: String
+        /// Spot del catálogo, cuando quien navega lo conoce.
+        ///
+        /// Sin él solo se puede buscar por nombre o por cercanía, que es lo que
+        /// hacía la única vía que existía (`place:lat|lng|name`): dos locales a
+        /// veinte metros o dos con el mismo nombre se confunden. Con el id la
+        /// ficha que se abre es exactamente la que se compartió.
+        var spotId: String? = nil
+        /// Destino al que pertenece el spot — es la guía que hay que cargar
+        /// antes de poder enfocarlo dentro de ella.
+        var destinationId: String? = nil
     }
 
     func consume() -> PendingPlace? {

@@ -3,9 +3,14 @@ import CoreLocation
 
 // MARK: - Fase 2 de "Buddy Community Places": el CTA en Tu Trip para que un
 // buddy aprobado documente un lugar suelto, sin que eso toque su trip
-// personal — reutiliza createJourney(attachToTrip: false) y el mismo editor
-// Memoir del flujo normal. Deliberadamente discreta: si el uso confirma la
-// idea, se le da más protagonismo en una segunda versión.
+// personal — reutiliza el mismo editor Memoir del flujo normal. Deliberadamente
+// discreta: si el uso confirma la idea, se le da más protagonismo en una
+// segunda versión.
+//
+// Elegir un lugar aquí NO escribe nada en el servidor. El journey nace al
+// publicar la primera foto (ver TripEditorSheet.publish): antes se creaba al
+// elegir, y quien se arrepentía dejaba uno vivo que el Home mostraba después
+// como un viaje en curso que nadie había creado.
 
 // MARK: - Card
 
@@ -60,20 +65,19 @@ struct CompartirLugarSheet: View {
     /// Spots que quien abre esta hoja YA recomienda, en minúsculas.
     ///
     /// Elegir uno de estos no es empezar una recomendación: es volver a la que
-    /// ya existe para sumarle fotos. Se corta antes de llamar al backend, y no
-    /// solo para ahorrar la llamada — `createJourney` deduplica únicamente
-    /// contra journeys en 'active' o 'planning', así que un lugar ya publicado
-    /// (que está en 'completed') no se reconoce y cada toque dejaba un journey
-    /// nuevo, vacío e invisible.
+    /// ya existe para sumarle fotos. Se va a su ficha, donde "Añadir foto"
+    /// reabre la recomendación publicada en vez de abrir un borrador nuevo.
+    /// Sin este corte, el mismo lugar acabaría con dos recomendaciones.
     var alreadyRecommended: Set<String> = []
 
     /// Se llama con el id del spot cuando el elegido ya estaba recomendado. No
     /// se creó nada: el llamador solo tiene que llevar a su ficha.
     var onExisting: (String) -> Void = { _ in }
 
-    /// Se llama cuando el journey ya existe en el backend (creado o reutilizado)
-    /// — el llamador decide qué hacer (típicamente: abrir el editor Memoir).
-    let onCreated: (APIJourney) -> Void
+    /// Se llama con el lugar elegido. NO se creó nada en el servidor: el
+    /// llamador solo tiene que llevar a su ficha, donde "Añadir foto" abre un
+    /// borrador local y el journey nace recién al publicar.
+    let onChosen: (APIPlaceCard) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var step: Step = .choose
@@ -134,7 +138,7 @@ struct CompartirLugarSheet: View {
             // nombre, tocarlo ES la elección — una segunda pantalla preguntando
             // "¿en cuál estás?" repetiría la pregunta que este botón responde.
             if let current = nearbySpots.first {
-                Button { Haptic.medium(); submit(spotId: current.id) } label: {
+                Button { Haptic.medium(); submit(spot: current) } label: {
                     optionRow(
                         icon: "location.fill",
                         title: "\(current.name) (Lugar actual)",
@@ -148,7 +152,7 @@ struct CompartirLugarSheet: View {
                 // Los demás dentro del radio: el GPS puede errar por unos metros
                 // y dos locales caben en ese margen.
                 ForEach(nearbySpots.dropFirst().prefix(4)) { spot in
-                    Button { Haptic.medium(); submit(spotId: spot.id) } label: {
+                    Button { Haptic.medium(); submit(spot: spot) } label: {
                         optionRow(
                             icon: "mappin.circle.fill",
                             title: spot.name,
@@ -372,14 +376,24 @@ struct CompartirLugarSheet: View {
         isSubmitting = true
         Task {
             do {
+                // El spot SÍ se propone: es el lugar en sí, y el admin lo tiene
+                // que revisar exista o no una recomendación. Lo que ya no se
+                // crea acá es el journey — ése nace al publicar la primera foto.
                 let spot = try await APIClient.shared.proposeSpot(
                     name: name, lat: coords.lat, lng: coords.lng, categoryId: selectedCategoryId
                 )
-                let journey = try await APIClient.shared.createJourney(spotId: spot.id, attachToTrip: false)
                 await MainActor.run {
                     isSubmitting = false
                     dismiss()
-                    onCreated(journey)
+                    onChosen(APIPlaceCard(
+                        id: spot.id, name: spot.name,
+                        destinationId: nil, destinationName: nil,
+                        lat: spot.lat, lng: spot.lng,
+                        coverUrl: spot.coverUrl, coverUrls: nil, coverPhotos: nil,
+                        coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+                        category: nil, status: spot.status,
+                        photoCount: 0, isNew: true,
+                        buddyCount: 0, buddies: []))
                 }
             } catch {
                 await MainActor.run {
@@ -439,7 +453,7 @@ struct CompartirLugarSheet: View {
             }
 
             List(searchResults) { spot in
-                Button { Haptic.medium(); errorMessage = nil; submit(spotId: spot.id) } label: {
+                Button { Haptic.medium(); errorMessage = nil; submit(spot: spot) } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(spot.name).font(BT.body).foregroundStyle(Color.ink)
                         HStack(spacing: 6) {
@@ -488,39 +502,33 @@ struct CompartirLugarSheet: View {
 
     // MARK: – Envío común
 
-    private func submit(destinationId: String? = nil, placeId: String? = nil, spotId: String? = nil, lat: Double? = nil, lng: Double? = nil) {
-        // Ya lo recomienda: no hay nada que crear. Comparación insensible a
-        // mayúsculas porque los UUID viajan con distinto casing según de qué
-        // endpoint vengan.
-        if let spotId, alreadyRecommended.contains(spotId.lowercased()) {
-            print("🌍 [CompartirLugarSheet] spot=\(spotId.prefix(8)) ya recomendado — a su ficha, sin crear journey")
+    /// Elegir un lugar YA NO ESCRIBE NADA.
+    ///
+    /// Antes esto creaba el journey en el acto, y el usuario que se arrepentía
+    /// dejaba uno vivo para siempre: el Home lo mostraba después como un viaje
+    /// en curso que nadie había creado. El journey nace ahora al publicar la
+    /// primera foto — hasta entonces solo hay un borrador en este teléfono.
+    private func submit(spot: APINearbySpot) {
+        // Ya lo recomienda: se va a su ficha a sumarle fotos, no se empieza de
+        // nuevo. Comparación insensible a mayúsculas porque los UUID viajan con
+        // distinto casing según de qué endpoint vengan.
+        if alreadyRecommended.contains(spot.id.lowercased()) {
+            print("🌍 [CompartirLugarSheet] spot=\(spot.id.prefix(8)) ya recomendado — a su ficha")
             dismiss()
-            onExisting(spotId)
+            onExisting(spot.id)
             return
         }
-        isSubmitting = true
-        Task {
-            do {
-                let journey = try await APIClient.shared.createJourney(
-                    destinationId: destinationId,
-                    placeId: placeId,
-                    spotId: spotId,
-                    lat: lat,
-                    lng: lng,
-                    attachToTrip: false
-                )
-                await MainActor.run {
-                    isSubmitting = false
-                    dismiss()
-                    onCreated(journey)
-                }
-            } catch {
-                await MainActor.run {
-                    isSubmitting = false
-                    errorMessage = "No pudimos compartir este lugar. Inténtalo de nuevo."
-                    print("❌ [CompartirLugarSheet] createJourney failed: \(error)")
-                }
-            }
-        }
+        print("🌍 [CompartirLugarSheet] spot=\(spot.id.prefix(8)) elegido — sin crear nada todavía")
+        dismiss()
+        onChosen(APIPlaceCard(
+            id: spot.id, name: spot.name,
+            destinationId: spot.destinationId ?? spot.destination?.id,
+            destinationName: spot.destination?.name,
+            lat: spot.lat, lng: spot.lng,
+            coverUrl: spot.coverUrl, coverUrls: nil, coverPhotos: nil,
+            coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+            category: nil, status: spot.status,
+            photoCount: 0, isNew: true,
+            buddyCount: 0, buddies: []))
     }
 }
