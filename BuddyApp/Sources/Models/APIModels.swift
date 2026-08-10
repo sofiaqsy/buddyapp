@@ -357,6 +357,12 @@ struct APISpotRef: Decodable {
     let name: String
     let lat: Double?
     let lng: Double?
+    /// El destino al que pertenece. El backend lo resuelve y lo devuelve desde
+    /// siempre; el modelo no lo declaraba, así que se descartaba al decodificar
+    /// — y sin él la ficha del lugar no se puede abrir: PlaceGuideMapSheet
+    /// necesita el destino para cargar su guía, y sin destino cae a un pin
+    /// suelto en el mapa, que no tiene "Añadir foto".
+    let destinationId: String?
     let coverUrl: String?
     /// "approved" | "pending" — pending = propuesto por un buddy, aún sin
     /// aprobar en el admin. El buddy ya puede documentarlo mientras tanto.

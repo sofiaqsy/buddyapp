@@ -387,7 +387,10 @@ struct CompartirLugarSheet: View {
                     dismiss()
                     onChosen(APIPlaceCard(
                         id: spot.id, name: spot.name,
-                        destinationId: nil, destinationName: nil,
+                        // Sin esto la ficha no abre: se navegaba a un pin suelto
+                        // y "Añadir foto" no existe ahí. El lugar quedaba
+                        // propuesto y sin forma de documentarlo.
+                        destinationId: spot.destinationId, destinationName: nil,
                         lat: spot.lat, lng: spot.lng,
                         coverUrl: spot.coverUrl, coverUrls: nil, coverPhotos: nil,
                         coverAuthorName: nil, coverAuthorAvatarUrl: nil,
