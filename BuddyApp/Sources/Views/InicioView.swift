@@ -67,6 +67,10 @@ struct InicioView: View {
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
     @State private var exploreCards: [APIPlaceCard] = []   // carrusel "Explora {ciudad}" del composer
+    /// De qué destino son las cards que hay ahora en pantalla. Sin esto no se
+    /// puede saber si están al día: el Home cambiaba de sitio y el carrusel se
+    /// quedaba con las fotos del anterior.
+    @State private var exploreCardsDestinationId: String? = nil
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
@@ -1047,6 +1051,40 @@ struct InicioView: View {
         }
     }
 
+    /// Los lugares recomendados del destino en el que se está AHORA.
+    ///
+    /// Se limpia antes de pedir: mientras llega la respuesta no puede quedarse
+    /// en pantalla lo del sitio anterior. Al llegar a Miraflores, el título
+    /// decía Miraflores y las fotos seguían siendo de Lima — el Home
+    /// contradiciéndose a sí mismo.
+    ///
+    /// Sin relleno con destinos vecinos a propósito: si aquí todavía no hay
+    /// nada recomendado, la sección va vacía. Rellenar esconde justo dónde
+    /// falta contenido de la comunidad.
+    private func refreshExploreCards(destinationId: String?) async {
+        let actual = await MainActor.run { exploreCardsDestinationId }
+        guard actual != destinationId else { return }
+
+        await MainActor.run {
+            exploreCardsDestinationId = destinationId
+            exploreCards = []
+        }
+        guard let destinationId else { return }
+
+        let fetched = (try? await APIClient.shared.fetchPlaceCards(destinationId: destinationId)) ?? []
+        await MainActor.run {
+            // El destino pudo volver a cambiar mientras esta petición volvía.
+            // Sin esta comprobación, la respuesta lenta de un sitio del que ya
+            // te fuiste pisaría la del sitio donde estás.
+            guard exploreCardsDestinationId == destinationId else {
+                print("🌍 [refreshExploreCards] respuesta tardía de \(destinationId.prefix(8)) descartada")
+                return
+            }
+            exploreCards = fetched
+            print("🌍 [refreshExploreCards] \(destinationId.prefix(8)) → \(fetched.count) lugar(es)")
+        }
+    }
+
     private func _refreshHomeCommunityContextBody() async {
         // Si el contexto elegido es un trip, cargar el contexto de SU destino o
         // lugar (no necesariamente liveJourneys.first — puede ser cualquiera de
@@ -1071,6 +1109,7 @@ struct InicioView: View {
                 }
                 print("🏠 [refreshHomeCommunityContext] ❌ no context found — pioneer mode")
             }
+            await refreshExploreCards(destinationId: j.destination?.id ?? j.destinationId)
             return
         }
         // Sin trip activo — el backend resuelve el destino real (polígono → radio).
@@ -1091,6 +1130,8 @@ struct InicioView: View {
                 await loadCommunityPulseIfNeeded()
 
                 // Cargar contexto de la comunidad de este destino
+                await refreshExploreCards(destinationId: resolution.destinationId)
+
                 if let ctx = await PlaceContextRepository.shared.context(id: resolution.destinationId, source: "destination") {
                     await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
                     print("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
@@ -1099,6 +1140,8 @@ struct InicioView: View {
             } else {
                 print("🏠 [refreshHomeCommunityContext] ⚠️  no location match")
                 await MainActor.run { resolvedLocation = nil }
+                // Sin destino no hay nada que recomendar "aquí".
+                await refreshExploreCards(destinationId: nil)
             }
 
             // Sin match: pioneer mode
@@ -1337,6 +1380,9 @@ struct InicioView: View {
         // el composer alcanza a pintar la grilla de categorías vacía de
         // fotos y recién after eso salta al carrusel, un flash visible.
         async let dests = APIClient.shared.fetchDestinations()
+        // Sin destino resuelto todavía: se piden por coordenadas para no dejar
+        // el carrusel vacío en el primer frame. En cuanto el GPS resuelve,
+        // refreshExploreCards() los reemplaza por los del destino exacto.
         async let explore = APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng)
         await MainActor.run { LoadDataTrace.fase(traceId, "destinos+explore") }
         let fetchedDests = (try? await dests) ?? []
