@@ -1390,7 +1390,15 @@ struct PlaceGuideDetailSheet: View {
             if galleryVM.isLoadingFirstPage {
                 ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
             } else if galleryVM.photos.isEmpty {
-                if myBuddyRecommendation != nil {
+                // La misma condición que dentro de addPhotoTile.
+                //
+                // Aquí había una segunda puerta —solo `myBuddyRecommendation`—
+                // que sobrevivió al cambio: un lugar recién propuesto no tiene
+                // journey todavía (nace al publicar), así que la baldosa se
+                // relajó adentro y este `if` la seguía tapando afuera. El lugar
+                // quedaba creado y sin forma de documentarlo, que es
+                // exactamente el callejón sin salida que veníamos a cerrar.
+                if myBuddyRecommendation != nil || canRecommend {
                     HStack { addPhotoTile; Spacer() }.padding(.horizontal, 20)
                 } else {
                     emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")

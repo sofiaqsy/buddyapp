@@ -1270,6 +1270,21 @@ struct TripEditorSheet: View {
                 await MainActor.run {
                     Haptic.success()
                     NotificationCenter.default.post(name: .journeyPublished, object: destino.id)
+                    // Y TAMBIÉN placePhotosChanged: las fotos de ESTE LUGAR
+                    // cambiaron.
+                    //
+                    // Solo el borrado la emitía, así que el mapa —que guarda la
+                    // portada de cada spot dentro de `route`, en memoria y en
+                    // disco— nunca se enteraba de una foto NUEVA. Publicar la
+                    // primera de un lugar recién propuesto lo dejaba con el
+                    // degradado de relleno: la foto estaba subida y el sitio
+                    // seguía viéndose vacío hasta cambiar de destino.
+                    //
+                    // Las dos avisan de la misma consecuencia por caminos
+                    // distintos: journeyPublished es "se publicó" (toast, feed,
+                    // perfil) y placePhotosChanged es "las fotos del lugar ya no
+                    // son las que tenías cacheadas".
+                    NotificationCenter.default.post(name: .placePhotosChanged, object: destino.id)
                 }
             } catch {
                 print("📓 [publish] ❌ \(error)")
