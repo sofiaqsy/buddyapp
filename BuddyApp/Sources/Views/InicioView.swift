@@ -39,6 +39,10 @@ struct InicioView: View {
     /// Reemplaza al viejo nearestDestination (5 destacados + radio 50 km), que
     /// podía elegir un destino vecino equivocado (ej: La Merced estando en Villa Rica).
     @State private var resolvedLocation: APILocationResolution? = nil
+    /// Cuándo y DÓNDE se resolvió por última vez. Las dos cosas: el destino de
+    /// un punto no cambia con el tiempo, cambia al moverse.
+    @State private var ultimaResolucionAt: Date? = nil
+    @State private var ultimaResolucionCoord: (Double, Double)? = nil
     /// Selección MANUAL del contexto Home (selector Ubicación actual / Mi viaje).
     /// nil = sin override — se aplican las reglas de default (ver effectiveHomeContext).
     @State private var homeContextOverride: HomeContext? = nil
@@ -638,6 +642,13 @@ struct InicioView: View {
                         guard router.selectedTab == .inicio else { return }
                         let age = Date().timeIntervalSince(lastRefreshTripStateAt ?? .distantPast)
                         guard age >= 10 else { return }
+                        // Reservar el turno AQUÍ, no dentro de la Task.
+                        //
+                        // onAppear corre síncrono y refreshTripState arranca en
+                        // una Task: dos onAppear seguidos —lo que hace el
+                        // TabView— leían los dos la marca vieja y programaban
+                        // los dos su refresco antes de que ninguno la escribiera.
+                        lastRefreshTripStateAt = Date()
                         Task { await refreshTripState() }
                     }
                 }
@@ -674,6 +685,7 @@ struct InicioView: View {
                     guard new == 0, old > 0 else { return }
                     let age = Date().timeIntervalSince(lastRefreshTripStateAt ?? .distantPast)
                     guard age >= 10 else { return }
+                    lastRefreshTripStateAt = Date()   // ver el comentario del onAppear
                     Task { await refreshTripState() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
@@ -1119,10 +1131,36 @@ struct InicioView: View {
         if let loc = locationService.userLocation {
             let lat = loc.coordinate.latitude
             let lng = loc.coordinate.longitude
+
+            // Resolver el MISMO punto da el MISMO destino.
+            //
+            // Esta llamada salía en cada aparición del Home —tres por sesión de
+            // pasear entre tabs, una de ellas de 1247 ms— para contestar siempre
+            // "Lima". Lo que la vuelve a hacer necesaria no es el tiempo sino
+            // MOVERSE, así que el guardia mira las dos cosas: 150 m es más que
+            // el ruido del GPS parado y menos que cualquier cambio de barrio.
+            let yaResuelto = await MainActor.run { resolvedLocation }
+            if let previa = ultimaResolucionAt, let coord = ultimaResolucionCoord,
+               let resolution = yaResuelto,
+               Date().timeIntervalSince(previa) < 60,
+               CLLocation(latitude: coord.0, longitude: coord.1)
+                   .distance(from: CLLocation(latitude: lat, longitude: lng)) < 150 {
+                print("🏠 [refreshHomeCommunityContext] ubicación en caché — \(resolution.destinationName), sin moverse")
+                await loadRecentHelp()
+                await loadCommunityPulseIfNeeded()
+                await refreshExploreCards(destinationId: resolution.destinationId)
+                if let ctx = await PlaceContextRepository.shared.context(id: resolution.destinationId, source: "destination") {
+                    await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+                }
+                return
+            }
+
             print("🏠 [refreshHomeCommunityContext] no trip — resolving location: lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng))")
 
             // LocationResolverService en backend: polígonos → radio → nil
             if let resolution = try? await APIClient.shared.resolveLocation(lat: lat, lng: lng) {
+                ultimaResolucionAt = Date()
+                ultimaResolucionCoord = (lat, lng)
                 print("🏠 [refreshHomeCommunityContext] ✅ resolved: \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
                 await MainActor.run { resolvedLocation = resolution }
                 // Con el destino resuelto ya se puede cargar "Comunidad viva"

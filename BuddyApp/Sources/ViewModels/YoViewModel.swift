@@ -58,7 +58,11 @@ final class ProfileRepository {
         var destinations: [APIDestination]
     }
 
-    let cache = TimedCache<Profile>(ttl: 10)
+    // 60 s y no 10: el perfil cambia por ACCIONES del propio usuario —publicar,
+    // borrar, cambiar avatar o bio— y todas invalidan la caché explícitamente
+    // (invalidateProfile/invalidatePhotos). Los 10 s solo lograban que entrar
+    // dos veces al tab en medio minuto costara otra ronda de peticiones.
+    let cache = TimedCache<Profile>(ttl: 60)
 
     /// El usuario, y nada más. Se pide aparte del resto del bloque para que la
     /// cabecera aparezca sin esperar a stickers ni destinos.
@@ -100,7 +104,7 @@ final class TripsRepository {
         var hasMore: Bool
     }
 
-    let cache = TimedCache<Page>(ttl: 10)
+    let cache = TimedCache<Page>(ttl: 60)
 
     func fetch(travelerId: String, cursor: String?) async -> FeedPage? {
         try? await APIClient.shared.fetchUserTrips(travelerId: travelerId, cursor: cursor)
@@ -117,7 +121,7 @@ final class SharesRepository {
     static let shared = SharesRepository()
     private init() {}
 
-    let cache = TimedCache<[APIPlaceCard]>(ttl: 10)
+    let cache = TimedCache<[APIPlaceCard]>(ttl: 60)
 
     func fetch(travelerId: String) async -> [APIPlaceCard]? {
         try? await APIClient.shared.fetchUserShares(travelerId: travelerId)
