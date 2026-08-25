@@ -64,6 +64,33 @@ final class ProfileRepository {
     // dos veces al tab en medio minuto costara otra ronda de peticiones.
     let cache = TimedCache<Profile>(ttl: 60)
 
+    /// ¿Buddy aprobado?
+    ///
+    /// Vive aquí y no en YoViewModel porque la respuesta hace falta FUERA del
+    /// tab Yo: la ficha de un lugar ofrece "Añadir foto" solo a quien puede
+    /// recomendar, y a esa ficha se llega desde el Home. Preguntándoselo al
+    /// perfil, el Home mostraba la ficha recortada a un buddy aprobado solo por
+    /// no haber pasado nunca por su propio tab.
+    ///
+    /// Se resuelve una vez por sesión: la aprobación la concede un admin, no
+    /// cambia mientras la app está abierta.
+    private var buddyAprobado: Bool?
+
+    func esBuddyAprobado() async -> Bool {
+        if let ya = buddyAprobado { return ya }
+        // Si el perfil ya se cargó, la respuesta está ahí: sin pedir nada.
+        if let perfil = cache.stale(), let estado = perfil.buddyMe?.profile?.verificationStatus {
+            buddyAprobado = (estado == "approved")
+            return buddyAprobado!
+        }
+        let me = try? await APIClient.shared.fetchBuddyMe()
+        buddyAprobado = (me?.profile?.verificationStatus == "approved")
+        return buddyAprobado!
+    }
+
+    /// Tras hacerse buddy o cambiar su estado, la respuesta cacheada ya no vale.
+    func olvidarEstadoBuddy() { buddyAprobado = nil }
+
     /// El usuario, y nada más. Se pide aparte del resto del bloque para que la
     /// cabecera aparezca sin esperar a stickers ni destinos.
     ///
@@ -417,6 +444,8 @@ final class YoViewModel: ObservableObject {
     func becomeBuddy() async throws -> APIBuddyMe? {
         let result = try await APIClient.shared.becomeBuddy()
         ProfileRepository.shared.cache.invalidate()
+        // Acaba de cambiar justo lo que esa respuesta memoriza.
+        ProfileRepository.shared.olvidarEstadoBuddy()
         buddyMe = try? await APIClient.shared.fetchBuddyMe()
         return result
     }
@@ -436,6 +465,7 @@ final class YoViewModel: ObservableObject {
     }
 
     func signedOut() {
+        ProfileRepository.shared.olvidarEstadoBuddy()
         ProfileRepository.shared.cache.clear()
         TripsRepository.shared.cache.clear()
         SharesRepository.shared.cache.clear()

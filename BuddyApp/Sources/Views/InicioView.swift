@@ -39,6 +39,11 @@ struct InicioView: View {
     /// Reemplaza al viejo nearestDestination (5 destacados + radio 50 km), que
     /// podía elegir un destino vecino equivocado (ej: La Merced estando en Villa Rica).
     @State private var resolvedLocation: APILocationResolution? = nil
+    /// Si quien mira puede recomendar lugares. La ficha lo necesita para
+    /// ofrecer "Añadir foto", y desde el Home se llega a ella igual que desde
+    /// el perfil — pero llegando por aquí iba siempre en falso, así que a un
+    /// buddy aprobado se le escondía la única entrada para documentar un lugar.
+    @State private var puedoRecomendar = false
     /// Cuándo y DÓNDE se resolvió por última vez. Las dos cosas: el destino de
     /// un punto no cambia con el tiempo, cambia al moverse.
     @State private var ultimaResolucionAt: Date? = nil
@@ -607,13 +612,14 @@ struct InicioView: View {
                         .environmentObject(routeStore)
                 }
                 .navigationDestination(for: APIPlaceCard.self) { place in
-                    PlaceGuideMapSheet(place: place)
+                    PlaceGuideMapSheet(place: place, canRecommend: puedoRecomendar)
                 }
                 .navigationDestination(for: TravelerProfileRoute.self) { r in
                     UserProfileView(route: r)
                 }
                 .navigationDestination(for: DestinationMapRoute.self) { route in
-                    PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
+                    PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name,
+                                       canRecommend: puedoRecomendar)
                 }
                 .navigationDestination(for: String.self) { route in
                     stringDestination(route: route)
@@ -622,6 +628,8 @@ struct InicioView: View {
                     probe.evento("⏩ .task DISPARADO (hasLoaded=\(hasLoaded))")
                     guard !hasLoaded else { return }
                     hasLoaded = true
+                    // Una vez por sesión y desde caché si el perfil ya cargó.
+                    puedoRecomendar = await ProfileRepository.shared.esBuddyAprobado()
                     await loadData()
                 }
                 .onDisappear {
