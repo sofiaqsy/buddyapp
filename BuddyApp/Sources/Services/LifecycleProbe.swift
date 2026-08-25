@@ -24,6 +24,12 @@ import SwiftUI
 final class LifecycleProbe: ObservableObject {
     private let nombre: String
     private var renders = 0
+    /// El detalle del render anterior, para saber si algo cambió.
+    private var detallePrevio: String? = nil
+    /// Renders en los que NADA de lo que la vista usa había cambiado. Son
+    /// trabajo puro: SwiftUI reconstruyó el árbol para pintar lo mismo.
+    private var estériles = 0
+    private var ultimoRender = CFAbsoluteTimeGetCurrent()
 
     init(_ nombre: String) {
         self.nombre = nombre
@@ -42,8 +48,28 @@ final class LifecycleProbe: ObservableObject {
     /// esa vista use — que es justo el caso que queda por explicar.
     func render(_ detalle: String? = nil) {
         renders += 1
+        let ahora = CFAbsoluteTimeGetCurrent()
+        let desde = Int((ahora - ultimoRender) * 1000)
+        ultimoRender = ahora
+
+        // Estéril = mismo estado que el render anterior. Con el detalle ya
+        // impreso al lado, contarlos convierte "hay muchos renders" en "de
+        // estos N, M no tenían nada nuevo que mostrar", que es lo accionable:
+        // los estériles se eliminan sin cambiar lo que el usuario ve.
+        let esEsteril = detalle != nil && detalle == detallePrevio
+        if esEsteril { estériles += 1 }
+        detallePrevio = detalle
+
         let d = detalle.map { "  ·  \($0)" } ?? ""
-        print("🧬 [\(nombre)] body #\(renders)\(d)")
+        let marca = esEsteril ? "  ⚠️ estéril (nada cambió, +\(desde) ms)" : ""
+        print("🧬 [\(nombre)] body #\(renders)\(d)\(marca)")
+    }
+
+    /// Cuánto del trabajo de esta vista fue en vano.
+    func resumenDeRenders() {
+        guard renders > 0 else { return }
+        let pct = estériles * 100 / renders
+        print("🧬 [\(nombre)] ── \(renders) render(s), \(estériles) estéril(es) (\(pct)%) ──")
     }
 
     func evento(_ que: String) {

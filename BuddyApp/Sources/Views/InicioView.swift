@@ -623,6 +623,7 @@ struct InicioView: View {
                 .onDisappear {
                     probe.evento("👋 onDisappear")
                     APIClient.resumenDePeticiones("al salir del Home")
+                    probe.resumenDeRenders()
                     RenderMetrics.resumen("al salir del Home", deUnTotalDe: publicJourneys.count)
                     ImageCache.resumen("al salir del Home")
                 }
@@ -1505,6 +1506,7 @@ struct InicioView: View {
         // refreshHomeCommunityContext arriba.
         await loadCommunityPulseIfNeeded()
         APIClient.resumenDePeticiones("fin del arranque")
+        probe.resumenDeRenders()
         RenderMetrics.resumen("fin del arranque", deUnTotalDe: await MainActor.run { publicJourneys.count })
         ImageCache.resumen("fin del arranque")
     }

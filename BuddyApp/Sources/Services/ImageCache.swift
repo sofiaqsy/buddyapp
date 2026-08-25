@@ -42,6 +42,10 @@ final class ImageCache {
         // son lo mismo y no deberían leerse como un solo número.
         if decodes > 0 { print("📊 [ImageCache]   \(decodes) decodificación(es) de disco compartida(s) ✅") }
         if descargas > 0 { print("📊 [ImageCache]   \(descargas) descarga(s) de red evitada(s) ✅") }
+        let fallos = s["falloDisco"] ?? 0
+        if fallos > 0 {
+            print("📊 [ImageCache]   \(fallos) fallo(s) de disco → se pagó red por algo que ya se había bajado ⚠️")
+        }
     }
 
     func get(_ url: URL) -> UIImage? {
@@ -52,11 +56,25 @@ final class ImageCache {
             return img
         }
         let file = diskURL.appendingPathComponent(key)
+        let t0 = CFAbsoluteTimeGetCurrent()
         if let data = try? Data(contentsOf: file), let img = UIImage(data: data) {
             memory.setObject(img, forKey: key as NSString, cost: data.count)
             ImageCache.contar("disco")
-            ImageCache.logOrigin("disco", url)
+            // Cuánto cuesta un acierto de disco: es leer + DECODIFICAR un JPEG,
+            // y a 20 imágenes por pantalla eso se nota aunque cada una parezca
+            // barata.
+            ImageCache.logOrigin("disco \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms", url)
             return img
+        }
+        // El disco no acertó NUNCA en la sesión medida (disco=0, red=21) y eso
+        // no puede ser normal: son las mismas fotos entre arranques. O el
+        // archivo no está —nunca se escribió, o se limpió— o la clave cambió,
+        // que es lo que pasa cuando la URL trae un ?v= distinto para el mismo
+        // contenido. La línea dice cuál de las dos.
+        ImageCache.contar("falloDisco")
+        if ImageCache.debeLoguearFallo(url) {
+            let existe = FileManager.default.fileExists(atPath: file.path)
+            print("🖼️ [ImageCache] ✗ disco \(existe ? "ILEGIBLE" : "sin archivo") ← \(ImageCache.shortLog(url))")
         }
         // Antes acá se imprimía «red ←», y era engañoso: esto es un FALLO de
         // caché, no una descarga. Peor, CachedImage.loadImage llama a get() y
@@ -70,6 +88,17 @@ final class ImageCache {
 
     /// Solo fotos de memoir: son las únicas con ruta reciclada (page_N.jpg), y
     /// el resto del feed inundaría la consola.
+    /// Un fallo por URL: veinte tarjetas pidiendo la misma foto llenarían la
+    /// consola con la misma línea y taparían justo lo que se viene a leer.
+    private static var fallosLogueados = Set<String>()
+    private static let fallosLock = NSLock()
+
+    static func debeLoguearFallo(_ url: URL) -> Bool {
+        guard url.absoluteString.contains("memoir-photos") else { return false }
+        fallosLock.lock(); defer { fallosLock.unlock() }
+        return fallosLogueados.insert(url.absoluteString).inserted
+    }
+
     static func logOrigin(_ origin: String, _ url: URL) {
         guard url.absoluteString.contains("memoir-photos") else { return }
         print("🖼️ [ImageCache] \(origin) ← \(shortLog(url))")

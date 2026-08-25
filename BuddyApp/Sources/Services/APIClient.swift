@@ -104,6 +104,34 @@ final class APIClient {
         return (n, esPaginacion)
     }
 
+    /// Tiempo de red y bytes por recurso.
+    ///
+    /// Sumados, no promediados: lo que se siente lento no es la petición más
+    /// lenta sino el TOTAL que la pantalla espera, y ahí un endpoint de 200 ms
+    /// pedido cinco veces pesa más que uno de 900 ms pedido una.
+    private static var tiempoPorPath: [String: (ms: Double, bytes: Int, n: Int)] = [:]
+
+    static func anotarTiempo(_ path: String, ms: Double, bytes: Int) {
+        let recurso = String(path.split(separator: "?").first ?? "")
+        conteoLock.lock(); defer { conteoLock.unlock() }
+        let previo = tiempoPorPath[recurso] ?? (0, 0, 0)
+        tiempoPorPath[recurso] = (previo.ms + ms, previo.bytes + bytes, previo.n + 1)
+    }
+
+    static func resumenDeTiempos(_ momento: String) {
+        conteoLock.lock()
+        let snapshot = tiempoPorPath
+        conteoLock.unlock()
+        guard !snapshot.isEmpty else { return }
+        let totalMs = snapshot.values.reduce(0) { $0 + $1.ms }
+        let totalKB = snapshot.values.reduce(0) { $0 + $1.bytes } / 1024
+        print("⏱ [APIClient] ── red \(momento): \(Int(totalMs)) ms acumulados · \(totalKB) KB ──")
+        for (path, v) in snapshot.sorted(by: { $0.value.ms > $1.value.ms }).prefix(5) {
+            let desperdicio = v.n > 1 ? "  (×\(v.n) — \(Int(v.ms - v.ms / Double(v.n))) ms de más)" : ""
+            print("⏱ [APIClient]   \(Int(v.ms)) ms · \(v.bytes / 1024) KB  \(path)\(desperdicio)")
+        }
+    }
+
     /// Vuelca el conteo acumulado. Leer 400 líneas contando reqIds a mano es
     /// donde ya se escaparon dos duplicaciones; esto lo dice en tres renglones.
     static func resumenDePeticiones(_ momento: String) {
@@ -119,6 +147,7 @@ final class APIClient {
         } else {
             for (path, n) in repetidos { print("📊 [APIClient]   ×\(n)  \(path)") }
         }
+        resumenDeTiempos(momento)
     }
 
     private func request<T: Decodable>(
@@ -169,7 +198,15 @@ final class APIClient {
                      : (esPaginacion ? "  📄 continuación \(veces)" : "")
         let quien = via.map { "  ← \($0)" } ?? ""
         print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))\(quien)\(repetido)")
+        let t0 = CFAbsoluteTimeGetCurrent()
         let (data, response) = try await APIClient.session.data(for: req)
+        // El tiempo va DESPUÉS de la petición, no en la línea de salida: una
+        // línea que solo dice "pedí esto" no distingue veinte llamadas rápidas
+        // de dos que bloquean la pantalla un segundo cada una.
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        APIClient.anotarTiempo(path, ms: ms, bytes: data.count)
+        let lento = ms > 800 ? "  🐌" : ""
+        print("⏱ [APIClient] \(path.split(separator: "?").first ?? "") \(Int(ms)) ms · \(data.count / 1024) KB reqId=\(reqId.prefix(8))\(lento)")
 
         guard let http = response as? HTTPURLResponse else {
             throw APIError.unknown
