@@ -3086,9 +3086,11 @@ struct PlaceGuideMapSheet: View {
             guard let destId = destinationId else {
                 loadState = lat != nil && lng != nil
                     ? .noGuide(lat: lat!, lng: lng!) : .noData
+                print("🆕 [lugarNuevo] 3/7 SIN destino → \(loadState) (la ficha no abre; solo pin o vacío)")
                 return
             }
             loadState = await routeStore.ensureLoaded(destinationId: destId)
+            print("🆕 [lugarNuevo] 3/7 guía destino=\(destId.prefix(8)) foco=\(focusPlaceId?.prefix(8).description ?? "ninguno") → \(loadState) lugares=\(routeStore.route.places.count)")
         }
     }
 

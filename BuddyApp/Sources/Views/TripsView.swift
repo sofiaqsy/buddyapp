@@ -1243,6 +1243,9 @@ struct TripEditorSheet: View {
         let existente = journey
         let borrador = draftId
         let spot = spotId
+        // publicables vs totales: una página sin miniatura no viaja, y el
+        // resultado es una recomendación publicada SIN fotos.
+        print("🆕 [lugarNuevo] 7/7 publicar spot=\(spot?.prefix(8).description ?? "NIL") journey=\(existente?.id.prefix(8).description ?? "se creará") borrador=\(borrador.prefix(8)) páginas=\(pages.count)/\(bookVM.pages.count) publicables")
         Task {
             var creado: APIJourney? = nil
             do {
@@ -1257,7 +1260,7 @@ struct TripEditorSheet: View {
                     }
                     destino = try await APIClient.shared.createJourney(spotId: spot, attachToTrip: false)
                     creado = destino
-                    print("📓 [publish] journey creado al publicar: \(destino.id.prefix(8))")
+                    print("🆕 [lugarNuevo] 7/7 journey creado al publicar: \(destino.id.prefix(8)) spot=\(spot.prefix(8))")
                 }
 
                 try await APIClient.shared.publishJourney(
@@ -1265,6 +1268,7 @@ struct TripEditorSheet: View {
                     pages: pages, localKey: borrador)
 
                 // Recién acá: el servidor ya aceptó la recomendación.
+                print("🆕 [lugarNuevo] 7/7 ✅ publicado journey=\(destino.id.prefix(8)) — renombrando borrador \(borrador.prefix(8))")
                 MemoirPersistence.shared.rename(from: borrador, to: destino.id)
 
                 await MainActor.run {
@@ -1287,7 +1291,7 @@ struct TripEditorSheet: View {
                     NotificationCenter.default.post(name: .placePhotosChanged, object: destino.id)
                 }
             } catch {
-                print("📓 [publish] ❌ \(error)")
+                print("🆕 [lugarNuevo] 7/7 ❌ falló: \(error)")
                 if let creado {
                     // Compensación: el journey nació en ESTE intento y no llegó
                     // a publicarse. Se cancela para no dejarlo suelto; el

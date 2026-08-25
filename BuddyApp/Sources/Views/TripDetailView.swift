@@ -119,6 +119,12 @@ struct TripDetailView: View {
         // Foco explícito (se abrió este mapa desde la tarjeta de UN lugar):
         // seleccionarlo y centrar ahí en vez de esperar el fitMap() genérico,
         // que encuadraría TODOS los pines del destino.
+        if let focusPlaceId {
+            // Un spot recién propuesto sale de /guide/spots solo para su autor:
+            // si no aparece acá, la ficha no se abre y el toque "no hizo nada".
+            let encontrado = livePlaces.contains { $0.id.uuidString.caseInsensitiveCompare(focusPlaceId) == .orderedSame }
+            print("🆕 [lugarNuevo] 4/7 foco=\(focusPlaceId.prefix(8)) ¿está en la guía? \(encontrado) — guía trae \(livePlaces.count) lugar(es)")
+        }
         if let focusPlaceId, let match = livePlaces.first(where: { $0.id.uuidString.caseInsensitiveCompare(focusPlaceId) == .orderedSame }) {
             await MainActor.run {
                 withAnimation(.easeInOut) { selectedPlace = match }
@@ -1136,6 +1142,9 @@ struct PlaceGuideDetailSheet: View {
             galleryVM.loadFirstPageIfNeeded()
             buddies = await fetchBuddiesIfPossible() ?? []
             isLoadingBuddies = false
+            // Lo que decide si la baldosa "Añadir foto" aparece. Con las dos en
+            // falso el lugar queda sin forma de documentarse.
+            print("🆕 [lugarNuevo] 5/7 ficha spot=\(place.id.uuidString.prefix(8)) fotos=\(galleryVM.photos.count) miVisita=\(myBuddyRecommendation?.journeyId.prefix(8).description ?? "ninguna") canRecommend=\(canRecommend)")
         }
         .sheet(isPresented: $showFullGallery) {
             // El VM entero y no un array de URLs: la hoja pagina igual que la
@@ -1298,6 +1307,7 @@ struct PlaceGuideDetailSheet: View {
                 guard !isOpeningEditor else { return }
                 // Ya hay recomendación: se le suma una foto, como siempre.
                 if let mine = myBuddyRecommendation {
+                    print("🆕 [lugarNuevo] 6/7 añadir foto → recomendación EXISTENTE journey=\(mine.journeyId.prefix(8))")
                     isOpeningEditor = true
                     Task {
                         // El editor necesita el APIJourney completo (tripId
@@ -1313,6 +1323,7 @@ struct PlaceGuideDetailSheet: View {
                     // Recomendación nueva: NO se toca la red. El editor abre
                     // sobre un borrador local y el journey nace al publicar —
                     // si el usuario se arrepiente, no queda nada en el servidor.
+                    print("🆕 [lugarNuevo] 6/7 añadir foto → BORRADOR NUEVO spot=\(place.id.uuidString.prefix(8))")
                     editingNewSpotId = place.id.uuidString
                 }
             } label: {

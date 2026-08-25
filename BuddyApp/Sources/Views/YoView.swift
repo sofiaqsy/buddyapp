@@ -261,7 +261,7 @@ struct YoView: View {
                 // leía como que no se había guardado.
                 guard let lugar = pendingShareChoice else { return }
                 pendingShareChoice = nil
-                print("🌍 [YoView] lugar nuevo → su ficha, para añadir la primera foto")
+                print("🆕 [lugarNuevo] 2/7 push a la ficha spot=\(lugar.id.prefix(8)) destino=\(lugar.destinationId?.prefix(8).description ?? "NIL") canRecommend=\(canRecommendPlaces)")
                 navPath.append(lugar)
             }) {
                 CompartirLugarSheet(

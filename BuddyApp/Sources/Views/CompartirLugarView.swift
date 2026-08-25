@@ -384,6 +384,9 @@ struct CompartirLugarSheet: View {
                 )
                 await MainActor.run {
                     isSubmitting = false
+                    // El destino es lo que decide si la ficha abre: sin él, la
+                    // vista cae a un pin suelto que no tiene "Añadir foto".
+                    print("🆕 [lugarNuevo] 1/7 propuesto spot=\(spot.id.prefix(8)) destino=\(spot.destinationId?.prefix(8).description ?? "NIL") status=\(spot.status ?? "nil") coords=(\(spot.lat?.description ?? "nil"), \(spot.lng?.description ?? "nil"))")
                     dismiss()
                     onChosen(APIPlaceCard(
                         id: spot.id, name: spot.name,
