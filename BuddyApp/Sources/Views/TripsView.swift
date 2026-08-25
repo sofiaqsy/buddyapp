@@ -186,10 +186,10 @@ struct TripsView: View {
                 }
             }
             .task { await loadJourneys() }
-            .refreshable { await loadJourneys() }
+            .refreshable { await loadJourneys(force: true) }
             // Al volver del flujo de registro (pop a raíz), un refresh dirigido
             .onChange(of: navPath.count) { old, new in
-                if new == 0 && old > 0 { Task { await loadJourneys() } }
+                if new == 0 && old > 0 { Task { await loadJourneys(force: true) } }
             }
             .onChange(of: authState.isLoggedIn) { _, loggedIn in
                 if !loggedIn {
@@ -200,7 +200,7 @@ struct TripsView: View {
                     selectedTripId      = nil
                     navPath             = NavigationPath()
                 } else {
-                    Task { await loadJourneys() }
+                    Task { await loadJourneys(force: true) }
                 }
             }
             .navigationDestination(for: APIJourney.self) { journey in
@@ -211,7 +211,7 @@ struct TripsView: View {
                 if route == "register" {
                     RegisterTripView { _ in
                         navPath = NavigationPath()
-                        Task { await loadJourneys() }
+                        Task { await loadJourneys(force: true) }
                     }
                 }
             }
@@ -219,7 +219,7 @@ struct TripsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .journeyActivated)) { _ in
             navPath = NavigationPath()
             // El trip pasó de "por llegar" a "en curso" — un solo refresh dirigido
-            Task { await loadJourneys() }
+            Task { await loadJourneys(force: true) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { note in
             // Publicar saca el trip del tab (pasa a completado → vive en el perfil).
@@ -229,7 +229,7 @@ struct TripsView: View {
                 if selectedTripId == id { selectedTripId = nil }
             }
             locallyActivatedId = nil
-            Task { await loadJourneys() }
+            Task { await loadJourneys(force: true) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { note in
             // Cancelar/eliminar SÍ borra del backend → se excluye de inmediato.
@@ -237,11 +237,11 @@ struct TripsView: View {
                 dismissedJourneyIds.insert(id)
             }
             locallyActivatedId = nil
-            Task { await loadJourneys() }
+            Task { await loadJourneys(force: true) }
         }
         .fullScreenCover(item: $editTarget) { target in
             TripEditorSheet(journey: target.journey, initialPage: target.pageIndex) {
-                Task { await loadJourneys() }
+                Task { await loadJourneys(force: true) }
             }
         }
         .sheet(isPresented: $showIdentitySheet, onDismiss: {
@@ -453,8 +453,23 @@ struct TripsView: View {
         .padding(.top, 60)
     }
 
-    private func loadJourneys() async {
+    /// Última carga COMPLETADA, para el TTL.
+    @State private var ultimaCargaJourneys: Date = .distantPast
+
+    private func loadJourneys(force: Bool = false, caller: String = #function) async {
         guard Session.hasSession else { isLoading = false; return }
+
+        // TTL, por el mismo motivo que en ChatStore: el `.task` de este tab se
+        // ejecuta CADA vez que la vista aparece, y en un TabView eso es cada
+        // cambio de tab. Eran 8 /travelers/me/journeys y sus 8 /matching/matches
+        // en una sesión de pasear entre tabs, para devolver siempre lo mismo.
+        //
+        // Quien acaba de cambiar algo —publicar, cancelar, volver del registro—
+        // pasa force y no espera.
+        if !force, hasLoadedOnce, Date().timeIntervalSince(ultimaCargaJourneys) < 15 {
+            print("🧳 [TripsView.load] throttled ← \(caller) — \(Int(Date().timeIntervalSince(ultimaCargaJourneys)))s desde la última")
+            return
+        }
         if !hasLoadedOnce { isLoading = true }
         let snapshotId = Session.travelerId
         // Solo actualizamos en ÉXITO. Si la red falla (offline transitorio),
@@ -475,6 +490,7 @@ struct TripsView: View {
                 print("⚠️ [TripsView] travelerId cambió durante el fetch — descarto resultado")
             }
         }
+        ultimaCargaJourneys = Date()
         // Selección por defecto: el activo, o el primero de la lista ordenada.
         // Si el trip seleccionado ya no existe (publicado/cancelado), reasigna.
         if selectedTripId == nil || !visibleTrips.contains(where: { $0.id == selectedTripId }) {

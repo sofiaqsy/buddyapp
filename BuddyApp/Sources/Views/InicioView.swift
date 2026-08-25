@@ -1195,6 +1195,14 @@ struct InicioView: View {
     /// Cancela la llamada anterior si llegan múltiples disparos en ráfaga (post-creación de trip).
     private func refreshTripState(caller: String = #function) async {
         print("🔄 [refreshTripState] ← \(caller)")
+        // La marca de tiempo se pone AL EMPEZAR, no al terminar.
+        //
+        // Los gates de onAppear y de navegación comparan contra ella con 10 s,
+        // pero se escribía dentro del cuerpo, ya en vuelo: dos onAppear seguidos
+        // —lo que hace un TabView en cada cambio de tab— la leían los dos como
+        // antigua y salían los dos. En el log se ve como dos «← scrollContent»
+        // pegados, con sus dos journeys y sus dos matches.
+        lastRefreshTripStateAt = Date()
         refreshStateTask?.cancel()
         let t = Task<Void, Never> { await _refreshTripStateBody() }
         refreshStateTask = t
