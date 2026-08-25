@@ -284,6 +284,9 @@ final class ChatStore: ObservableObject {
         totalUnread         = 0
         pendingFeedbackMatch = nil
         hasLoadedOnce       = false
+        // Otra identidad son otros datos: el TTL de la sesión anterior no
+        // puede hacer que la nueva espere 15 s para cargar los suyos.
+        ultimaCarga         = .distantPast
     }
 
     /// Registro de carga en vuelo. Estático y @MainActor porque ChatStore es un
@@ -317,10 +320,36 @@ final class ChatStore: ObservableObject {
         // así que el log nombra al llamador sin tocar los 20 puntos de llamada.
         // Con 20 llamadores, "load() ×3" no dice nada; "quién" lo dice todo.
         print("💬 [ChatStore.load] ← \(caller)\(force ? " (force)" : "")")
+
+        // TTL, ADEMÁS del dedupe en vuelo.
+        //
+        // El registro en vuelo solo cubre llamadas SIMULTÁNEAS. Las que llegan
+        // una detrás de otra —cada cambio de tab reconstruye las vistas y sus
+        // .task vuelven a llamar— lo atraviesan enteras: en la última medición
+        // fueron 13 cargas, ×4 peticiones cada una. /matching/matches solas
+        // pesaron 147 KB de los 231 KB de la sesión, para devolver la misma
+        // lista trece veces.
+        //
+        // Los cambios reales no dependen de este refresco: llegan por SSE, y
+        // quien acaba de tocar algo pasa force. Esto solo corta la repetición
+        // que nadie pidió.
+        if !force, Date().timeIntervalSince(ultimaCarga) < ChatStore.ttlDeCarga, hasLoadedOnce {
+            print("💬 [ChatStore.load] throttled — \(Int(Date().timeIntervalSince(ultimaCarga)))s desde la última, usando cache")
+            return
+        }
+
         await ChatStore.inflight.run(Session.travelerId ?? "anon", replaceExisting: force) { [self] in
             await self._loadBody()
         }
     }
+
+    /// Cuánto vale una carga antes de repetirla. 15 s: lo bastante corto para
+    /// que volver a un tab tras un rato traiga novedades, y lo bastante largo
+    /// para que pasear entre tabs no dispare nada.
+    private static let ttlDeCarga: TimeInterval = 15
+    /// Fin de la última carga COMPLETADA — no su inicio: lo que se quiere
+    /// saber es hace cuánto que estos datos son válidos.
+    private var ultimaCarga: Date = .distantPast
 
     private func _loadBody() async {
         guard Session.hasSession else {
@@ -329,9 +358,18 @@ final class ChatStore: ObservableObject {
             return
         }
         let currentTravelerId = Session.travelerId
-        await MainActor.run {
-            print("💬 [ChatStore] publica: isLoading=true → render de ContentView")
-            isLoading = true
+        // isLoading SOLO en la primera carga.
+        //
+        // Nadie pinta un spinner con esto —lo único que lo leía era la sonda—,
+        // pero es @Published: cada refresco en segundo plano publicaba dos
+        // cambios (true y false) que volvían a construir ContentView, InicioView
+        // y TripsView enteras. Y ContentView reconstruyendo el TabView vuelve a
+        // disparar los .task de los tabs, que llaman a load() otra vez: el
+        // refresco se causaba a sí mismo. De 68 renders del Home, 62 no tenían
+        // nada nuevo que mostrar.
+        let esPrimera = await MainActor.run { !hasLoadedOnce }
+        if esPrimera {
+            await MainActor.run { isLoading = true }
         }
         do {
             let matches = try await APIClient.shared.fetchMatches()
@@ -377,8 +415,11 @@ final class ChatStore: ObservableObject {
                 offers = fetchedOffers
                 if let fetchedAvailable = availableResult { applyAvailableHelp(fetchedAvailable) }
                 recomputeBadge()
-                isLoading = false
+                if esPrimera { isLoading = false }
                 hasLoadedOnce = true
+                // El TTL cuenta desde que los datos son válidos, no desde que
+                // se pidieron.
+                ultimaCarga = Date()
                 // Encuesta pendiente: un apoyo donde YO era viajero quedó cerrado
                 // y no lo he calificado. Se presenta globalmente en tiempo real.
                 if pendingFeedbackMatch == nil,
@@ -391,7 +432,11 @@ final class ChatStore: ObservableObject {
                 }
             }
         } catch {
-            await MainActor.run { isLoading = false; hasLoadedOnce = true }
+            await MainActor.run {
+                if esPrimera { isLoading = false }
+                hasLoadedOnce = true
+                ultimaCarga = Date()
+            }
             // Cancelación de SwiftUI no es un fallo real
             if (error as? URLError)?.code != .cancelled && !(error is CancellationError) {
                 print("❌ ChatStore.load: \(error)")
