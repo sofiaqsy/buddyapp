@@ -1,1 +1,5 @@
 .DS_Store
+
+# Estado de las ventanas de Xcode: es de esta máquina, no del proyecto
+xcuserdata/
+*.xcuserstate
