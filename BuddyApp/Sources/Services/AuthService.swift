@@ -181,7 +181,24 @@ final class AuthService {
 
     /// Public so APIClient can call it on 401.
     /// Returns true if new tokens were obtained. Never wipes tokens on network error.
+    ///
+    /// Coalescer propio: este es el camino Supabase/OTP, distinto del secret
+    /// device-bound de TravelerService. Son dos endpoints distintos, así que
+    /// cada uno une sus propias llamadas concurrentes. No se llaman en ciclo
+    /// (tryRefresh nunca invoca forceRefresh), así que no hay bloqueo mutuo.
+    private let coalescer = RefreshCoalescer()
+
     func tryRefresh() async -> Bool {
+        // RefreshCoalescer habla en String porque TravelerService devuelve el
+        // token; aquí solo importa si hubo éxito, de ahí el mapeo a Bool.
+        let result = try? await coalescer.run { [self] in
+            let ok = await performTryRefresh()
+            return ok ? "ok" : ""
+        }
+        return result == "ok"
+    }
+
+    private func performTryRefresh() async -> Bool {
         guard let refreshToken = UserDefaults.standard.string(forKey: "buddy.refreshToken"),
               !refreshToken.isEmpty else {
             // No refresh token at all → session truly gone

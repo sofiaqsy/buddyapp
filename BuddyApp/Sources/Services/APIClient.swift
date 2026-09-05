@@ -22,9 +22,6 @@ final class APIClient {
         return URLSession(configuration: cfg)
     }()
 
-    // Deduplicate concurrent refresh calls — only one in-flight at a time.
-    private var refreshTask: Task<Bool, Never>?
-
     private var headers: [String: String] {
         // Priority: Traveler JWT (guest or verified) → anon key
         let token = TravelerService.shared.token ?? anonKey
@@ -36,29 +33,31 @@ final class APIClient {
 
     private init() {}
 
-    // Coalesces concurrent refresh attempts into one network call.
+    // La deduplicación vive ahora en TravelerService.forceRefresh y en
+    // AuthService.tryRefresh, cada una tras un RefreshCoalescer.
+    //
+    // Antes se intentaba aquí con un `Task?` en esta clase, y no funcionaba:
+    // APIClient no está aislado, así que varias peticiones en 401 leían la
+    // propiedad nil a la vez y cada una lanzaba su refresh. Y aunque hubiera
+    // funcionado, solo cubría este camino — el bucle SSE de ConexionesView y
+    // validateSession llaman a forceRefresh directamente y se la saltaban.
+    // Coalescer abajo cubre los tres.
     private func sharedRefresh() async -> Bool {
-        if let existing = refreshTask { return await existing.value }
-        let task = Task<Bool, Never> {
-            defer { refreshTask = nil }
-            if let tid = TravelerService.shared.travelerId,
-               (try? await TravelerService.shared.forceRefresh(travelerId: tid)) != nil {
-                return true
-            }
-            let ok = await AuthService.shared.tryRefresh()
-            if !ok {
-                // All refresh paths exhausted. forceRefresh already called clearSession()
-                // if it had a chance to run; call it again defensively so Session.hasSession
-                // is guaranteed false before we fire the notification.
-                TravelerService.shared.clearSession()
-                await MainActor.run {
-                    NotificationCenter.default.post(name: .sessionExpired, object: nil)
-                }
-            }
-            return ok
+        if let tid = TravelerService.shared.travelerId,
+           (try? await TravelerService.shared.forceRefresh(travelerId: tid)) != nil {
+            return true
         }
-        refreshTask = task
-        return await task.value
+        let ok = await AuthService.shared.tryRefresh()
+        if !ok {
+            // All refresh paths exhausted. forceRefresh already called clearSession()
+            // if it had a chance to run; call it again defensively so Session.hasSession
+            // is guaranteed false before we fire the notification.
+            TravelerService.shared.clearSession()
+            await MainActor.run {
+                NotificationCenter.default.post(name: .sessionExpired, object: nil)
+            }
+        }
+        return ok
     }
 
     // MARK: – Generic request

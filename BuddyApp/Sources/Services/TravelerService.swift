@@ -127,7 +127,19 @@ final class TravelerService {
         return Date(timeIntervalSince1970: exp).timeIntervalSinceNow < 300 // 5 min buffer
     }
 
+    // Punto único de refresh del traveler. Todos los caminos que renuevan el
+    // JWT pasan por aquí (APIClient en el 401, el bucle SSE de ConexionesView
+    // y validateSession al arrancar), así que coalescer aquí los cubre a los
+    // tres sin tocar ningún sitio de llamada.
+    private let coalescer = RefreshCoalescer()
+
     func forceRefresh(travelerId: String) async throws -> String {
+        try await coalescer.run { [self] in
+            try await performForceRefresh(travelerId: travelerId)
+        }
+    }
+
+    private func performForceRefresh(travelerId: String) async throws -> String {
         // Verified users (OTP/Apple) have no secret — they refresh via the
         // Supabase token path, which now returns a fresh traveler_token.
         let hasSecret = loadSecretFromKeychain() != nil
