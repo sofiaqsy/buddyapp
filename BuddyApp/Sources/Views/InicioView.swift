@@ -259,19 +259,31 @@ struct InicioView: View {
             // Lo único que justifica repetir por tiempo es no tener todavía una
             // resolución — ahí sí conviene reintentar.
             guard let loc else { return }
+
+            // EN CADA FIX, sin puerta: reordenar los spots que ya están en
+            // memoria. El carrusel tiene las coordenadas de cada lugar, así
+            // que saber cuál queda más cerca ahora no necesita red. Esto es lo
+            // que hace que la lista se mueva CONTIGO en vez de a saltos: entre
+            // Cafetería Rosal (14 m) y El encanto (54 m) media cuadra ya cambia
+            // el orden, y esperar a la siguiente petición para reflejarlo hacía
+            // que pareciera que el Home no se entera.
+            resortSpots(from: loc)
+
+            // La RED sí va con puerta. CLLocation es clase: cada fix es una
+            // instancia nueva aunque no te muevas, así que sin esto habría una
+            // petición por tick.
             let moved = lastCommunityContextLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
             let age   = Date().timeIntervalSince(lastCommunityContextAt ?? .distantPast)
             let needsRetry = resolvedLocation == nil && age > 30
             guard moved > Self.locationRefreshMeters || needsRetry else { return }
+            print("🏠 [gps] \(Int(moved))m desde la última consulta → refresco ubicación + spots")
             lastCommunityContextLocation = loc
             lastCommunityContextAt = Date()
             Task { await refreshHomeCommunityContext() }
 
-            // Los spots son lo que el viajero MIRA, y hasta ahora no seguían al
-            // GPS: loadData() solo corría al abrir la pantalla o al tirar para
-            // refrescar, así que el carrusel se quedaba donde arrancó la app.
-            // Misma puerta que la ubicación: si el Home dice que te moviste,
-            // la lista de lugares tiene que moverse con él.
+            // Refetch: puede haber spots nuevos que antes quedaban fuera del
+            // radio de la consulta. El reorden de arriba solo mueve los que ya
+            // tenemos; esto trae los que aún no conocemos.
             Task { await refreshSpotsForLocation() }
         }
         .onChange(of: authState.isLoggedIn) { _, loggedIn in
@@ -978,6 +990,28 @@ struct InicioView: View {
     /// loadData() completo trae journeys, matches, feed y destinos — demasiado
     /// para repetirlo cada vez que el viajero avanza unos cientos de metros.
     /// Los spots son lo único que depende de las coordenadas exactas.
+    /// Reordena por cercanía los spots que ya están en pantalla, sin red.
+    ///
+    /// El backend ya los manda ordenados, pero para la posición que tenía el
+    /// viajero cuando se pidieron. Caminando, ese orden envejece enseguida —
+    /// los dos primeros están a 14 y 54 m. Con las coordenadas ya en el modelo,
+    /// mantenerlo al día es una comparación local por fix.
+    ///
+    /// Sin animación cuando el orden no cambia: reasignar el array igualmente
+    /// haría trabajo de diff a SwiftUI en cada tick del GPS.
+    @MainActor
+    private func resortSpots(from loc: CLLocation) {
+        guard exploreCards.count > 1 else { return }
+        let ordenados = exploreCards.sorted { a, b in
+            let da = a.lat.flatMap { lat in a.lng.map { CLLocation(latitude: lat, longitude: $0).distance(from: loc) } } ?? .greatestFiniteMagnitude
+            let db = b.lat.flatMap { lat in b.lng.map { CLLocation(latitude: lat, longitude: $0).distance(from: loc) } } ?? .greatestFiniteMagnitude
+            return da < db
+        }
+        guard ordenados.map(\.id) != exploreCards.map(\.id) else { return }
+        print("🏠 [resortSpots] nuevo orden: \(ordenados.prefix(3).map(\.name).joined(separator: " · "))")
+        withAnimation(.easeInOut(duration: 0.25)) { exploreCards = ordenados }
+    }
+
     private func refreshSpotsForLocation() async {
         guard let cards = try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng) else { return }
         await MainActor.run {
