@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Estado local de Xcode: layout de ventanas, breakpoints, esquemas del
+# usuario. Es de cada máquina, no del proyecto.
+xcuserdata/
+*.xcuserstate
+
+# Builds
+DerivedData/
+build/
