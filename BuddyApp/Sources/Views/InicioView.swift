@@ -5,11 +5,10 @@ import UIKit
 // MARK: – INICIO
 // Calm, trustworthy dashboard. The user's home base between adventures.
 
-/// Contexto explícito elegido por el viajero para el composer de Home:
-/// desde dónde se construye el próximo Help Request. Nunca se decide solo —
-/// el usuario elige, Home nunca cambia de contexto en silencio.
-/// .trip lleva el journey.id — con más de un trip vivo (ej: San Francisco +
-/// Villa Rica) cada uno es una opción propia, no un solo "Mi viaje" genérico.
+/// Desde dónde se construye el próximo Help Request en el composer de Home.
+/// Lo decide el GPS (ver effectiveHomeContext); .trip solo queda como reserva
+/// para cuando no hay ubicación resuelta, y lleva el journey.id porque puede
+/// haber más de un trip vivo.
 enum HomeContext: Equatable {
     case currentLocation
     case trip(String)
@@ -37,9 +36,6 @@ struct InicioView: View {
     /// Reemplaza al viejo nearestDestination (5 destacados + radio 50 km), que
     /// podía elegir un destino vecino equivocado (ej: La Merced estando en Villa Rica).
     @State private var resolvedLocation: APILocationResolution? = nil
-    /// Selección MANUAL del contexto Home (selector Ubicación actual / Mi viaje).
-    /// nil = sin override — se aplican las reglas de default (ver effectiveHomeContext).
-    @State private var homeContextOverride: HomeContext? = nil
     @State private var destinations: [APIDestination] = []
     @State private var pendingJourney: APIJourney? = nil
     @State private var activeJourney: APIJourney? = nil
@@ -317,55 +313,26 @@ struct InicioView: View {
         }
     }
 
-    // MARK: – Selector de contexto Home (Ubicación actual vs Mi(s) viaje(s))
+    // MARK: – Contexto del Home
 
     /// "Ubicación actual" disponible = el backend resolvió un destino real para el GPS.
     private var hasCurrentLocationContext: Bool { resolvedLocation != nil }
-    /// "Mi viaje" disponible = hay al menos un trip vivo (active o planning).
-    private var hasTripContext: Bool { !liveJourneys.isEmpty }
-    /// El trip vivo (si alguno) cuyo destino coincide EXACTO con el GPS (ej:
-    /// trip a San Francisco y ya estás en San Francisco). Con más de un trip
-    /// vivo, "Ubicación actual" y ese trip serían la MISMA fila repetida —
-    /// se fusionan: no se ofrece "Ubicación actual" por separado, ese trip
-    /// cubre ambas cosas. Los demás trips (ej: Villa Rica) siguen siendo
-    /// opciones propias.
-    private var matchingTripForGPS: APIJourney? {
-        guard let gpsId = resolvedLocation?.destinationId else { return nil }
-        return liveJourneys.first { ($0.destination?.id ?? $0.destinationId) == gpsId }
-    }
-    /// "Ubicación actual" solo se ofrece como fila propia cuando NO coincide
-    /// con ninguno de los trips vivos — si coincide, queda fusionada en ese trip.
-    private var shouldOfferCurrentLocationOption: Bool {
-        hasCurrentLocationContext && matchingTripForGPS == nil
-    }
-    /// Total de opciones distintas que el selector podría ofrecer.
-    private var homeContextOptionCount: Int {
-        (shouldOfferCurrentLocationOption ? 1 : 0) + liveJourneys.count
-    }
 
-    /// Contexto efectivo del composer. Respeta la selección manual del usuario
-    /// mientras siga siendo válida (el trip elegido sigue vivo, o el GPS ya no
-    /// coincide con un trip si eligió "Ubicación actual"); si dejó de serlo,
-    /// recalcula el default — nunca queda "atascado" en un contexto que ya no
-    /// existe. Reglas de default:
-    ///   GPS coincide con un trip vivo → ese trip (fusionado, ver matchingTripForGPS)
-    ///   GPS + trip(s), sin coincidir  → Ubicación actual (el usuario puede cambiar)
-    ///   sin GPS + trip(s)             → el primer trip vivo
-    ///   GPS + sin trip                → Ubicación actual (única opción)
-    ///   sin GPS + sin trip            → nil (flujo de permisos/registro existente)
+    /// Contexto del composer. El GPS MANDA: si el backend resolvió un destino
+    /// para donde estás, ese es el contexto, haya o no trips vivos.
+    ///
+    /// Antes había un selector para elegir entre "Ubicación actual" y cada
+    /// trip vivo. Se quitó: con el GPS resolviendo bien, el selector aparecía
+    /// en cuanto tenías un trip en otra ciudad —un combo encima de "Consulta
+    /// con un buddy" para una decisión que el viajero no había pedido tomar.
+    /// Dónde estás no es ambiguo, y la app tiene esa información.
+    ///
+    ///   GPS resuelto        → Ubicación actual
+    ///   sin GPS + trip(s)   → el primer trip vivo (mejor eso que nada)
+    ///   sin GPS + sin trip  → nil (flujo de permisos/registro existente)
     private var effectiveHomeContext: HomeContext? {
-        let manualStillValid: Bool
-        switch homeContextOverride {
-        case .currentLocation: manualStillValid = shouldOfferCurrentLocationOption
-        case .trip(let jid):    manualStillValid = liveJourneys.contains { $0.id == jid }
-        case nil:                manualStillValid = false
-        }
-        if manualStillValid { return homeContextOverride }
-
-        if let matching = matchingTripForGPS { return .trip(matching.id) }
-        if hasCurrentLocationContext && hasTripContext { return .currentLocation }
-        if let first = liveJourneys.first { return .trip(first.id) }
         if hasCurrentLocationContext { return .currentLocation }
+        if let first = liveJourneys.first { return .trip(first.id) }
         return nil
     }
 
@@ -382,19 +349,7 @@ struct InicioView: View {
     /// que separar (Case 3: sin selector, sin locationContext), dejando un
     /// espacio doble e injustificado encima de "Consulta con un buddy".
     private var homeComposerHasHeaderRow: Bool {
-        homeContextOptionCount > 1 || effectiveHomeContext == nil
-    }
-
-    /// Aplica la selección manual del selector y refresca todo lo que depende
-    /// de ella de inmediato — sin esto, "Comunidad viva" quedaba mostrando el
-    /// contexto anterior hasta el próximo ciclo de refresh en background.
-    private func selectHomeContext(_ context: HomeContext) {
-        homeContextOverride = context
-        Task {
-            await refreshHomeCommunityContext()
-            await loadRecentHelp()
-            await loadCommunityPulseIfNeeded()
-        }
+        effectiveHomeContext == nil
     }
 
     // MARK: – Contexto de ubicación
@@ -834,25 +789,6 @@ struct InicioView: View {
 
     @ViewBuilder private var homeComposer: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            if let context = effectiveHomeContext, homeContextOptionCount > 1 {
-                // 2+ opciones distintas (Ubicación actual + uno o más trips):
-                // selector interactivo. "Ubicación actual" se omite si coincide
-                // con alguno de los trips (matchingTripForGPS) — esa fila ya
-                // cubre ambas cosas, no se repite.
-                HomeContextSelector(
-                    context: context,
-                    hasCurrentLocation: shouldOfferCurrentLocationOption,
-                    currentLocationCity: resolvedLocation?.destinationName ?? locationService.currentCity ?? "",
-                    trips: liveJourneys.map { HomeContextTripOption(id: $0.id, name: $0.destination?.name ?? $0.place?.name ?? "Mi viaje") },
-                    onSelect: { selectHomeContext($0) }
-                )
-                .padding(.bottom, Spacing.xs)
-                // zIndex del hijo del VStack, no solo del overlay interno —
-                // sin esto el panel desplegado quedaba PINTADO DEBAJO del
-                // CategoryPickerView (siguiente hermano) y era inclicable ahí.
-                .zIndex(1)
-            }
-
             if let activeJrn = effectiveTripJourney {
                 let activeDest = activeJrn.destination?.name ?? activeJrn.place?.name
                 CategoryPickerView(
@@ -2102,152 +2038,6 @@ struct FindBuddyPrimaryCTA: View {
 
 // Selector explícito de contexto Home: "Ubicación actual" vs "Mi viaje".
 /// Una fila seleccionable del dropdown: un trip vivo (journey.id + nombre a mostrar).
-struct HomeContextTripOption: Identifiable, Equatable {
-    let id: String
-    let name: String
-}
-
-// Interactivo solo cuando hay 2+ opciones distintas (Ubicación actual + uno o
-// más trips) — con una sola opción se muestra como fila fija, sin affordance
-// de tap. Con 2+ trips vivos, cada uno aparece como su propia fila: no hay un
-// solo "Mi viaje" genérico si el viajero tiene más de un trip.
-// No usa Menu/UIMenu: su animación de cierre es del sistema (UIKit), no de
-// SwiftUI — .transaction/.animation(nil) no la alcanzan, y el label quedaba
-// un instante en un frame intermedio (texto recortado, chevron ausente)
-// hasta que esa animación de sistema terminaba de asentar. Dropdown propio,
-// controlado 100% por @State, sin ese problema.
-struct HomeContextSelector: View {
-    let context: HomeContext
-    let hasCurrentLocation: Bool
-    let currentLocationCity: String
-    let trips: [HomeContextTripOption]
-    let onSelect: (HomeContext) -> Void
-
-    @State private var isExpanded = false
-
-    private var interactive: Bool { (hasCurrentLocation ? 1 : 0) + trips.count > 1 }
-
-    private var icon: String { context == .currentLocation ? "location.fill" : "map.fill" }
-    private var label: String {
-        switch context {
-        case .currentLocation:
-            return currentLocationCity.isEmpty ? "Ubicación actual" : currentLocationCity
-        case .trip(let jid):
-            return trips.first { $0.id == jid }?.name ?? "Mi trip"
-        }
-    }
-
-    var body: some View {
-        if interactive {
-            Button {
-                Haptic.select()
-                withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
-            } label: {
-                row(interactive: true)
-            }
-            .buttonStyle(.plain)
-            // Captador de tap-afuera: un rectángulo enorme y casi invisible,
-            // centrado en el botón, mucho más grande que cualquier pantalla —
-            // sin esto, tocar en cualquier otro lado de Home (las categorías,
-            // el heading, etc.) dejaba el panel abierto.
-            .overlay {
-                if isExpanded {
-                    Color.black.opacity(0.001)
-                        .frame(width: 3000, height: 3000)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.easeOut(duration: 0.15)) { isExpanded = false }
-                        }
-                }
-            }
-            .overlay(alignment: .topLeading) {
-                if isExpanded {
-                    optionsPanel
-                        .offset(y: 30)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                        .zIndex(1)
-                }
-            }
-        } else {
-            row(interactive: false)
-        }
-    }
-
-    private var optionsPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if hasCurrentLocation {
-                optionButton(
-                    target: .currentLocation,
-                    title: currentLocationCity.isEmpty ? "Ubicación actual" : currentLocationCity,
-                    subtitle: "Ubicación actual"
-                )
-            }
-            ForEach(Array(trips.enumerated()), id: \.element.id) { index, trip in
-                if hasCurrentLocation || index > 0 {
-                    Divider().padding(.leading, 34)
-                }
-                optionButton(target: .trip(trip.id), title: trip.name, subtitle: "Mi trip")
-            }
-        }
-        .padding(.vertical, 4)
-        .frame(minWidth: 180, alignment: .leading)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-        .overlay(RoundedRectangle(cornerRadius: Radius.md).stroke(Color.border, lineWidth: 1))
-        .cardShadow()
-    }
-
-    /// El nombre real del lugar (trip o ubicación) va como texto principal —
-    /// "Mi viaje"/"Ubicación actual" queda de subtítulo, no al revés.
-    @ViewBuilder
-    private func optionButton(target: HomeContext, title: String, subtitle: String) -> some View {
-        Button {
-            Haptic.select()
-            withAnimation(.easeOut(duration: 0.15)) { isExpanded = false }
-            onSelect(target)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.brand)
-                    .opacity(context == target ? 1 : 0)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(Color.inkMuted)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func row(interactive: Bool) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-            Text(label)
-                .font(BT.caption1.weight(.semibold))
-                .lineLimit(1)
-            if interactive {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.inkMuted)
-                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
-            }
-        }
-        .foregroundStyle(Color.brand)
-    }
-}
-
 // Carries both pieces the home-help sheet needs atomically.
 // Using this as the .sheet(item:) driver eliminates the Bool/optional
 // desync that caused blank screens on first open.
