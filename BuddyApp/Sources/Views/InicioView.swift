@@ -78,6 +78,10 @@ struct InicioView: View {
     /// contenido se reemplazaba solo y parecía un fallo, no una reacción.
     @State private var locationChangeMessage: String? = nil
     @State private var showLocationChangeToast = false
+    /// Coordenadas y momento de la última resolución REAL contra el backend.
+    @State private var lastResolveLocation: CLLocation? = nil
+    @State private var lastResolveAt: Date? = nil
+
     /// Cuánto hay que moverse para volver a preguntar. 150 m distingue
     /// "cambié de zona" del ruido del GPS urbano (rebotes de 20-50 m entre
     /// edificios) sin esperar a que cruces medio pueblo.
@@ -973,6 +977,25 @@ struct InicioView: View {
     /// trip → Ubicación actual.
     private func refreshResolvedLocation() async {
         guard let loc = locationService.userLocation else { return }
+
+        // Throttle propio, porque refreshHomeCommunityContext se llama desde
+        // muchos sitios (loadData, refreshTripState, journeyActivated, el
+        // selector…), no solo desde el onChange del GPS. Al subir la
+        // resolución fuera de la rama "sin trip" pasó a ejecutarse en todos
+        // ellos: en un arranque se vieron cuatro POST /location/resolve con
+        // las MISMAS coordenadas. Si no te has movido, la respuesta no puede
+        // haber cambiado.
+        let movido = lastResolveLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
+        let edad   = Date().timeIntervalSince(lastResolveAt ?? .distantPast)
+        if movido < Self.locationRefreshMeters, edad < 60, resolvedLocation != nil {
+            print("🏠 [refreshResolvedLocation] sin cambios (\(Int(movido))m, \(Int(edad))s) — reutilizo \(resolvedLocation?.destinationName ?? "nil")")
+            return
+        }
+        await MainActor.run {
+            lastResolveLocation = loc
+            lastResolveAt = Date()
+        }
+
         let lat = loc.coordinate.latitude
         let lng = loc.coordinate.longitude
 

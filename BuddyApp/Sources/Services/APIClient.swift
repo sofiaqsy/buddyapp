@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation   // distancias en los logs de diagnóstico del carrusel
 
 // MARK: – API Client
 // All communication with buddy-core backend
@@ -843,7 +844,33 @@ final class APIClient {
         var path = "/feed/place-shares?limit=\(limit)"
         if let lat, let lng { path += "&lat=\(lat)&lng=\(lng)" }
         let res: APIPlaceCardsResponse = try await request(path: path)
-        print("🌍 [APIClient] placeCards → \(res.items.count): \(res.items.prefix(5).map { "\($0.name)(\($0.photoCount)f/\($0.buddyCount)b)" }.joined(separator: ", "))")
+
+        // Orden RECIBIDO con la distancia de cada spot al viajero. El carrusel
+        // pinta esta lista tal cual, así que si arriba aparece un sitio que no
+        // es el más cercano, se ve aquí — y se ve también si el que falta
+        // simplemente no vino en la respuesta.
+        let conDistancia = res.items.enumerated().map { (idx, item) -> String in
+            guard let lat, let lng, let plat = item.lat, let plng = item.lng else {
+                return "\(idx):\(item.name)(sin coords)"
+            }
+            let metros = CLLocation(latitude: lat, longitude: lng)
+                .distance(from: CLLocation(latitude: plat, longitude: plng))
+            let d = metros < 1000 ? "\(Int(metros))m" : String(format: "%.1fkm", metros / 1000)
+            return "\(idx):\(item.name)(\(d)/\(item.photoCount)f/\(item.buddyCount)b)"
+        }
+        print("🌍 [APIClient] placeCards desde \(lat.map { String(format: "%.4f", $0) } ?? "nil"),\(lng.map { String(format: "%.4f", $0) } ?? "nil") → \(res.items.count): \(conDistancia.joined(separator: " · "))")
+
+        // ¿El primero es el más cercano? Es LA pregunta cuando el carrusel
+        // muestra arriba un sitio que no es donde estás.
+        let distancias: [(String, Double)] = res.items.compactMap { item in
+            guard let lat, let lng, let plat = item.lat, let plng = item.lng else { return nil }
+            return (item.name, CLLocation(latitude: lat, longitude: lng)
+                .distance(from: CLLocation(latitude: plat, longitude: plng)))
+        }
+        if let masCerca = distancias.min(by: { $0.1 < $1.1 }), let primero = res.items.first {
+            let ordenado = zip(distancias, distancias.dropFirst()).allSatisfy { $0.1 <= $1.1 }
+            print("🌍 [APIClient] placeCards ¿ordenado por distancia?=\(ordenado ? "sí" : "NO") — primero=\"\(primero.name)\" pero el más cercano es \"\(masCerca.0)\" a \(Int(masCerca.1))m")
+        }
         // El conteo no alcanza para diagnosticar staleness: lo que decide qué se
         // ve son estas URLs. Interesa si traen ?v= —o sea si el backend con el
         // token está desplegado— y si la borrada sigue en la lista.
