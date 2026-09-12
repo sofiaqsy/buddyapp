@@ -74,6 +74,20 @@ struct InicioView: View {
     @State private var lastRefreshTripStateAt: Date? = nil // throttle scenePhase refresh (30s)
     @State private var lastCommunityContextLocation: CLLocation? = nil // gate GPS → resolve
     @State private var lastCommunityContextAt: Date? = nil
+    /// Aviso "Ahora en X" cuando el destino resuelto CAMBIA. Sin esto el
+    /// contenido se reemplazaba solo y parecía un fallo, no una reacción.
+    @State private var locationChangeMessage: String? = nil
+    @State private var showLocationChangeToast = false
+    /// Cuánto hay que moverse para volver a preguntar. 150 m distingue
+    /// "cambié de zona" del ruido del GPS urbano (rebotes de 20-50 m entre
+    /// edificios) sin esperar a que cruces medio pueblo.
+    private static let locationRefreshMeters: CLLocationDistance = 150
+    /// Los spots cercanos cambian más despacio que el destino resuelto.
+    private static let spotsRefreshMeters: CLLocationDistance = 500
+
+    /// Última ubicación con la que se cargaron los spots del carrusel, para
+    /// no repetir la llamada mientras el viajero no se mueva de verdad.
+    @State private var lastSpotsLocation: CLLocation? = nil
     @State private var communityPulseLoadedAt: Date? = nil
     @State private var pendingNavToDetail = false
     @State private var hasLoaded = false
@@ -157,6 +171,9 @@ struct InicioView: View {
             }
         }
         .toast(isPresented: $showPublishSuccessToast, message: "¡Historia publicada!")
+        // El Home siguiendo al viajero tiene que NOTARSE. Sin este aviso el
+        // contenido se reemplaza solo y se lee como un fallo de carga.
+        .toast(isPresented: $showLocationChangeToast, message: locationChangeMessage ?? "")
         .onReceive(NotificationCenter.default.publisher(for: .journeyActivated)) { _ in
             navPath = NavigationPath()
             pendingNavToDetail = true
@@ -226,18 +243,34 @@ struct InicioView: View {
                 BuddyChatView(match: item.match, journey: journey).equatable()
             }
         }
-        // GPS cambió → re-resolver ubicación actual (gated por distancia/tiempo).
+        // GPS cambió → re-resolver ubicación y recargar los spots de la zona.
         .onChange(of: locationService.userLocation) { _, loc in
             // CLLocation es clase: cada fix del GPS es instancia nueva aunque el
             // usuario no se haya movido, así que este onChange dispara en cada
-            // tick. Gate por distancia/tiempo para no re-resolver en cada fix.
+            // tick. El gate es por DISTANCIA: antes tenía además `|| age > 60`,
+            // que golpeaba el backend cada minuto aunque el viajero estuviera
+            // quieto, y aun así no reaccionaba antes cuando se movía de verdad.
+            // Lo único que justifica repetir por tiempo es no tener todavía una
+            // resolución — ahí sí conviene reintentar.
             guard let loc else { return }
             let moved = lastCommunityContextLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
-            let age = Date().timeIntervalSince(lastCommunityContextAt ?? .distantPast)
-            guard moved > 100 || age > 60 else { return }
+            let age   = Date().timeIntervalSince(lastCommunityContextAt ?? .distantPast)
+            let needsRetry = resolvedLocation == nil && age > 30
+            guard moved > Self.locationRefreshMeters || needsRetry else { return }
             lastCommunityContextLocation = loc
             lastCommunityContextAt = Date()
             Task { await refreshHomeCommunityContext() }
+
+            // Los spots son lo que el viajero MIRA, y hasta ahora no seguían al
+            // GPS: loadData() solo corría al abrir la pantalla o al tirar para
+            // refrescar, así que el carrusel se quedaba en la ciudad donde
+            // arrancó la app. Umbral propio, más ancho: la lista de lugares
+            // cercanos no cambia cada 150 m.
+            let movedForSpots = lastSpotsLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
+            if movedForSpots > Self.spotsRefreshMeters {
+                lastSpotsLocation = loc
+                Task { await refreshSpotsForLocation() }
+            }
         }
         .onChange(of: authState.isLoggedIn) { _, loggedIn in
             if !loggedIn {
@@ -927,7 +960,79 @@ struct InicioView: View {
         print("🏠 [refreshOpenRequest] destId=\(destId.prefix(8)) → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
     }
 
+    /// Resuelve el GPS contra el backend y actualiza `resolvedLocation`.
+    ///
+    /// Separado de refreshHomeCommunityContext a propósito: antes la resolución
+    /// vivía DENTRO de la rama "sin trip", después de un `return` temprano. Con
+    /// un trip vivo nunca se ejecutaba, así que `resolvedLocation` se quedaba en
+    /// nil para siempre y el Home no seguía al viajero: estando en Villa Rica
+    /// con un trip a Chanchamayo, effectiveHomeContext no podía ver el GPS y
+    /// caía a `liveJourneys.first` — Chanchamayo. Resolviendo ANTES de elegir
+    /// rama, las reglas de effectiveHomeContext por fin reciben el dato que
+    /// necesitan y aplican lo que siempre dijeron: GPS que no coincide con un
+    /// trip → Ubicación actual.
+    private func refreshResolvedLocation() async {
+        guard let loc = locationService.userLocation else { return }
+        let lat = loc.coordinate.latitude
+        let lng = loc.coordinate.longitude
+
+        do {
+            let resolution = try await APIClient.shared.resolveLocation(lat: lat, lng: lng)
+            await MainActor.run { applyResolvedLocation(resolution) }
+        } catch is URLError {
+            // Red caída ≠ "no estás en ningún sitio". Conservar la última
+            // resolución: borrarla mandaba el Home a modo pioneer por un
+            // túnel o un ascensor, y volvía con otro contenido al salir.
+            print("🏠 [refreshResolvedLocation] ⚠️ red caída — conservo \(resolvedLocation?.destinationName ?? "nil")")
+        } catch {
+            // 204 sin match (el body vacío no decodifica) → fuera de cobertura.
+            await MainActor.run { applyResolvedLocation(nil) }
+        }
+    }
+
+    /// Aplica la resolución y avisa si el destino CAMBIÓ. El aviso es la mitad
+    /// de la función: cuando el contenido se reemplaza sin decir por qué, se
+    /// lee como un glitch — no como el Home siguiéndote.
+    @MainActor
+    private func applyResolvedLocation(_ resolution: APILocationResolution?) {
+        let previousId   = resolvedLocation?.destinationId
+        let previousName = resolvedLocation?.destinationName
+        resolvedLocation = resolution
+
+        guard let resolution else {
+            if previousId != nil { print("🏠 [location] \(previousName ?? "?") → fuera de cobertura") }
+            return
+        }
+        // Solo en el CAMBIO, no en la primera resolución: al abrir la app
+        // "Ahora en Villa Rica" no es una novedad, es el estado inicial.
+        guard let previousId, previousId != resolution.destinationId else { return }
+
+        print("🏠 [location] \(previousName ?? "?") → \(resolution.destinationName)")
+        locationChangeMessage = "Ahora en \(resolution.destinationName)"
+        showLocationChangeToast = true
+    }
+
+    /// Recarga SOLO el carrusel de spots para la ubicación actual.
+    ///
+    /// loadData() completo trae journeys, matches, feed y destinos — demasiado
+    /// para repetirlo cada vez que el viajero avanza unos cientos de metros.
+    /// Los spots son lo único que depende de las coordenadas exactas.
+    private func refreshSpotsForLocation() async {
+        guard let cards = try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng) else { return }
+        await MainActor.run {
+            withAnimation(.easeInOut(duration: 0.25)) { exploreCards = cards }
+            lastSpotsLocation = locationService.userLocation
+        }
+        print("🏠 [refreshSpotsForLocation] \(cards.count) spot(s) para la ubicación actual")
+    }
+
     private func refreshHomeCommunityContext() async {
+        // Resolver el GPS SIEMPRE y ANTES de elegir rama: effectiveTripJourney
+        // se calcula a partir de effectiveHomeContext, que necesita saber si
+        // hay ubicación resuelta para decidir. Consultarlo antes de resolver
+        // era preguntar con la respuesta a medias.
+        await refreshResolvedLocation()
+
         // Si el contexto elegido es un trip, cargar el contexto de SU destino o
         // lugar (no necesariamente liveJourneys.first — puede ser cualquiera de
         // los trips vivos). Si el viajero eligió "Ubicación actual" (aunque haya
@@ -953,40 +1058,36 @@ struct InicioView: View {
             }
             return
         }
-        // Sin trip activo — el backend resuelve el destino real (polígono → radio).
-        // Nunca la lista de 5 destacados: elegía el vecino equivocado
-        // (ej: "Estás en La Merced" estando en Villa Rica).
-        if let loc = locationService.userLocation {
-            let lat = loc.coordinate.latitude
-            let lng = loc.coordinate.longitude
-            print("🏠 [refreshHomeCommunityContext] no trip — resolving location: lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng))")
+        // Sin trip elegido — manda el destino que resolvió el backend arriba
+        // (polígono → radio). Nunca la lista de 5 destacados: elegía el vecino
+        // equivocado (ej: "Estás en La Merced" estando en Villa Rica).
+        if let resolution = resolvedLocation {
+            print("🏠 [refreshHomeCommunityContext] sin trip → \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
+            // Con el destino resuelto ya se puede cargar "Comunidad viva"
+            // aunque no exista trip (loadRecentHelp usa resolvedLocation).
+            await loadRecentHelp()
+            await loadCommunityPulseIfNeeded()
 
-            // LocationResolverService en backend: polígonos → radio → nil
-            if let resolution = try? await APIClient.shared.resolveLocation(lat: lat, lng: lng) {
-                print("🏠 [refreshHomeCommunityContext] ✅ resolved: \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
-                await MainActor.run { resolvedLocation = resolution }
-                // Con el destino resuelto ya se puede cargar "Comunidad viva"
-                // aunque no exista trip (loadRecentHelp usa resolvedLocation).
-                await loadRecentHelp()
-                await loadCommunityPulseIfNeeded()
-
-                // Cargar contexto de la comunidad de este destino
-                if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
-                    await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
-                    print("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
-                    return
-                }
-            } else {
-                print("🏠 [refreshHomeCommunityContext] ⚠️  no location match")
-                await MainActor.run { resolvedLocation = nil }
+            // Cargar contexto de la comunidad de este destino
+            if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
+                await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
+                print("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
+                return
             }
 
-            // Sin match: pioneer mode
+            // Sin contexto: pioneer mode
             await MainActor.run {
                 homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
                 homeBuddyCount = 0
             }
             print("🏠 [refreshHomeCommunityContext] → pioneer mode (0 buddies)")
+        } else if locationService.userLocation != nil {
+            // Hay GPS pero fuera de cobertura de todo destino conocido.
+            await MainActor.run {
+                homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
+                homeBuddyCount = 0
+            }
+            print("🏠 [refreshHomeCommunityContext] sin match de ubicación → pioneer mode")
         } else {
             print("🏠 [refreshHomeCommunityContext] no location — skipping")
         }
