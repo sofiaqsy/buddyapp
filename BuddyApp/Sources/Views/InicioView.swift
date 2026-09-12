@@ -276,7 +276,12 @@ struct InicioView: View {
             let age   = Date().timeIntervalSince(lastCommunityContextAt ?? .distantPast)
             let needsRetry = resolvedLocation == nil && age > 30
             guard moved > Self.locationRefreshMeters || needsRetry else { return }
-            print("🏠 [gps] \(Int(moved))m desde la última consulta → refresco ubicación + spots")
+            // Ojo con Int(moved): sin consulta previa, `moved` es
+            // .greatestFiniteMagnitude y convertirlo a Int NO devuelve un
+            // número grande, aborta el proceso. Solo se formatea cuando hay
+            // una distancia real que contar.
+            let desde = lastCommunityContextLocation == nil ? "primer fix" : "\(Int(moved))m"
+            print("🏠 [gps] \(desde) desde la última consulta → refresco ubicación + spots")
             lastCommunityContextLocation = loc
             lastCommunityContextAt = Date()
             Task { await refreshHomeCommunityContext() }
