@@ -81,13 +81,19 @@ struct InicioView: View {
     /// Cuánto hay que moverse para volver a preguntar. 150 m distingue
     /// "cambié de zona" del ruido del GPS urbano (rebotes de 20-50 m entre
     /// edificios) sin esperar a que cruces medio pueblo.
+    /// Cuánto hay que moverse para volver a preguntarlo TODO: destino
+    /// resuelto y spots del carrusel. 150 m distingue "me moví" del ruido del
+    /// GPS urbano (rebotes de 20-50 m entre edificios).
+    ///
+    /// Un solo umbral y no dos. Antes los spots usaban 500 m, con el
+    /// razonamiento de que "cambian más despacio que el destino". Es al revés:
+    /// el destino (Breña) es el mismo durante kilómetros, mientras que el
+    /// lugar más cercano cambia en decenas de metros — con El encanto a 37 m y
+    /// Cafetería Rosal a 75 m, caminar una cuadra ya cambia cuál va primero.
+    /// Con umbrales distintos el Home quedaba a medias: la ubicación se
+    /// actualizaba y el carrusel se quedaba en la lista de la esquina anterior.
     private static let locationRefreshMeters: CLLocationDistance = 150
-    /// Los spots cercanos cambian más despacio que el destino resuelto.
-    private static let spotsRefreshMeters: CLLocationDistance = 500
 
-    /// Última ubicación con la que se cargaron los spots del carrusel, para
-    /// no repetir la llamada mientras el viajero no se mueva de verdad.
-    @State private var lastSpotsLocation: CLLocation? = nil
     @State private var communityPulseLoadedAt: Date? = nil
     @State private var pendingNavToDetail = false
     @State private var hasLoaded = false
@@ -263,14 +269,10 @@ struct InicioView: View {
 
             // Los spots son lo que el viajero MIRA, y hasta ahora no seguían al
             // GPS: loadData() solo corría al abrir la pantalla o al tirar para
-            // refrescar, así que el carrusel se quedaba en la ciudad donde
-            // arrancó la app. Umbral propio, más ancho: la lista de lugares
-            // cercanos no cambia cada 150 m.
-            let movedForSpots = lastSpotsLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
-            if movedForSpots > Self.spotsRefreshMeters {
-                lastSpotsLocation = loc
-                Task { await refreshSpotsForLocation() }
-            }
+            // refrescar, así que el carrusel se quedaba donde arrancó la app.
+            // Misma puerta que la ubicación: si el Home dice que te moviste,
+            // la lista de lugares tiene que moverse con él.
+            Task { await refreshSpotsForLocation() }
         }
         .onChange(of: authState.isLoggedIn) { _, loggedIn in
             if !loggedIn {
@@ -980,7 +982,6 @@ struct InicioView: View {
         guard let cards = try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng) else { return }
         await MainActor.run {
             withAnimation(.easeInOut(duration: 0.25)) { exploreCards = cards }
-            lastSpotsLocation = locationService.userLocation
         }
         print("🏠 [refreshSpotsForLocation] \(cards.count) spot(s) para la ubicación actual")
     }
