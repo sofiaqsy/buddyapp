@@ -424,6 +424,9 @@ struct APIPlaceCard: Decodable, Identifiable, Hashable {
     let destinationName: String?
     let lat: Double?
     let lng: Double?
+    /// Distancia que calculó place_cards_by_distance al pedir la lista — la
+    /// misma que decidió el orden. nil en las vías que no ordenan por cercanía.
+    let distanceMeters: Int?
     let coverUrl: String?
     let coverUrls: [String]?
     /// Quién documentó la foto de portada — "Recomendado por {nombre}" en el

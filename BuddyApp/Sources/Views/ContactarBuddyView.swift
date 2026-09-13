@@ -1702,6 +1702,38 @@ private struct ExploreCarouselCard: View {
     /// de una persona concreta pesa más como prueba social que un conteo, y
     /// encadena con el subtítulo ("Lugares que recomiendan los buddies de
     /// Lima"). El nombre va en negrita para que se lea antes que el prefijo.
+    /// Radio dentro del cual el viajero "está en" el lugar. 50 m y no menos:
+    /// el GPS urbano rebota 20-50 m entre edificios, así que con un umbral más
+    /// fino la etiqueta parpadearía estando en la puerta.
+    private static let aquiMeters: Double = 50
+
+    /// Distancia AHORA. Se prefiere la del GPS actual a la del servidor porque
+    /// esa se calculó al pedir la lista y caminando envejece en segundos; la
+    /// del servidor queda de respaldo para cuando no hay fix.
+    private var distanciaActual: Double? {
+        if let loc = LocationService.current?.userLocation,
+           let lat = place.lat, let lng = place.lng {
+            return loc.distance(from: CLLocation(latitude: lat, longitude: lng))
+        }
+        return place.distanceMeters.map(Double.init)
+    }
+
+    /// "Estás aquí", "120 m", "3,1 km", "236 km". Con la lista mezclando el
+    /// café de enfrente y lugares a 240 km, sin esto dos cards de nombre
+    /// parecido ("El encanto" y "Encanto cafe") no se distinguían.
+    private var etiquetaDistancia: String? {
+        guard let d = distanciaActual else { return nil }
+        if d <= Self.aquiMeters { return "Estás aquí" }
+        if d < 1000 { return "\(Int((d / 10).rounded()) * 10) m" }
+        if d < 10_000 {
+            let km = (d / 100).rounded() / 10
+            return "\(String(format: "%.1f", km).replacingOccurrences(of: ".", with: ",")) km"
+        }
+        return "\(Int((d / 1000).rounded())) km"
+    }
+
+    private var estaAqui: Bool { (distanciaActual ?? .infinity) <= Self.aquiMeters }
+
     private var authorFirstName: String? {
         guard let full = place.coverAuthorName?.trimmingCharacters(in: .whitespaces),
               !full.isEmpty else { return nil }
@@ -1721,6 +1753,33 @@ private struct ExploreCarouselCard: View {
             .frame(maxWidth: .infinity)
             .frame(height: exploreCardPhotoHeight)
             .clipped()
+            // Distancia sobre la foto y no en la ficha: la ficha tiene sus 70pt
+            // repartidos al punto, y en la esquina de la imagen un chip con
+            // material se lee sobre cualquier fondo. "Estás aquí" va en color
+            // de marca porque es la única señal que cambia lo que el viajero
+            // puede hacer — está en la puerta.
+            .overlay(alignment: .topLeading) {
+                if let etiqueta = etiquetaDistancia {
+                    HStack(spacing: 3) {
+                        Image(systemName: estaAqui ? "location.fill" : "location")
+                            .font(.system(size: 7, weight: .semibold))
+                        Text(etiqueta)
+                            .font(.system(size: 9, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(estaAqui ? Color.white : Color.ink)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background {
+                        if estaAqui {
+                            Capsule().fill(Color.brand)
+                        } else {
+                            Capsule().fill(.ultraThinMaterial)
+                        }
+                    }
+                    .padding(6)
+                }
+            }
             // Una línea y no un degradado: la foto termina donde termina, y la
             // ficha empieza donde empieza. Es la misma línea del borde de la
             // card, así el corte se lee como parte del recuadro y no como un
