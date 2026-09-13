@@ -1760,13 +1760,10 @@ private struct ExploreCarouselCard: View {
             // puede hacer — está en la puerta.
             .overlay(alignment: .topLeading) {
                 if let etiqueta = etiquetaDistancia {
-                    HStack(spacing: 3) {
-                        Image(systemName: estaAqui ? "location.fill" : "location")
-                            .font(.system(size: 7, weight: .semibold))
-                        Text(etiqueta)
-                            .font(.system(size: 9, weight: .semibold))
-                            .lineLimit(1)
-                    }
+                    // Solo texto, sin icono: la etiqueta ya dice lo que es.
+                    Text(etiqueta)
+                        .font(.system(size: 9, weight: .semibold))
+                        .lineLimit(1)
                     .foregroundStyle(estaAqui ? Color.white : Color.ink)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
