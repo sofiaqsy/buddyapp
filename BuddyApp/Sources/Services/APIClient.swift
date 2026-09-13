@@ -278,9 +278,12 @@ final class APIClient {
         return res.buddies
     }
 
-    func fetchPlaceContext(id: String, source: String) async throws -> APIPlaceContext {
+    /// `lat/lng`: con el punto del viajero, el conteo de buddies es por
+    /// cobertura de ese punto y no solo por pertenencia al destino.
+    func fetchPlaceContext(id: String, source: String, lat: Double? = nil, lng: Double? = nil) async throws -> APIPlaceContext {
         let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        let ctx: APIPlaceContext = try await request(path: "/places/\(encodedId)/context?source=\(source)")
+        let punto = (lat != nil && lng != nil) ? String(format: "&lat=%.5f&lng=%.5f", lat!, lng!) : ""
+        let ctx: APIPlaceContext = try await request(path: "/places/\(encodedId)/context?source=\(source)\(punto)")
         print("🏙 [APIClient] placeContext id=\(id) source=\(source) → buddies=\(ctx.buddies) stories=\(ctx.stories) status=\(ctx.status)")
         return ctx
     }
@@ -305,6 +308,15 @@ final class APIClient {
         }
         print("📋 [APIClient] fetchGuideSpots id=\(id.prefix(8)) cursor=\(cursor?.prefix(8) ?? "nil")")
         return try await request(path: path)
+    }
+
+    /// Lugares dentro del rectángulo visible del mapa, de cualquier destino.
+    func fetchSpotsInBounds(minLat: Double, minLng: Double, maxLat: Double, maxLng: Double, limit: Int = 150) async throws -> APISpotsInBoundsResponse {
+        let f = { (v: Double) in String(format: "%.5f", v) }
+        let path = "/places/in-bounds?min_lat=\(f(minLat))&min_lng=\(f(minLng))&max_lat=\(f(maxLat))&max_lng=\(f(maxLng))&limit=\(limit)"
+        let res: APISpotsInBoundsResponse = try await request(path: path)
+        print("🗺️ [APIClient] spotsInBounds → \(res.spots.count)\(res.truncated == true ? " (recortado)" : "")\(res.tooWide == true ? " (área demasiado grande)" : "")")
+        return res
     }
 
     func createSpot(destinationId: String, name: String, lat: Double, lng: Double, placeType: String? = nil) async throws -> APIPlaceGuideSpot {
@@ -917,11 +929,14 @@ final class APIClient {
     // MARK: – Matching
 
     // Ownership is derived from the Traveler JWT by the backend — never passed in the body.
-    func createHelpRequest(destinationId: String, journeyId: String? = nil, category: String, description: String?, arrivalAt: Date?) async throws -> APIHelpRequest {
+    /// `lat/lng`: el punto consultado. Con él el backend busca buddies que
+    /// CUBREN ese punto; sin él, deriva la ubicación del journey o destino.
+    func createHelpRequest(destinationId: String, journeyId: String? = nil, category: String, description: String?, arrivalAt: Date?, lat: Double? = nil, lng: Double? = nil) async throws -> APIHelpRequest {
         var body: [String: Any] = [
             "destination_id": destinationId,
             "category": category
         ]
+        if let lat, let lng { body["lat"] = lat; body["lng"] = lng }
         if let journeyId    { body["journey_id"]  = journeyId }
         if let description  { body["description"] = description }
         if let arrivalAt    { body["arrival_at"]  = ISO8601DateFormatter().string(from: arrivalAt) }
@@ -959,6 +974,14 @@ final class APIClient {
         return resp.items
     }
 
+    /// Ayudas recientes cerca de un punto, sin importar el destino.
+    func fetchRecentHelpNearby(lat: Double, lng: Double, radiusKm: Double = 15) async throws -> [APIRecentHelp] {
+        let path = "/matching/recent-help-nearby?lat=\(String(format: "%.5f", lat))&lng=\(String(format: "%.5f", lng))&radius_km=\(Int(radiusKm))"
+        let result: [APIRecentHelp] = try await request(path: path)
+        print("🌐 [APIClient] recent-help-nearby → \(result.count) records")
+        return result
+    }
+
     func fetchRecentHelp(destinationId: String) async throws -> [APIRecentHelp] {
         let path = "/matching/recent-help/\(destinationId)"
         print("🌐 [APIClient] GET \(baseURL)\(path)")
@@ -967,9 +990,10 @@ final class APIClient {
         return result
     }
 
-    func fetchBuddyCount(destinationId: String) async throws -> Int {
+    func fetchBuddyCount(destinationId: String, lat: Double? = nil, lng: Double? = nil) async throws -> Int {
         struct CountResponse: Decodable { let count: Int }
-        let resp: CountResponse = try await request(path: "/matching/available/\(destinationId)")
+        let punto = (lat != nil && lng != nil) ? String(format: "?lat=%.5f&lng=%.5f", lat!, lng!) : ""
+        let resp: CountResponse = try await request(path: "/matching/available/\(destinationId)\(punto)")
         print("🤝 [fetchBuddyCount] destId=\(destinationId.prefix(8)) → count=\(resp.count)")
         return resp.count
     }

@@ -64,8 +64,16 @@ struct RootView: View {
                     Task { await chatStore.load() }
                     chatStore.startEventStream()
                 }
+                // Volver al frente: reanudar el GPS si hay permiso.
+                if locationService.authorizationStatus == .authorizedWhenInUse
+                    || locationService.authorizationStatus == .authorizedAlways {
+                    locationService.startTracking()
+                }
             } else if phase == .background {
                 chatStore.stopEventStream()
+                // En background nadie mira el Home: sin esto el GPS seguía
+                // encendido con la app minimizada.
+                locationService.stopTracking()
             }
         }
         // Cuando el usuario se autentica: arrancar SSE + pedir push

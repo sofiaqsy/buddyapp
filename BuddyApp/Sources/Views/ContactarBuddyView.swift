@@ -236,7 +236,11 @@ struct ContactarBuddyView: View {
     private func loadBuddyCount() async {
         let destIdOpt: String? = resolvedDestinationId
         guard let destId = destIdOpt else { return }
-        if let count = try? await APIClient.shared.fetchBuddyCount(destinationId: destId) {
+        // Sin journey (consulta desde el Home): contar por el punto del viajero.
+        let gpsCount = journey == nil ? (LocationService.current?.stableLocation ?? LocationService.current?.userLocation) : nil
+        if let count = try? await APIClient.shared.fetchBuddyCount(destinationId: destId,
+                                                                   lat: gpsCount?.coordinate.latitude,
+                                                                   lng: gpsCount?.coordinate.longitude) {
             buddyCount = count
         }
     }
@@ -329,9 +333,14 @@ struct ContactarBuddyView: View {
             if let j = journey, j.status == "planning" {
                 try? await APIClient.shared.updateJourneyStatus(journeyId: j.id, status: "active")
             }
+            // Sin journey (consulta desde el Home) el punto consultado es donde
+            // está el viajero. Con journey NO: puede ser un viaje a otra ciudad
+            // y el GPS apuntaría al lugar equivocado.
+            let gps = journey == nil ? (LocationService.current?.stableLocation ?? LocationService.current?.userLocation) : nil
             let req = try await APIClient.shared.createHelpRequest(
                 destinationId: destId, journeyId: journey?.id,
-                category: category, description: description, arrivalAt: journey?.arrivalAt)
+                category: category, description: description, arrivalAt: journey?.arrivalAt,
+                lat: gps?.coordinate.latitude, lng: gps?.coordinate.longitude)
             activeRequestId = req.id
             isExpandingSearch = false
             startPolling(); startSSEMatch(requestId: req.id)
@@ -697,27 +706,21 @@ struct CategoryPickerView: View {
     /// categorías: al quedar sobre el carrusel, mandaba a elegir y lo único
     /// elegible a la vista eran las fotos.
     private var exploreSubtitleAttributed: AttributedString {
-        var prefix = AttributedString("Lugares que recomiendan los buddies de ")
-        prefix.foregroundColor = UIColor(Color.inkMuted)
+        // El núcleo es la CERCANÍA, no el destino: la ciudad queda como
+        // referencia secundaria al final.
+        var str = AttributedString("Lugares cerca de ti que recomiendan los buddies")
+        str.foregroundColor = UIColor(Color.inkMuted)
+        guard let city = destinationName else { return str + AttributedString(".") }
 
-        guard let city = destinationName else {
-            var str = AttributedString("Lugares que recomienda la comunidad por acá.")
-            str.foregroundColor = UIColor(Color.inkMuted)
-            return str
-        }
-
+        var sep = AttributedString(" · ")
+        sep.foregroundColor = UIColor(Color.inkMuted)
         var cityStr = AttributedString(city)
-        cityStr.foregroundColor = UIColor(Color.brand)
-        cityStr.inlinePresentationIntent = .stronglyEmphasized
+        cityStr.foregroundColor = UIColor(Color.inkMuted)
         if onDestinationTap != nil {
             cityStr.underlineStyle = .single
             cityStr.link = URL(string: "buddy://destination")
         }
-
-        var dot = AttributedString(".")
-        dot.foregroundColor = UIColor(Color.inkMuted)
-
-        return prefix + cityStr + dot
+        return str + sep + cityStr
     }
 
     /// La bisagra entre las fotos y el CTA: nombra la ciudad y la disponibilidad
@@ -725,12 +728,14 @@ struct CategoryPickerView: View {
     /// del carrusel, no arriba: ahí deja de ser una estadística suelta y pasa a
     /// explicar qué son esas fotos y por qué llevan al botón.
     private var exploreAvailabilityText: String {
-        let city = destinationName ?? "este lugar"
+        // "Ayudan en esta zona" y no "cerca de ti": el conteo es por COBERTURA
+        // del punto, y la distancia que la respalda es a la zona del buddy, no
+        // al buddy. Afirmar cercanía sería inventar un dato.
         let n = communityContext?.buddies ?? buddyCount
-        guard n > 0 else { return "Buscando buddies que conozcan \(city)" }
+        guard n > 0 else { return "Buscando buddies que ayuden en esta zona" }
         return n == 1
-            ? "1 buddy conoce \(city) y está disponible ahora"
-            : "\(n) buddies conocen \(city) y están disponibles ahora"
+            ? "1 buddy ayuda en esta zona"
+            : "\(n) buddies ayudan en esta zona"
     }
 
     private var noBuddies: Bool {
@@ -949,7 +954,7 @@ struct CategoryPickerView: View {
         }
         let title = searchingCategoryKey != nil
             ? "Buscando buddy…"
-            : "Consultar en \(destinationName ?? "este lugar")"
+            : "Consultar a buddies"
         return Text(title).font(BT.footnoteBold).foregroundColor(Color.ink)
     }
 

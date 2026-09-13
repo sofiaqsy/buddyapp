@@ -32,19 +32,31 @@ final class LocationService: NSObject, ObservableObject {
         super.init()
         LocationService.current = self
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 10
+        // ±10 m y un fix cada 25 m. Antes era "la mejor precisión" cada 10 m:
+        // quieto, el ruido del GPS ya daba "movido 10m" cada 20-30 s y el
+        // chip no descansaba nunca — calor y batería. Las distancias de las
+        // cards (buckets de 10 m, "Estás aquí" a 30/45 m) no necesitan más.
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        manager.distanceFilter = 25
     }
 
     func requestPermission() {
         manager.requestWhenInUseAuthorization()
     }
 
+    private(set) var isTracking = false
+
     func startTracking() {
+        guard !isTracking else { return }
+        isTracking = true
+        print("📡 [gps] tracking ON")
         manager.startUpdatingLocation()
     }
 
     func stopTracking() {
+        guard isTracking else { return }
+        isTracking = false
+        print("📡 [gps] tracking OFF")
         manager.stopUpdatingLocation()
     }
 

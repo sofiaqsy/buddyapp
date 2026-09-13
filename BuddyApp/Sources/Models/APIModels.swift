@@ -94,6 +94,15 @@ struct APIPlaceGuideSpot: Decodable, Identifiable {
     }
 }
 
+/// GET /places/in-bounds — lugares dentro del rectángulo visible del mapa.
+struct APISpotsInBoundsResponse: Decodable {
+    let spots: [APIPlaceGuideSpot]
+    /// true si había más lugares que el límite (se devolvieron los más céntricos).
+    let truncated: Bool?
+    /// true si el mapa está tan alejado que no se piden lugares.
+    let tooWide: Bool?
+}
+
 struct APIPlaceGuide: Decodable {
     let spotCount: Int
     let visitCount: Int

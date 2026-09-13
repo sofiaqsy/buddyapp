@@ -70,6 +70,7 @@ struct InicioView: View {
     @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
     @State private var recentHelpLoadedAt: Date? = nil    // throttle de refetch
+    @State private var lastLoadDataAt: Date? = nil
     @State private var lastRefreshTripStateAt: Date? = nil // throttle scenePhase refresh (30s)
     @State private var lastCommunityContextLocation: CLLocation? = nil // gate GPS → resolve
     @State private var lastCommunityContextAt: Date? = nil
@@ -139,7 +140,8 @@ struct InicioView: View {
         return full.components(separatedBy: " ").first?.capitalized
     }
 
-    // Destino activo → para pedir el head de afinidad al feed (ranking en servidor)
+    // Destino activo. Ya NO decide el feed de historias: la ubicación manda y el
+    // destino queda como etiqueta. Se conserva para quien lo siga necesitando.
     private var myDestinationId: String? {
         let j = activeJourney ?? pendingJourney
         return j?.destination?.id ?? j?.destinationId
@@ -603,8 +605,15 @@ struct InicioView: View {
                         // gate, refreshTripState escribe estado → re-render → onAppear
                         // → refreshTripState: loop infinito contra el backend.
                         guard router.selectedTab == .inicio else { return }
+                        // Cada fix del GPS re-renderiza el Home y TabView vuelve a
+                        // mandar onAppear: con 10 s, quieto y con el ruido del GPS,
+                        // cada fix disparaba journeys → matches → contexto →
+                        // solicitudes → recent-help. 60 s basta para enterarse al
+                        // volver de otra pantalla; los cambios reales llegan por
+                        // SSE (travelerMatchSignature) y notificaciones.
                         let age = Date().timeIntervalSince(lastRefreshTripStateAt ?? .distantPast)
-                        guard age >= 10 else { return }
+                        guard age >= 60 else { return }
+                        print("🔄 [refreshTripState] onAppear (última hace \(Int(age))s)")
                         Task { await refreshTripState() }
                     }
                 }
@@ -614,7 +623,7 @@ struct InicioView: View {
                         navPath.append(journey)
                     }
                 }
-                .refreshable { await loadData() }
+                .refreshable { await loadData(force: true, reason: "pull") }
                 .onChange(of: navPath.count) { old, new in
                     // Al volver de navegación interna solo refrescamos estado del trip
                     // (journeys + match) — loadData completo no es necesario y causa
@@ -622,14 +631,14 @@ struct InicioView: View {
                     if new == 0 && old > 0 { Task { await refreshTripState() } }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { _ in
-                    Task { await loadData() }
+                    Task { await loadData(force: true, reason: "publicado") }
                     showPublishSuccessToast = true
                     UIAccessibility.post(notification: .announcement, argument: "Historia publicada")
                 }
                 // Sin toast: acá no se publicó nada, solo cambió el contenido
                 // de un lugar que el carrusel ya estaba mostrando.
                 .onReceive(NotificationCenter.default.publisher(for: .placePhotosChanged)) { _ in
-                    Task { await loadData() }
+                    Task { await loadData(reason: "fotos") }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .helpCompleted)) { _ in
                     Task { await loadRecentHelp(force: true); await refreshTripState() }
@@ -649,7 +658,7 @@ struct InicioView: View {
                     activeJourney  = nil
                     pendingJourney = nil
                     navPath = NavigationPath()
-                    Task { await loadData() }
+                    Task { await loadData(force: true, reason: "cancelado") }
                 }
                 .toolbar {
                     ToolbarItem(placement: .principal) {
@@ -663,7 +672,7 @@ struct InicioView: View {
                     guard note.object as? Int == AppTab.inicio.rawValue else { return }
                     if !navPath.isEmpty { navPath = NavigationPath() }
                     withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("inicioTop", anchor: .top) }
-                    Task { await loadData() }
+                    Task { await loadData(force: true, reason: "tab") }
                 }
         }
     }
@@ -675,7 +684,7 @@ struct InicioView: View {
 
                 if loadDataFailed && !isLoadingData {
                     Button {
-                        Task { await loadData() }
+                        Task { await loadData(force: true, reason: "reintentar") }
                     } label: {
                         Label("No pudimos cargar. Reintentar", systemImage: "arrow.clockwise")
                             .font(BT.footnote)
@@ -1061,7 +1070,11 @@ struct InicioView: View {
             await loadCommunityPulseIfNeeded()
 
             // Cargar contexto de la comunidad de este destino
-            if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination") {
+            // Con el GPS del viajero: el conteo es de buddies que CUBREN este
+            // punto (migración 018), no solo de los que tienen el destino en su
+            // lista — por eso Breña decía 0 con buddies de Lima cubriendo la zona.
+            if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination",
+                                                                      lat: feedLat, lng: feedLng) {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
                 print("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
                 return
@@ -1238,12 +1251,27 @@ struct InicioView: View {
         }
     }
 
-    private func loadData() async {
+    /// Una carga completa del Home a la vez. Dos disparos seguidos (p. ej. al
+    /// volver de una pantalla y una notificación casi a la vez) hacían dos
+    /// rondas enteras de journeys, matches, mensajes, ofertas, historias y
+    /// spots. Si hay una en vuelo o terminó hace menos de 5 s, se ignora; los
+    /// gestos explícitos del usuario (pull to refresh, reintentar, tocar el
+    /// tab) pasan `force: true`.
+    private func loadData(force: Bool = false, reason: String = "") async {
+        let edad = Date().timeIntervalSince(lastLoadDataAt ?? .distantPast)
+        if !force, loadDataTask != nil || edad < 5 {
+            print("🏠 [loadData] \(reason.isEmpty ? "" : "(\(reason)) ")ignorado — \(loadDataTask != nil ? "ya hay una carga en vuelo" : "última hace \(Int(edad))s")")
+            return
+        }
         // Cancel any in-flight loadData — only the latest matters.
         loadDataTask?.cancel()
         let task = Task<Void, Never> { [self] in await _loadDataBody() }
         loadDataTask = task
         await task.value
+        if loadDataTask == task {
+            loadDataTask = nil
+            lastLoadDataAt = Date()
+        }
     }
 
     private func _loadDataBody() async {
@@ -1392,7 +1420,7 @@ struct InicioView: View {
         for attempt in 0..<2 {
             do {
                 let page = try await APIClient.shared.fetchStories(
-                    destinationId: myDestinationId, lat: feedLat, lng: feedLng, cursor: nil)
+                    destinationId: nil, lat: feedLat, lng: feedLng, cursor: nil)
                 print("🗞️ [loadFeed] items=\(page.items.count)")
                 for (i, item) in page.items.enumerated() {
                     let thumbs = item.pageThumbs ?? []
@@ -1424,7 +1452,7 @@ struct InicioView: View {
         isLoadingMoreFeed = true
         defer { isLoadingMoreFeed = false }
         guard let page = try? await APIClient.shared.fetchStories(
-            destinationId: myDestinationId, lat: feedLat, lng: feedLng, cursor: cursor) else { return }
+            destinationId: nil, lat: feedLat, lng: feedLng, cursor: cursor) else { return }
         // Append + dedupe (los items de afinidad pueden reaparecer en la cola global)
         let fresh = page.items.filter { seenStoryIds.insert($0.id).inserted }
         publicJourneys.append(contentsOf: fresh)
@@ -1459,8 +1487,10 @@ struct InicioView: View {
         // ver effectiveHomeContext), mostrar la actividad de un trip que ni
         // siquiera es el que se está usando ahora mismo confunde: recentHelp
         // queda vacío y la sección cae al pulso global (loadCommunityPulseIfNeeded).
-        guard let journey = effectiveTripJourney,
-              let destId = journey.destination?.id ?? journey.destinationId else {
+        // La ubicación manda: con GPS, las ayudas de CERCA del viajero, sean del
+        // destino que sean. Sin GPS, el destino del trip como antes.
+        let geoKey: String? = feedLat.flatMap { la in feedLng.map { String(format: "geo:%.2f,%.2f", la, $0) } }
+        guard let destId = geoKey ?? (effectiveTripJourney.flatMap { $0.destination?.id ?? $0.destinationId }) else {
             recentHelp = []; recentHelpDestId = nil; return
         }
 
@@ -1479,7 +1509,12 @@ struct InicioView: View {
         isLoadingRecentHelp = true
         defer { isLoadingRecentHelp = false }
         do {
-            let result = try await APIClient.shared.fetchRecentHelp(destinationId: destId)
+            let result: [APIRecentHelp]
+            if geoKey != nil, let la = feedLat, let lo = feedLng {
+                result = try await APIClient.shared.fetchRecentHelpNearby(lat: la, lng: lo)
+            } else {
+                result = try await APIClient.shared.fetchRecentHelp(destinationId: destId)
+            }
             // Solo actualiza si el destino sigue siendo el mismo (anti carrera con
             // cambios de trip) y conserva lo último conocido si llega vacío por un
             // blip — la prueba social no debe parpadear al refrescar.
@@ -1745,7 +1780,12 @@ struct InicioView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Spacing.xl)
             } else if !publicJourneys.isEmpty {
-                VStack(alignment: .leading, spacing: Spacing.lg) {
+                // Lazy: con VStack se construían las 24 cards (carrusel + fotos)
+                // de golpe cada vez que el Home volvía a pantalla — por ejemplo
+                // al cerrar el mapa — y todos los onAppear disparaban a la vez,
+                // incluido el de "cargar más", que pedía la página siguiente
+                // sin que nadie hubiera hecho scroll.
+                LazyVStack(alignment: .leading, spacing: Spacing.lg) {
                     Text("HISTORIAS DE VIAJEROS")
                         .font(BT.eyebrow)
                         .tracking(1.5)
@@ -2205,9 +2245,10 @@ struct PublishedTripCard: View {
     private var authorName: String { (journey.users?.fullName ?? "Buddy").capitalized }
     private var thumbs: [String] {
         let raw = journey.pageThumbs ?? []
-        let filtered = raw.filter { !$0.isEmpty }
-        print("🖼️ [StoryCard] id=\(journey.id.prefix(8)) pageThumbs.raw=\(raw.count) filtered=\(filtered.count) urls=\(filtered)")
-        return filtered
+        // Sin log aquí: esta propiedad se lee varias veces en cada render
+        // (conteo, páginas, indicador…) y el print por lectura era el "5 veces
+        // por card" de los logs. Se loguea una vez, al aparecer la card.
+        return raw.filter { !$0.isEmpty }
     }
     private var durationLine: String? {
         guard let d = journey.durationDays else { return nil }
@@ -2232,6 +2273,7 @@ struct PublishedTripCard: View {
         .cardShadow()
         .padding(.horizontal, Spacing.edge)
         .sheet(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+        .onAppear { print("🖼️ [StoryCard] aparece id=\(journey.id.prefix(8)) fotos=\(thumbs.count)") }
     }
 
     // Height is derived from the actual container width via aspectRatio — zero

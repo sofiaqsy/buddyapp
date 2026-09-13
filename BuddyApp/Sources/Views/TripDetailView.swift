@@ -36,6 +36,13 @@ struct TripDetailView: View {
     /// hasta el final se revelan los siguientes 10 y aparecen como markers.
     @State private var visibleCount = 10
     @State private var orderedIds: [UUID] = []   // orden congelado de la sesión
+    /// Lugares que caen en la parte VISIBLE del mapa, de cualquier destino.
+    /// Se rellena al terminar de mover o hacer zoom (estilo Airbnb).
+    @State private var boundsPlaces: [Place] = []
+    @State private var boundsTask: Task<Void, Never>? = nil
+    /// Rectángulo ya pedido (con margen) y si vino recortado. Hacer zoom dentro
+    /// de un área ya cargada no necesita red: los lugares ya están en memoria.
+    @State private var fetchedBounds: SpotBounds? = nil
 
     init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil, focusPlaceId: String? = nil) {
         self.route = route
@@ -71,7 +78,17 @@ struct TripDetailView: View {
     }
 
     /// Always read live places from routeStore so isCollected updates reflect instantly
-    private var livePlaces: [Place] { routeStore.route.places }
+    /// Los del destino + los que están en pantalla y no son del destino.
+    ///
+    /// Antes solo los del destino: los spots cuelgan de UN destino, así que el
+    /// mapa de Breña salía vacío aunque Cafetería Rosal y El encanto están ahí
+    /// (pertenecen a "Lima"). Los del destino van primero porque traen
+    /// favoritos y stickers; los de pantalla completan.
+    private var livePlaces: [Place] {
+        let propios = routeStore.route.places
+        let ids = Set(propios.map(\.id))
+        return propios + boundsPlaces.filter { !ids.contains($0.id) }
+    }
     /// Orden: favoritos primero, luego featured, luego alfabético
     private var sortedPlaces: [Place] {
         livePlaces.sorted { a, b in
@@ -228,7 +245,10 @@ struct TripDetailView: View {
     private var mapView: some View {
         Map(position: $camera) {
             // Spots curados por la comunidad; featured al final → se dibujan encima
-            ForEach(displayedPlaces.sorted { !$0.featured && $1.featured }) { place in
+            // TODOS los lugares en el mapa, no solo el lote del rail: el rail pagina
+            // de 10 en 10, pero un pin que existe y no se dibuja es justo el
+            // "no veo ningún spot" que se quería arreglar.
+            ForEach(orderedPlaces.sorted { !$0.featured && $1.featured }) { place in
                 Annotation("", coordinate: place.coordinate) {
                     RecommendationPin(place: place, isSelected: selectedPlace?.id == place.id)
                         .frame(minWidth: 44, minHeight: 44)
@@ -259,6 +279,11 @@ struct TripDetailView: View {
             showsTraffic: false
         ))
         .mapControls { EmptyView() }
+        // Al TERMINAR de mover o hacer zoom (no en cada frame): pedir lo que hay
+        // en pantalla.
+        .onMapCameraChange(frequency: .onEnd) { context in
+            loadSpotsInBounds(region: context.region)
+        }
         .onTapGesture {
             if selectedPlace != nil {
                 withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil }
@@ -612,6 +637,56 @@ struct TripDetailView: View {
 
     // Centers on the trip's places. Uses destination radius as the max span
     // so pins are never shown more zoomed-out than the zone itself.
+    /// Pide los lugares del rectángulo visible. Espera 350 ms y cancela la
+    /// petición anterior: al arrastrar y soltar varias veces seguidas, solo
+    /// la última posición llega a la red.
+    private func loadSpotsInBounds(region: MKCoordinateRegion) {
+        let visible = SpotBounds(region: region, scale: 1)
+        // Zoom o arrastre DENTRO de lo ya cargado: nada que pedir. Antes cada
+        // pellizco pedía otra vez el mismo sitio y cancelaba el anterior — la
+        // mayoría de las peticiones de los logs acababan en "cancelled".
+        if let ya = fetchedBounds, !ya.truncated, ya.contains(visible) {
+            return
+        }
+        boundsTask?.cancel()
+        boundsTask = Task {
+            // 600 ms: un pellizco continuo manda varios "onEnd" seguidos.
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            // Se pide el DOBLE de lo visible: el siguiente arrastre o zoom
+            // corto cae dentro y no vuelve a la red.
+            let pedido = SpotBounds(region: region, scale: 2)
+            do {
+                let res = try await APIClient.shared.fetchSpotsInBounds(
+                    minLat: pedido.minLat, minLng: pedido.minLng,
+                    maxLat: pedido.maxLat, maxLng: pedido.maxLng
+                )
+                guard !Task.isCancelled else { return }
+                // Muy alejado: se conservan los que ya había en vez de vaciar.
+                if res.tooWide == true { return }
+                let nuevos = res.spots.map(\.asPlace)
+                await MainActor.run {
+                    fetchedBounds = SpotBounds(minLat: pedido.minLat, minLng: pedido.minLng,
+                                               maxLat: pedido.maxLat, maxLng: pedido.maxLng,
+                                               truncated: res.truncated == true)
+                    // Sin animación y solo si cambió algo: reasignar la misma
+                    // lista redibujaba todos los pins del mapa.
+                    if nuevos.map(\.id) != boundsPlaces.map(\.id) {
+                        boundsPlaces = nuevos
+                    }
+                }
+                print("🗺️ [TripDetailView] en pantalla: \(nuevos.count) lugar(es) — \(nuevos.prefix(5).map(\.name).joined(separator: ", "))")
+            } catch is CancellationError {
+                // Reemplazada por un gesto más nuevo: no es un fallo.
+            } catch let e as URLError where e.code == .cancelled {
+                // Idem, cancelada a nivel de red.
+            } catch {
+                // Un fallo conserva los pins de antes: no dejar el mapa vacío.
+                print("🗺️ [TripDetailView] spotsInBounds falló (\(error.localizedDescription)) — conservo \(boundsPlaces.count)")
+            }
+        }
+    }
+
     private func fitMap() {
         // Encuadra los lugares cargados (primer lote en la carga inicial)
         let coords = displayedPlaces.map(\.coordinate)
@@ -1426,5 +1501,29 @@ struct PlaceFullGallerySheet: View {
                 }
             }
         }
+    }
+}
+
+/// Rectángulo lat/lng para el mapa estilo Airbnb.
+struct SpotBounds {
+    let minLat: Double, minLng: Double, maxLat: Double, maxLng: Double
+    var truncated = false
+
+    init(minLat: Double, minLng: Double, maxLat: Double, maxLng: Double, truncated: Bool = false) {
+        self.minLat = minLat; self.minLng = minLng
+        self.maxLat = maxLat; self.maxLng = maxLng
+        self.truncated = truncated
+    }
+
+    /// La región visible, agrandada `scale` veces alrededor de su centro.
+    init(region: MKCoordinateRegion, scale: Double) {
+        let halfLat = region.span.latitudeDelta  * scale / 2
+        let halfLng = region.span.longitudeDelta * scale / 2
+        self.init(minLat: region.center.latitude  - halfLat, minLng: region.center.longitude - halfLng,
+                  maxLat: region.center.latitude  + halfLat, maxLng: region.center.longitude + halfLng)
+    }
+
+    func contains(_ o: SpotBounds) -> Bool {
+        o.minLat >= minLat && o.maxLat <= maxLat && o.minLng >= minLng && o.maxLng <= maxLng
     }
 }
