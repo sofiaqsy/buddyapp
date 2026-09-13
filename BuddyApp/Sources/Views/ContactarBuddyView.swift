@@ -1810,6 +1810,7 @@ private struct ExploreCarouselCard: View {
             .onChange(of: etiquetaDistancia) { viejo, nuevo in
                 // Solo cuando el valor cambia de verdad, no en la primera pintura.
                 guard viejo != nil, nuevo != nil, viejo != nuevo else { return }
+                print("📏 [distancia] \(place.name): \(viejo ?? "-") → \(nuevo ?? "-")")
                 pulsando = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { pulsando = false }
             }

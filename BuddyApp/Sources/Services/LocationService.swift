@@ -18,6 +18,8 @@ final class LocationService: NSObject, ObservableObject {
     private let manager = CLLocationManager()
     private var hasFetchedCity = false
     private var lastGeocodedLocation: CLLocation?
+    /// Fix anterior, solo para loguear cuánto se movió el viajero entre fixes.
+    private var lastFixLogged: CLLocation?
 
     // place id -> triggered
     var onRegionEnter: ((String) -> Void)?
@@ -69,6 +71,17 @@ extension LocationService: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         userLocation = locations.last
         guard let loc = locations.last else { return }
+
+        // Un log por fix: posición, precisión, cuánto se movió desde el
+        // anterior y cada cuánto llegan. Sirve para distinguir "no me muevo"
+        // de "el GPS no entrega fixes" cuando la UI no reacciona.
+        let delta = lastFixLogged.map { Int(loc.distance(from: $0)) }
+        let segs  = lastFixLogged.map { String(format: "%.0f", loc.timestamp.timeIntervalSince($0.timestamp)) }
+        print("📡 [gps] fix \(String(format: "%.6f", loc.coordinate.latitude)),\(String(format: "%.6f", loc.coordinate.longitude)) ±\(Int(loc.horizontalAccuracy))m" +
+              (delta.map { " · movido \($0)m" } ?? " · primer fix") +
+              (segs.map { " en \($0)s" } ?? "") +
+              (loc.speed >= 0 ? " · \(String(format: "%.1f", loc.speed))m/s" : ""))
+        lastFixLogged = loc
         // Re-geocode si es la primera vez, o si el usuario se movió más de 5 km desde la última geocodificación
         let distanceMoved = lastGeocodedLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
         guard !hasFetchedCity || distanceMoved > 5_000 else { return }
