@@ -4,6 +4,10 @@ import Combine
 
 final class LocationService: NSObject, ObservableObject {
     @Published var userLocation: CLLocation?
+    /// Última ubicación que pasó LocationFilter (precisión ≤ 20 m). Las
+    /// distancias de la UI usan esta; userLocation sigue siendo el fix crudo
+    /// para el resto de la app, que no necesita el filtro.
+    @Published var stableLocation: CLLocation?
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var currentCity: String?
     /// Distrito/barrio (subLocality) — en Lima el geocoder da locality="Lima" y
@@ -82,6 +86,11 @@ extension LocationService: CLLocationManagerDelegate {
               (segs.map { " en \($0)s" } ?? "") +
               (loc.speed >= 0 ? " · \(String(format: "%.1f", loc.speed))m/s" : ""))
         lastFixLogged = loc
+        if LocationFilter.accept(loc, hasStable: stableLocation != nil) {
+            stableLocation = loc
+        } else {
+            print("📡 [gps] descartado ±\(Int(loc.horizontalAccuracy))m (umbral \(Int(LocationFilter.maxAccuracy))m)")
+        }
         // Re-geocode si es la primera vez, o si el usuario se movió más de 5 km desde la última geocodificación
         let distanceMoved = lastGeocodedLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
         guard !hasFetchedCity || distanceMoved > 5_000 else { return }

@@ -60,7 +60,10 @@ struct InicioView: View {
     @State private var feedHasMore = true
     @State private var isLoadingMoreFeed = false
     @State private var seenStoryIds = Set<String>()
-    @State private var exploreCards: [APIPlaceCard] = []   // carrusel "Explora {ciudad}" del composer
+    /// Carrusel de spots. Vive en SpotsStore: una sola petición, cache en disco
+    /// y un fallo nunca vacía la lista buena.
+    @ObservedObject private var spotsStore = SpotsStore.shared
+    private var exploreCards: [APIPlaceCard] { spotsStore.spots }
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
@@ -267,7 +270,9 @@ struct InicioView: View {
             // Cafetería Rosal (14 m) y El encanto (54 m) media cuadra ya cambia
             // el orden, y esperar a la siguiente petición para reflejarlo hacía
             // que pareciera que el Home no se entera.
-            resortSpots(from: loc)
+            if let estable = locationService.stableLocation {
+                resortSpots(from: estable)
+            }
 
             // La RED sí va con puerta. CLLocation es clase: cada fix es una
             // instancia nueva aunque no te muevas, así que sin esto habría una
@@ -1006,23 +1011,11 @@ struct InicioView: View {
     /// haría trabajo de diff a SwiftUI en cada tick del GPS.
     @MainActor
     private func resortSpots(from loc: CLLocation) {
-        guard exploreCards.count > 1 else { return }
-        let ordenados = exploreCards.sorted { a, b in
-            let da = a.lat.flatMap { lat in a.lng.map { CLLocation(latitude: lat, longitude: $0).distance(from: loc) } } ?? .greatestFiniteMagnitude
-            let db = b.lat.flatMap { lat in b.lng.map { CLLocation(latitude: lat, longitude: $0).distance(from: loc) } } ?? .greatestFiniteMagnitude
-            return da < db
-        }
-        guard ordenados.map(\.id) != exploreCards.map(\.id) else { return }
-        print("🏠 [resortSpots] nuevo orden: \(ordenados.prefix(3).map(\.name).joined(separator: " · "))")
-        withAnimation(.easeInOut(duration: 0.25)) { exploreCards = ordenados }
+        spotsStore.reorder(from: loc)
     }
 
     private func refreshSpotsForLocation() async {
-        guard let cards = try? await APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng) else { return }
-        await MainActor.run {
-            withAnimation(.easeInOut(duration: 0.25)) { exploreCards = cards }
-        }
-        print("🏠 [refreshSpotsForLocation] \(cards.count) spot(s) para la ubicación actual")
+        await SpotsStore.shared.refresh(lat: feedLat, lng: feedLng, reason: "gps")
     }
 
     private func refreshHomeCommunityContext() async {
@@ -1261,13 +1254,24 @@ struct InicioView: View {
         // isLoadingData pase a false — si se carga después (como antes),
         // el composer alcanza a pintar la grilla de categorías vacía de
         // fotos y recién after eso salta al carrusel, un flash visible.
-        async let dests = APIClient.shared.fetchDestinations()
-        async let explore = APIClient.shared.fetchPlaceCards(lat: feedLat, lng: feedLng)
-        let fetchedDests = (try? await dests) ?? []
-        let fetchedExplore = (try? await explore) ?? []
+        // Spots: sin esperar y sin reemplazar. La lista en pantalla sale del
+        // cache de SpotsStore, así que no hay que retener isLoadingData por
+        // ella; y si esta petición falla, la lista buena se conserva.
+        //
+        // Con permiso de ubicación pero todavía sin fix, no se pide aquí: el
+        // primer fix lo hará con coordenadas. Pedirla ahora sin coordenadas y
+        // otra vez un segundo después era la petición duplicada del arranque.
+        let authorized = locationService.authorizationStatus == .authorizedWhenInUse ||
+                         locationService.authorizationStatus == .authorizedAlways
+        if feedLat != nil || !authorized {
+            Task { await SpotsStore.shared.refresh(lat: feedLat, lng: feedLng, reason: "loadData") }
+        } else {
+            print("🗂️ [spots] loadData: esperando el primer fix del GPS para pedir con coordenadas")
+        }
+
+        let fetchedDests = (try? await APIClient.shared.fetchDestinations()) ?? []
         await MainActor.run {
             destinations = fetchedDests
-            exploreCards = fetchedExplore
             ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
         }
 

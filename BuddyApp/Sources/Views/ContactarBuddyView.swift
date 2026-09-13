@@ -562,9 +562,8 @@ struct ContactarBuddyView: View {
 // Reutilizable: el mismo composer del modal se embebe en la Home para iniciar
 // el flujo de ayuda sin pasos intermedios.
 struct CategoryPickerView: View {
-    /// Para saber qué lugar es el más cercano en cada momento y dárselo a una
-    /// sola card. Inyectado en RootView, así que llega también a las sheets.
-    @EnvironmentObject private var locationService: LocationService
+    /// El más cercano con margen lo calcula SpotsStore; aquí solo se lee.
+    @ObservedObject private var spotsStore = SpotsStore.shared
     var buddyCount: Int = 0
     var preselectedCategory: String? = nil
     var destinationName: String? = nil
@@ -1067,17 +1066,6 @@ struct CategoryPickerView: View {
     // atención. El botón de abajo todavía no dispara ninguna acción.
     /// Fotos sueltas, no agrupadas por lugar — si "El Encanto" tiene 3 fotos,
     /// el carrusel muestra 3 tarjetas, no 1 tarjeta con 3 fotos adentro.
-    /// id del lugar más cercano al fix actual, o nil sin GPS.
-    private var nearestPlaceId: String? {
-        guard let loc = locationService.userLocation else { return nil }
-        return placeCards
-            .compactMap { p -> (String, Double)? in
-                guard let lat = p.lat, let lng = p.lng else { return nil }
-                return (p.id, loc.distance(from: CLLocation(latitude: lat, longitude: lng)))
-            }
-            .min { $0.1 < $1.1 }?.0
-    }
-
     private var explorePhotos: [ExplorePhoto] {
         placeCards.flatMap { place -> [ExplorePhoto] in
             let urls = (place.coverUrls?.isEmpty == false ? place.coverUrls! : [place.coverUrl].compactMap { $0 })
@@ -1179,7 +1167,7 @@ struct CategoryPickerView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: exploreCardSpacing) {
                         ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
-                            ExploreCarouselCard(photo: photo, isNearest: photo.place.id == nearestPlaceId)
+                            ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
                                 .frame(width: exploreCardWidth, height: exploreCardHeight)
                                 // visualEffect es el único lector de geometría acá a
                                 // propósito: es render-only y no dispara re-render de
@@ -1692,6 +1680,11 @@ private struct ExploreCarouselCard: View {
     /// Pulso breve al cambiar la distancia: el número se mueve solo mientras
     /// caminas, y sin una señal el cambio pasa desapercibido.
     @State private var pulsando = false
+    /// Distancia MOSTRADA. Solo cambia si el nuevo valor se aleja lo bastante
+    /// (DistanceResolver.shouldUpdate); así el ruido no hace saltar el número.
+    @State private var shownDistance: Double?
+    /// Con histéresis: se enciende a 30 m y se apaga pasados 45 m.
+    @State private var isHere = false
     private var place: APIPlaceCard { photo.place }
 
     /// Fondo de la ficha: el mismo pie de la foto, repetido y visto a través del
@@ -1727,35 +1720,20 @@ private struct ExploreCarouselCard: View {
     /// de una persona concreta pesa más como prueba social que un conteo, y
     /// encadena con el subtítulo ("Lugares que recomiendan los buddies de
     /// Lima"). El nombre va en negrita para que se lea antes que el prefijo.
-    /// Radio para "Estás aquí". 30 m: suficiente para cubrir el rebote del GPS
-    /// en la puerta sin abarcar el local de al lado. Además solo aplica al
-    /// más cercano (isNearest), que es lo que realmente evita el empate.
-    private static let aquiMeters: Double = 30
-
-    /// Distancia AHORA, con el fix más reciente. La del servidor queda de
-    /// respaldo para cuando todavía no hay GPS.
-    private var distanciaActual: Double? {
-        if let loc = locationService.userLocation,
-           let lat = place.lat, let lng = place.lng {
-            return loc.distance(from: CLLocation(latitude: lat, longitude: lng))
-        }
-        return place.distanceMeters.map(Double.init)
-    }
-
-    private var estaAqui: Bool {
-        isNearest && (distanciaActual ?? .infinity) <= Self.aquiMeters
-    }
-
-    /// "Estás aquí", "120 m", "3,1 km", "236 km".
+    /// "Estás aquí", "120 m", "3,1 km". La lógica vive en DistanceResolver;
+    /// la card solo guarda lo que está mostrando.
     private var etiquetaDistancia: String? {
-        guard let d = distanciaActual else { return nil }
-        if estaAqui { return "Estás aquí" }
-        if d < 1000 { return "\(max(10, Int((d / 10).rounded()) * 10)) m" }
-        if d < 10_000 {
-            let km = (d / 100).rounded() / 10
-            return "\(String(format: "%.1f", km).replacingOccurrences(of: ".", with: ",")) km"
+        guard let d = shownDistance else { return nil }
+        return isHere ? "Estás aquí" : DistanceResolver.label(d)
+    }
+
+    private func recompute() {
+        let nueva = DistanceResolver.distance(from: locationService.stableLocation, to: place)
+            ?? place.distanceMeters.map(Double.init)
+        if let nueva, DistanceResolver.shouldUpdate(shown: shownDistance, new: nueva) {
+            shownDistance = nueva
         }
-        return "\(Int((d / 1000).rounded())) km"
+        isHere = DistanceResolver.isHere(wasHere: isHere, distance: shownDistance, isNearest: isNearest)
     }
 
     private var authorFirstName: String? {
@@ -1791,11 +1769,11 @@ private struct ExploreCarouselCard: View {
                         // Los dígitos ruedan en vez de reemplazarse de golpe.
                         .contentTransition(.numericText())
                         .animation(.snappy(duration: 0.25), value: etiqueta)
-                    .foregroundStyle(estaAqui ? Color.white : Color.ink)
+                    .foregroundStyle(isHere ? Color.white : Color.ink)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background {
-                        if estaAqui {
+                        if isHere {
                             Capsule().fill(Color.brand)
                         } else {
                             Capsule().fill(.ultraThinMaterial)
@@ -1807,6 +1785,9 @@ private struct ExploreCarouselCard: View {
                     .padding(6)
                 }
             }
+            .onAppear { recompute() }
+            .onChange(of: locationService.stableLocation) { _, _ in recompute() }
+            .onChange(of: isNearest) { _, _ in recompute() }
             .onChange(of: etiquetaDistancia) { viejo, nuevo in
                 // Solo cuando el valor cambia de verdad, no en la primera pintura.
                 guard viejo != nil, nuevo != nil, viejo != nuevo else { return }

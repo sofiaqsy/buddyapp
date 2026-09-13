@@ -390,7 +390,7 @@ struct APINearbySpotsResponse: Decodable {
 
 /// Buddy mostrado en la tarjeta de un lugar. Es un buddy del DESTINO (así se
 /// asignan), no del local — por eso la tarjeta lo rotula "N buddies en Lima".
-struct APIPlaceBuddy: Decodable, Hashable {
+struct APIPlaceBuddy: Codable, Hashable {
     let fullName: String?
     let avatarUrl: String?
     /// Solo lo trae GET /destinations/:id/buddies (la pestaña "Buddies" del
@@ -411,7 +411,7 @@ struct APIDestinationBuddiesResponse: Decodable {
 /// Hashable (por id) para poder empujarla a un NavigationPath — abrir su mapa
 /// tiene que ser un push dentro del NavigationStack existente, no un modal:
 /// un .fullScreenCover SIEMPRE tapa la barra de tabs de la app, un push no.
-struct APIPlaceCard: Decodable, Identifiable, Hashable {
+struct APIPlaceCard: Codable, Identifiable, Hashable {
     static func == (lhs: APIPlaceCard, rhs: APIPlaceCard) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
