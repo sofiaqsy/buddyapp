@@ -877,6 +877,13 @@ final class APIClient {
         for item in res.items.prefix(3) {
             print("🌍 [APIClient]   \(item.name) covers=\(APIClient.shortCovers(item.coverUrls))")
         }
+        // Autor POR FOTO. Si un lugar con fotos de varias personas sale con un
+        // solo nombre repetido, o coverPhotos llega vacío, aquí se ve de qué
+        // capa viene el problema.
+        for item in res.items.prefix(3) {
+            let autores = item.coverPhotos?.map { $0.authorName ?? "sin autor" } ?? []
+            print("🌍 [APIClient]   \(item.name) autores por foto=\(autores.isEmpty ? "sin coverPhotos (respaldo: \(item.coverAuthorName ?? "nil"))" : autores.joined(separator: " · "))")
+        }
         return res.items
     }
 

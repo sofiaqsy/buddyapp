@@ -411,6 +411,15 @@ struct APIDestinationBuddiesResponse: Decodable {
 /// Hashable (por id) para poder empujarla a un NavigationPath — abrir su mapa
 /// tiene que ser un push dentro del NavigationStack existente, no un modal:
 /// un .fullScreenCover SIEMPRE tapa la barra de tabs de la app, un push no.
+/// Una foto del lugar CON SU AUTOR. Un sitio puede estar documentado por
+/// varias personas y el carrusel dibuja una card por foto: con un solo autor
+/// por lugar, todas quedaban firmadas por quien publicó la última.
+struct APIPlaceCoverPhoto: Codable, Hashable {
+    let url: String
+    let authorName: String?
+    let authorAvatarUrl: String?
+}
+
 struct APIPlaceCard: Codable, Identifiable, Hashable {
     static func == (lhs: APIPlaceCard, rhs: APIPlaceCard) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -429,6 +438,9 @@ struct APIPlaceCard: Codable, Identifiable, Hashable {
     let distanceMeters: Int?
     let coverUrl: String?
     let coverUrls: [String]?
+    /// Las mismas fotos que coverUrls, cada una con quien la subió. Solo lo
+    /// manda /feed/place-shares; opcional para no romper el cache viejo.
+    let coverPhotos: [APIPlaceCoverPhoto]?
     /// Quién documentó la foto de portada — "Recomendado por {nombre}" en el
     /// carrusel de exploración.
     let coverAuthorName: String?

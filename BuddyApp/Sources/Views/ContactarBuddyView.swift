@@ -1068,9 +1068,20 @@ struct CategoryPickerView: View {
     /// el carrusel muestra 3 tarjetas, no 1 tarjeta con 3 fotos adentro.
     private var explorePhotos: [ExplorePhoto] {
         placeCards.flatMap { place -> [ExplorePhoto] in
+            // coverPhotos manda: es la única fuente que sabe de quién es CADA
+            // foto. Con coverUrls todas se firmaban con coverAuthorName, el
+            // autor de la última — Cafetería Rosal salía "Angie" en las dos
+            // fotos aunque una es de Keyla.
+            if let fotos = place.coverPhotos, !fotos.isEmpty {
+                return fotos.enumerated().map { i, f in
+                    ExplorePhoto(id: "\(place.id)-\(i)", url: f.url, place: place,
+                                 authorName: f.authorName, authorAvatarUrl: f.authorAvatarUrl)
+                }
+            }
             let urls = (place.coverUrls?.isEmpty == false ? place.coverUrls! : [place.coverUrl].compactMap { $0 })
             return urls.enumerated().map { i, url in
-                ExplorePhoto(id: "\(place.id)-\(i)", url: url, place: place)
+                ExplorePhoto(id: "\(place.id)-\(i)", url: url, place: place,
+                             authorName: place.coverAuthorName, authorAvatarUrl: place.coverAuthorAvatarUrl)
             }
         }
     }
@@ -1324,6 +1335,9 @@ private struct ExplorePhoto: Identifiable {
     let id: String
     let url: String
     let place: APIPlaceCard
+    /// Quién aportó ESTA foto — no el autor de la tarjeta del lugar.
+    let authorName: String?
+    let authorAvatarUrl: String?
 }
 
 // MARK: – Conversación pendiente (antes de que exista un match)
@@ -1737,7 +1751,7 @@ private struct ExploreCarouselCard: View {
     }
 
     private var authorFirstName: String? {
-        guard let full = place.coverAuthorName?.trimmingCharacters(in: .whitespaces),
+        guard let full = photo.authorName?.trimmingCharacters(in: .whitespaces),
               !full.isEmpty else { return nil }
         return full.components(separatedBy: " ").first ?? full
     }
@@ -1837,9 +1851,9 @@ private struct ExploreCarouselCard: View {
                     .minimumScaleFactor(0.7)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if let author = place.coverAuthorName {
+                    if let author = photo.authorName {
                         Group {
-                            if let urlStr = place.coverAuthorAvatarUrl, let url = URL(string: urlStr) {
+                            if let urlStr = photo.authorAvatarUrl, let url = URL(string: urlStr) {
                                 AsyncImage(url: url) { img in
                                     img.resizable().scaledToFill()
                                 } placeholder: { Color.sandLight }
