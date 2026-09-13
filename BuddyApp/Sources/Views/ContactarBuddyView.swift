@@ -1689,6 +1689,9 @@ private struct ExploreCarouselCard: View {
     /// referencia estática la card solo se repintaba cuando el carrusel se
     /// reordenaba, así que los números se quedaban quietos.
     @EnvironmentObject private var locationService: LocationService
+    /// Pulso breve al cambiar la distancia: el número se mueve solo mientras
+    /// caminas, y sin una señal el cambio pasa desapercibido.
+    @State private var pulsando = false
     private var place: APIPlaceCard { photo.place }
 
     /// Fondo de la ficha: el mismo pie de la foto, repetido y visto a través del
@@ -1785,6 +1788,9 @@ private struct ExploreCarouselCard: View {
                     Text(etiqueta)
                         .font(.system(size: 9, weight: .semibold))
                         .lineLimit(1)
+                        // Los dígitos ruedan en vez de reemplazarse de golpe.
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.25), value: etiqueta)
                     .foregroundStyle(estaAqui ? Color.white : Color.ink)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
@@ -1795,8 +1801,17 @@ private struct ExploreCarouselCard: View {
                             Capsule().fill(.ultraThinMaterial)
                         }
                     }
+                    // Zoom leve y vuelta: se nota el cambio sin distraer de la foto.
+                    .scaleEffect(pulsando ? 1.15 : 1, anchor: .topLeading)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.55), value: pulsando)
                     .padding(6)
                 }
+            }
+            .onChange(of: etiquetaDistancia) { viejo, nuevo in
+                // Solo cuando el valor cambia de verdad, no en la primera pintura.
+                guard viejo != nil, nuevo != nil, viejo != nuevo else { return }
+                pulsando = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { pulsando = false }
             }
             // Una línea y no un degradado: la foto termina donde termina, y la
             // ficha empieza donde empieza. Es la misma línea del borde de la
