@@ -157,6 +157,16 @@ final class TravelerService {
         let (data, response) = try await URLSession.shared.data(for: req)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         print("🧳 [TravelerService] /travelers/init → statusCode=\(statusCode) bytes=\(data.count)")
+        // 409 account_requires_auth: este device tiene una cuenta VERIFICADA viva.
+        // /init no la autentica ni crea un guest encima; se pide login.
+        if statusCode == 409 {
+            print("🔒 [TravelerService] /travelers/init → cuenta verificada en este device — se pide login, no se crea guest")
+            needsReauth = true
+            await MainActor.run {
+                NotificationCenter.default.post(name: .sessionExpired, object: nil)
+            }
+            throw TravelerError.sessionExpired
+        }
         guard (200...299).contains(statusCode),
               let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tid   = json["traveler_id"] as? String,
