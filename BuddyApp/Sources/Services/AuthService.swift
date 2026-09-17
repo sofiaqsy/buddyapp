@@ -299,9 +299,12 @@ final class AuthService {
         let (data, response) = try await URLSession.shared.data(for: req)
         let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr    = String(data: data, encoding: .utf8) ?? "empty"
-        print("[social/\(credential.provider.rawValue)] → \(httpStatus): \(bodyStr)")
-
-        guard (200...299).contains(httpStatus) else { throw AuthError.sendFailed(bodyStr) }
+        // Nunca loguear el cuerpo: trae traveler_token y secret de refresh.
+        guard (200...299).contains(httpStatus) else {
+            let errMsg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            print("[social/\(credential.provider.rawValue)] → \(httpStatus) error=\(errMsg ?? "sin detalle")")
+            throw AuthError.sendFailed(bodyStr)
+        }
 
         guard let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tid    = json["traveler_id"]    as? String,
@@ -309,6 +312,7 @@ final class AuthService {
               let rawSt  = json["status"]         as? String else {
             throw AuthError.sendFailed("Respuesta inesperada del servidor")
         }
+        print("[social/\(credential.provider.rawValue)] → \(httpStatus) traveler_id=\(tid.prefix(8))… status=\(rawSt) secret=\(json["secret"] != nil ? "recibido" : "no")")
 
         return AuthResult(
             travelerId:    tid,

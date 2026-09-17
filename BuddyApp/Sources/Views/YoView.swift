@@ -1103,8 +1103,9 @@ struct YoView: View {
         }
 
         let tid  = TravelerService.shared.travelerId?.prefix(8) ?? "nil"
-        let ttok = TravelerService.shared.token.map { String($0.prefix(16)) + "…" } ?? "nil"
-        let atok = AuthService.shared.accessToken.map { String($0.prefix(16)) + "…" } ?? "nil"
+        // Solo si existe: ni siquiera el prefijo de un token va al log.
+        let ttok = TravelerService.shared.token != nil ? "sí" : "no"
+        let atok = AuthService.shared.accessToken != nil ? "sí" : "no"
         print("👤 [YoView] loadProfile — travelerId=\(tid) travelerToken=\(ttok) authToken=\(atok) hasSession=\(Session.hasSession) isVerified=\(Session.isVerified) forceRefresh=\(forceRefresh)")
 
         guard Session.hasSession else {

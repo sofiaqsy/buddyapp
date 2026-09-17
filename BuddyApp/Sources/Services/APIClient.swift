@@ -83,7 +83,7 @@ final class APIClient {
         if needsIdentity, !TravelerService.shared.hasSession {
             print("🌐 [APIClient] → lazy session creation triggered by \(method) \(path)")
             let token = try await TravelerService.shared.ensureSession()
-            print("🧳 [APIClient] guest session created → token prefix: \(token.prefix(20))…")
+            print("🧳 [APIClient] guest session created")
             await MainActor.run {
                 // Sync AuthState so views react (e.g. tabs update their empty state)
                 NotificationCenter.default.post(name: .travelerSessionCreated, object: nil)
@@ -1119,7 +1119,7 @@ final class APIClient {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.httpBody = body
 
-        print("🖼️ [APIClient] POST /messages/\(matchId)/image — \(imageData.count / 1024) KB token=\(token.prefix(12))…")
+        print("🖼️ [APIClient] POST /messages/\(matchId)/image — \(imageData.count / 1024) KB")
         let (data, response) = try await APIClient.session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
         print("🖼️ [APIClient] /messages/\(matchId)/image → HTTP \(http.statusCode)")
