@@ -462,6 +462,13 @@ struct APIPlaceCard: Codable, Identifiable, Hashable {
     let buddyCount: Int
     let buddies: [APIPlaceBuddy]
 
+    /// "approved" | "pending". place_cards_by_traveler ya lo manda; sin este
+    /// campo el perfil no podía distinguir un lugar propuesto que todavía
+    /// espera revisión. Con valor por defecto para no romper a quien construye
+    /// la card a mano.
+    var status: String? = nil
+    var isPendingApproval: Bool { status == "pending" }
+
     var photoLabel: String { "\(photoCount) foto\(photoCount == 1 ? "" : "s")" }
 
     /// "6 buddies en Villa Rica" — nombrar el destino evita dar a entender que

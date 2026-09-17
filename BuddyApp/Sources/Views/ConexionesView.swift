@@ -283,7 +283,32 @@ final class ChatStore: ObservableObject {
         hasLoadedOnce       = false
     }
 
-    func load() async {
+    /// `prefetched`: matches que el llamador ya trajo. El Home los pide para su
+    /// card de buddy y luego llamaba a load(), que volvía a pedir los mismos
+    /// matches — dos GET /matching/matches idénticos por carga.
+    private var loadInFlight: Task<Void, Never>?
+    private let loadLock = NSLock()
+
+    /// Una carga a la vez. Al abrir la app, ContentView (app activa) y el Home
+    /// (su carga) llamaban a load() casi a la vez: matches, mensajes, ofertas y
+    /// solicitudes salían dos veces. La segunda llamada ahora espera a la
+    /// primera y usa su resultado.
+    func load(prefetched: [APIMatch]? = nil) async {
+        loadLock.lock()
+        if let enCurso = loadInFlight {
+            loadLock.unlock()
+            print("💬 [ChatStore] load ya en curso — espero esa en vez de repetir")
+            await enCurso.value
+            return
+        }
+        let tarea = Task { await self._loadBody(prefetched: prefetched) }
+        loadInFlight = tarea
+        loadLock.unlock()
+        await tarea.value
+        loadLock.lock(); loadInFlight = nil; loadLock.unlock()
+    }
+
+    private func _loadBody(prefetched: [APIMatch]?) async {
         guard Session.hasSession else {
             // Sin sesión todavía: no dejar el spinner colgado para siempre
             await MainActor.run { hasLoadedOnce = true }
@@ -292,7 +317,8 @@ final class ChatStore: ObservableObject {
         let currentTravelerId = Session.travelerId
         await MainActor.run { isLoading = true }
         do {
-            let matches = try await APIClient.shared.fetchMatches()
+            let matches: [APIMatch]
+            if let prefetched { matches = prefetched } else { matches = try await APIClient.shared.fetchMatches() }
             // Capture cached connections so completed matches can reuse their last
             // known message without a network round-trip.
             let cachedConnections = await MainActor.run { connections }

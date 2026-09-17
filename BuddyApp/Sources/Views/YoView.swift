@@ -20,6 +20,8 @@ struct YoView: View {
     /// perfil no puede refrescar antes: la sheet sigue arriba y el usuario
     /// vería la lista moverse debajo.
     @State private var pendingShareJourney: APIJourney? = nil
+    /// Recomendación recién creada que se abre en el editor para ponerle fotos.
+    @State private var editingShareJourney: APIJourney? = nil
     @State private var tripsNextCursor: String? = nil
     @State private var tripsHasMore: Bool = false
     @State private var isLoadingMoreTrips: Bool = false
@@ -249,15 +251,25 @@ struct YoView: View {
                 // El journey nace con trip_id=null y sin publicar; acá solo se
                 // recarga para que el lugar aparezca en la sección. Publicarlo
                 // sigue siendo cosa del editor, igual que desde Tu trip.
-                guard pendingShareJourney != nil else { return }
+                // Antes solo recargaba el perfil: el lugar quedaba creado pero
+                // sin fotos, así que no aparecía en "Lugares que recomiendas" y
+                // parecía que no había pasado nada. Ahora se abre el editor,
+                // igual que "Añadir foto" en el mapa. La recarga llega sola con
+                // .journeyPublished cuando termina de subir las fotos.
+                guard let nuevo = pendingShareJourney else { return }
                 pendingShareJourney = nil
-                Task { await loadProfile(forceRefresh: true) }
+                editingShareJourney = nuevo
             }) {
                 CompartirLugarSheet { journey in
                     print("🌍 [YoView] compartido creado journey=\(journey.id)")
                     pendingShareJourney = journey
                 }
             }
+        }
+        .fullScreenCover(item: $editingShareJourney) { journey in
+            // publishesOnSave: no hay un paso posterior de "publicar el trip";
+            // guardar es lo que deja la recomendación visible.
+            TripEditorSheet(journey: journey, initialPage: -1, publishesOnSave: true) {}
         }
         .task { await loadProfile() }
         .task { await loadUnattendedDemand() }

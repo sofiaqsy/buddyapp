@@ -73,12 +73,42 @@ final class ImageCache {
         Task(priority: .utility) { try? FileManager.default.removeItem(at: file) }
     }
 
+    /// Descargas en curso por URL. Sin esto, la misma foto pedida a la vez por el
+    /// carrusel, las historias y el prefetch se bajaba una vez por cada uno.
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let inFlightLock = NSLock()
+
     func load(_ url: URL) async -> UIImage? {
         if let cached = get(url) { return cached }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let image = UIImage(data: data) else { return nil }
-        set(image, for: url)
+        let key = cacheKey(url)
+
+        inFlightLock.lock()
+        if let enCurso = inFlight[key] {
+            inFlightLock.unlock()
+            return await enCurso.value
+        }
+        let tarea = Task<UIImage?, Never>(priority: .userInitiated) { [weak self] in
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data) else { return nil }
+            // Se guardan los bytes descargados tal cual: ya son JPEG. Antes se
+            // volvía a codificar cada foto (jpegData), CPU de más por imagen.
+            self?.store(image, data: data, key: key)
+            return image
+        }
+        inFlight[key] = tarea
+        inFlightLock.unlock()
+
+        let image = await tarea.value
+        inFlightLock.lock(); inFlight[key] = nil; inFlightLock.unlock()
         return image
+    }
+
+    private func store(_ image: UIImage, data: Data, key: String) {
+        memory.setObject(image, forKey: key as NSString, cost: data.count)
+        let file = diskURL.appendingPathComponent(key)
+        Task(priority: .utility) {
+            try? data.write(to: file, options: .atomic)
+        }
     }
 
     private func cacheKey(_ url: URL) -> String {

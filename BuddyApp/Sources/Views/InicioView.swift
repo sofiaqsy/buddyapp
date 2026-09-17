@@ -1135,7 +1135,11 @@ struct InicioView: View {
 
     /// Revalida solo el estado del trip (activo/pendiente) — barato y frecuente.
     /// Cancela la llamada anterior si llegan múltiples disparos en ráfaga (post-creación de trip).
-    private func refreshTripState() async {
+    private func refreshTripState(line: Int = #line) async {
+        // Quién la pidió: al arrancar corre justo al terminar loadData y repite
+        // journeys, matches, contexto y recent-help sin causa visible.
+        let desdeCarga = Int(Date().timeIntervalSince(lastLoadDataAt ?? .distantPast))
+        print("🔄 [refreshTripState] pedida — línea \(line) (última carga completa hace \(desdeCarga)s)")
         refreshStateTask?.cancel()
         let t = Task<Void, Never> { await _refreshTripStateBody() }
         refreshStateTask = t
@@ -1257,7 +1261,11 @@ struct InicioView: View {
     /// spots. Si hay una en vuelo o terminó hace menos de 5 s, se ignora; los
     /// gestos explícitos del usuario (pull to refresh, reintentar, tocar el
     /// tab) pasan `force: true`.
-    private func loadData(force: Bool = false, reason: String = "") async {
+    private func loadData(force: Bool = false, reason: String = "", line: Int = #line) async {
+        // Quién la pidió: sin esto no se sabe qué disparó una segunda carga
+        // completa (la de las 20:29:13 no tenía causa visible en los logs).
+        let origen = reason.isEmpty ? "línea \(line)" : "\(reason), línea \(line)"
+        print("🏠 [loadData] pedida — \(origen)\(force ? " (force)" : "")")
         let edad = Date().timeIntervalSince(lastLoadDataAt ?? .distantPast)
         if !force, loadDataTask != nil || edad < 5 {
             print("🏠 [loadData] \(reason.isEmpty ? "" : "(\(reason)) ")ignorado — \(loadDataTask != nil ? "ya hay una carga en vuelo" : "última hace \(Int(edad))s")")
@@ -1374,11 +1382,22 @@ struct InicioView: View {
                     ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
                 })
                 await MainActor.run { activeMatch = found }
-                await chatStore.load()
+                await chatStore.load(prefetched: matches)
             }
         } catch {
-            print("❌ [loadData] ERROR: \(error)")
-            await MainActor.run { loadDataFailed = true }
+            // Una carga CANCELADA no es un fallo: pasa cada vez que una carga
+            // nueva (arrastrar para refrescar, volver de una pantalla) reemplaza
+            // a la que estaba en curso. Marcarla como fallo mostraba "No pudimos
+            // cargar" justo cuando la carga nueva ya estaba trayendo los datos.
+            let cancelada = error is CancellationError
+                || (error as? URLError)?.code == .cancelled
+                || Task.isCancelled
+            if cancelada {
+                print("🏠 [loadData] cancelada por una carga más nueva — no es un error")
+            } else {
+                print("❌ [loadData] ERROR: \(error)")
+                await MainActor.run { loadDataFailed = true }
+            }
         }
         await MainActor.run { isLoadingData = false }
         print("🏠 [loadData] done — activeJourney=\(await MainActor.run { activeJourney?.id.prefix(8) ?? "nil" }) liveJourneys=\(await MainActor.run { liveJourneys.count })")
@@ -1401,7 +1420,11 @@ struct InicioView: View {
         // mostrar la actividad del trip aunque el selector ya mostrara
         // "Ubicación actual" (un ciclo de refresh atrasado).
         await refreshHomeCommunityContext()
-        await loadRecentHelp(force: true)
+        // Sin force: refreshHomeCommunityContext ya la pidió un instante antes
+        // cuando no hay trip, y con force salía una segunda recent-help-nearby
+        // idéntica en cada carga. El throttle de 30 s deduplica; con trip
+        // elegido (que no pasa por ahí) la petición sigue saliendo aquí.
+        await loadRecentHelp()
         await loadRecentHelpPerTrip()
         // Comunidad viva es global — no depende de trip ni de GPS resuelto,
         // así que se carga siempre acá, sin importar en qué rama cayó
@@ -2482,6 +2505,19 @@ struct NearbyPlaceCard: View {
                 .padding(.vertical, 12)
             }
             .frame(width: cardWidth, height: previewHeight)
+            // Pendiente: el lugar ya es tuyo y lo ves, pero la comunidad no
+            // hasta que se apruebe. Decirlo evita que parezca publicado.
+            .overlay(alignment: .topLeading) {
+                if place.isPendingApproval {
+                    Text("Pendiente de aprobación")
+                        .font(BT.caption2)
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.warningAmber.opacity(0.9), in: Capsule())
+                        .padding(8)
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
         }
