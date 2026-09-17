@@ -7,12 +7,14 @@ enum AuthPurpose {
     case buddy    // "Conecta con un buddy." — InicioView, ConexionesView
     case publish  // "Publica tus lugares favoritos." — TripsView
     case profile  // "Tu historia viaja contigo." — YoView (name-only sheet)
+    case reauth   // "Tu sesión expiró." — cuenta verificada que no se pudo renovar
 
     var titleLine1: String {
         switch self {
         case .buddy:   return "Conecta con"
         case .publish: return "Publica tus"
         case .profile: return "Tu historia"
+        case .reauth:  return "Tu sesión"
         }
     }
     var titleLine2prefix: String? {
@@ -20,6 +22,7 @@ enum AuthPurpose {
         case .buddy:   return "un"
         case .publish: return "lugares"
         case .profile: return nil
+        case .reauth:  return nil
         }
     }
     var titleLine2accent: String {
@@ -27,6 +30,7 @@ enum AuthPurpose {
         case .buddy:   return "buddy."
         case .publish: return "favoritos."
         case .profile: return "viaja contigo."
+        case .reauth:  return "expiró."
         }
     }
     var subtitle: String {
@@ -34,6 +38,7 @@ enum AuthPurpose {
         case .buddy:   return "Para conectarte con un buddy necesitamos saber quién eres."
         case .publish: return "Para publicar necesitamos identificarte."
         case .profile: return "Para guardar tu historia necesitamos saber quién eres."
+        case .reauth:  return "Inicia sesión con la misma cuenta de Google o Apple para recuperar tus viajes y tu perfil."
         }
     }
 }

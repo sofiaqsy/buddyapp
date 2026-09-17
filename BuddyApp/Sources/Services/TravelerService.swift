@@ -94,18 +94,42 @@ final class TravelerService {
         print("🧳 [TravelerService.ensureSession] hasSession=\(hasSession) travelerId=\(travelerId?.prefix(8) ?? "NIL")")
         // Already have a traveler — just ensure the token is fresh
         if let tid = travelerId {
+            // Instalaciones anteriores a este cambio no tenían el estado en el
+            // Keychain: se completa mientras la sesión sigue viva, para que un
+            // reinstalar posterior restaure la cuenta como verificada.
+            if isVerified, loadStatusFromKeychain() == nil {
+                saveTravelerIdToKeychain(tid)
+                saveStatusToKeychain("verified")
+                print("🔐 [TravelerService] estado verified copiado al Keychain")
+            }
             return try await refreshIfNeeded(travelerId: tid)
+        }
+        // Cuenta verificada cuya sesión expiró: se espera a que el usuario vuelva
+        // a iniciar sesión. Crear un guest aquí es lo que hacía "desaparecer"
+        // viajes y perfil tras reinstalar.
+        if needsReauth {
+            print("🔒 [TravelerService.ensureSession] cuenta verificada esperando login — no se crea guest")
+            throw TravelerError.sessionExpired
         }
         // UserDefaults was wiped but Keychain may still have the identity
         if let restoredId = loadTravelerIdFromKeychain() {
-            print("🧳 [TravelerService.ensureSession] → restored traveler_id from Keychain: \(restoredId.prefix(8))…")
-            UserDefaults.standard.set(restoredId, forKey: "buddy.traveler.id")
-            UserDefaults.standard.set("guest",    forKey: "buddy.traveler.status")
+            // El estado viaja con el ID en el Keychain. Antes se restauraba
+            // SIEMPRE como "guest", y una cuenta verificada terminaba borrada y
+            // reemplazada por un guest nuevo al primer refresh fallido.
+            let restoredStatus = loadStatusFromKeychain() ?? "guest"
+            print("🧳 [TravelerService.ensureSession] → restored traveler_id from Keychain: \(restoredId.prefix(8))… status=\(restoredStatus)")
+            UserDefaults.standard.set(restoredId,     forKey: "buddy.traveler.id")
+            UserDefaults.standard.set(restoredStatus, forKey: "buddy.traveler.status")
             do {
                 return try await refreshIfNeeded(travelerId: restoredId)
             } catch {
-                // Secret also gone or rejected — clear and start fresh
-                print("⚠️ [TravelerService.ensureSession] Keychain restore failed, creating new session: \(error)")
+                if restoredStatus == "verified" {
+                    // Fallo de autenticación ≠ creación de cuenta.
+                    print("🔒 [TravelerService.ensureSession] restore de cuenta verificada falló (\(error)) — se pide login, no se crea guest")
+                    expireSession()
+                    throw TravelerError.sessionExpired
+                }
+                print("⚠️ [TravelerService.ensureSession] Keychain restore (guest) failed, creating new session: \(error)")
                 clearSession()
             }
         }
@@ -117,6 +141,12 @@ final class TravelerService {
     // MARK: – Create guest session
 
     private func createGuestSession() async throws -> String {
+        // Última barrera: ningún camino crea un guest encima de una cuenta
+        // verificada que solo necesita volver a iniciar sesión.
+        if needsReauth || loadStatusFromKeychain() == "verified" {
+            print("🔒 [TravelerService] createGuestSession bloqueado — hay una cuenta verificada guardada")
+            throw TravelerError.sessionExpired
+        }
         print("🧳 [TravelerService] POST /travelers/init → device_id=\(deviceId.prefix(8))…")
         let url = URL(string: "\(coreURL)/init")!
         var req = URLRequest(url: url)
@@ -141,6 +171,7 @@ final class TravelerService {
         UserDefaults.standard.set(tid,     forKey: "buddy.traveler.id")
         UserDefaults.standard.set(token,   forKey: "buddy.traveler.token")
         UserDefaults.standard.set("guest", forKey: "buddy.traveler.status")
+        saveStatusToKeychain("guest")
         if let secret = json["secret"] as? String { saveSecretToKeychain(secret) }
         saveTravelerIdToKeychain(tid)
 
@@ -192,8 +223,8 @@ final class TravelerService {
             guard ok, let t = TravelerService.shared.token, !t.isEmpty else {
                 // Both refresh paths exhausted — wipe stored session so
                 // Session.hasSession becomes false and the retry loop stops.
-                print("🧹 [TravelerService] verified refresh failed — clearing stale session")
-                clearSession()
+                print("🔒 [TravelerService] verified refresh failed — sesión expirada, se pide login")
+                expireSession()
                 throw TravelerError.sessionExpired
             }
             return t
@@ -218,8 +249,8 @@ final class TravelerService {
         else {
             if statusCode == 401 {
                 // Guest secret rejected — session permanently expired.
-                print("🧹 [TravelerService] guest refresh 401 — clearing stale session")
-                clearSession()
+                print("🔒 [TravelerService] refresh 401 — sesión expirada")
+                expireSession()
                 throw TravelerError.sessionExpired
             }
             throw TravelerError.refreshFailed(String(data: data, encoding: .utf8) ?? "")
@@ -227,6 +258,7 @@ final class TravelerService {
 
         if let newStatus = json["status"] as? String {
             UserDefaults.standard.set(newStatus, forKey: "buddy.traveler.status")
+            saveStatusToKeychain(newStatus)
         }
         UserDefaults.standard.set(token, forKey: "buddy.traveler.token")
         print("🔄 [TravelerService] token refreshed → \(travelerId)")
@@ -242,6 +274,8 @@ final class TravelerService {
         UserDefaults.standard.set(token,      forKey: "buddy.traveler.token")
         UserDefaults.standard.set(status,     forKey: "buddy.traveler.status")
         saveTravelerIdToKeychain(travelerId)
+        saveStatusToKeychain(status)
+        needsReauth = false
         if let secret {
             // /auth/social ahora entrega un secret de refresh device-bound:
             // el usuario verified renueva su JWT en silencio vía /travelers/refresh,
@@ -260,6 +294,7 @@ final class TravelerService {
 
     func markVerified(fullName: String?, phone: String?) {
         UserDefaults.standard.set("verified", forKey: "buddy.traveler.status")
+        saveStatusToKeychain("verified")
         print("✅ [TravelerService] traveler upgraded to verified")
     }
 
@@ -294,6 +329,8 @@ final class TravelerService {
         }
     }
 
+    /// Borrado COMPLETO (cerrar sesión a propósito). Para un token que no se
+    /// pudo renovar se usa expireSession(), que no pierde la cuenta.
     func clearSession() {
         let hadId = travelerId?.prefix(8) ?? "NIL"
         UserDefaults.standard.removeObject(forKey: "buddy.traveler.id")
@@ -301,10 +338,68 @@ final class TravelerService {
         UserDefaults.standard.removeObject(forKey: "buddy.traveler.status")
         deleteSecretFromKeychain()
         deleteTravelerIdFromKeychain()
+        deleteStatusFromKeychain()
+        needsReauth = false
         print("🧹 [TravelerService] session cleared — was traveler_id=\(hadId)… (UserDefaults + Keychain)")
     }
 
+    /// La cuenta verificada guardada necesita volver a iniciar sesión.
+    var needsReauth: Bool {
+        get { UserDefaults.standard.bool(forKey: "buddy.traveler.needsReauth") }
+        set { UserDefaults.standard.set(newValue, forKey: "buddy.traveler.needsReauth") }
+    }
+
+    /// Token que no se pudo renovar. Un guest se borra entero (no hay nada que
+    /// recuperar). Una cuenta VERIFICADA conserva su ID y estado en el Keychain
+    /// y queda marcada para pedir login: nunca se convierte en guest.
+    func expireSession() {
+        let keychainStatus = loadStatusFromKeychain() ?? UserDefaults.standard.string(forKey: "buddy.traveler.status")
+        guard keychainStatus == "verified" else { clearSession(); return }
+        let id = (travelerId ?? loadTravelerIdFromKeychain())?.prefix(8) ?? "NIL"
+        UserDefaults.standard.removeObject(forKey: "buddy.traveler.id")
+        UserDefaults.standard.removeObject(forKey: "buddy.traveler.token")
+        UserDefaults.standard.removeObject(forKey: "buddy.traveler.status")
+        deleteSecretFromKeychain()   // rechazado por el servidor: ya no sirve
+        needsReauth = true
+        print("🔒 [TravelerService] sesión verificada expirada — cuenta \(id)… conservada, se pide login")
+    }
+
     // MARK: – Keychain helpers
+
+    private let keychainStatusKey = "com.buddyapp.traveler.status"
+
+    private func saveStatusToKeychain(_ status: String) {
+        guard let data = status.data(using: .utf8) else { return }
+        let query: [String: Any] = [
+            kSecClass as String:          kSecClassGenericPassword,
+            kSecAttrAccount as String:    keychainStatusKey,
+            kSecValueData as String:      data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+        SecItemDelete(query as CFDictionary)
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private func loadStatusFromKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainStatusKey,
+            kSecReturnData as String:  true,
+            kSecMatchLimit as String:  kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func deleteStatusFromKeychain() {
+        let query: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainStatusKey
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
 
     private let keychainKey   = "com.buddyapp.traveler.secret"
     private let keychainIdKey = "com.buddyapp.traveler.id"

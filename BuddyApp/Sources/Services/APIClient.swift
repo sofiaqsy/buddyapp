@@ -53,7 +53,9 @@ final class APIClient {
             // All refresh paths exhausted. forceRefresh already called clearSession()
             // if it had a chance to run; call it again defensively so Session.hasSession
             // is guaranteed false before we fire the notification.
-            TravelerService.shared.clearSession()
+            // expireSession y no clearSession: una cuenta verificada se conserva
+            // y se pide login; solo un guest se borra entero.
+            TravelerService.shared.expireSession()
             await MainActor.run {
                 NotificationCenter.default.post(name: .sessionExpired, object: nil)
             }

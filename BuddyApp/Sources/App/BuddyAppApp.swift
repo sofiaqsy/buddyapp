@@ -67,6 +67,8 @@ final class AuthState: ObservableObject {
     /// true = Traveler verificado (phone/Apple). false = Guest o sin sesión.
     /// Inicializado desde el token almacenado para evitar flash en returning users.
     @Published var isLoggedIn: Bool = AuthService.shared.isLoggedIn
+    /// Cuenta verificada cuya sesión expiró: se muestra el login, no un guest nuevo.
+    @Published var sessionNeedsReauth = TravelerService.shared.needsReauth
 
     /// Estado del Traveler. nil = aún no se ha creado sesión de Traveler.
     /// "guest" = tiene sesión pero sin identidad verificada.
@@ -104,8 +106,10 @@ final class AuthState: ObservableObject {
         sessionCancellable = NotificationCenter.default.addObserver(
             forName: .sessionExpired, object: nil, queue: .main
         ) { [weak self] _ in
-            print("🔒 sessionExpired — modo guest")
+            let reauth = TravelerService.shared.needsReauth
+            print(reauth ? "🔒 sessionExpired — cuenta verificada, se pide login" : "🔒 sessionExpired — modo guest")
             self?.isLoggedIn = false
+            if reauth { self?.sessionNeedsReauth = true }
         }
 
         logoutCancellable = NotificationCenter.default.addObserver(

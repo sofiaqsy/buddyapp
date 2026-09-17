@@ -57,6 +57,13 @@ struct RootView: View {
             GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread)
         }
         .ignoresSafeArea(edges: .bottom)
+        // Sesión de cuenta verificada expirada (p. ej. tras reinstalar): pedir
+        // login con la misma cuenta en vez de seguir como guest nuevo.
+        .sheet(isPresented: $authState.sessionNeedsReauth) {
+            IdentitySheet(purpose: .reauth) {
+                authState.sessionNeedsReauth = false
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 // Solo carga y stream si hay sesión activa
