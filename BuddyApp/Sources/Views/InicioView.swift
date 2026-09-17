@@ -36,6 +36,8 @@ struct InicioView: View {
     /// Reemplaza al viejo nearestDestination (5 destacados + radio 50 km), que
     /// podía elegir un destino vecino equivocado (ej: La Merced estando en Villa Rica).
     @State private var resolvedLocation: APILocationResolution? = nil
+    /// Buddy cuyo perfil se está mirando desde "Comunidad viva".
+    @State private var pulseProfileTarget: PulseProfileTarget? = nil
     @State private var destinations: [APIDestination] = []
     @State private var pendingJourney: APIJourney? = nil
     @State private var activeJourney: APIJourney? = nil
@@ -55,14 +57,11 @@ struct InicioView: View {
     @State private var loadDataFailed = false
     @State private var loadDataTask: Task<Void, Never>? = nil
     @State private var refreshStateTask: Task<Void, Never>? = nil
-    @State private var publicJourneys: [APIJourney] = []
-    @State private var feedCursor: String? = nil
-    @State private var feedHasMore = true
-    @State private var isLoadingMoreFeed = false
-    @State private var seenStoryIds = Set<String>()
     /// Carrusel de spots. Vive en SpotsStore: una sola petición, cache en disco
     /// y un fallo nunca vacía la lista buena.
     @ObservedObject private var spotsStore = SpotsStore.shared
+    /// Foto del carrusel en zoom: mientras dura, el Home no scrollea.
+    @ObservedObject private var carouselZoom = CarouselZoomState.shared
     private var exploreCards: [APIPlaceCard] { spotsStore.spots }
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
     @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
@@ -103,8 +102,6 @@ struct InicioView: View {
     @State private var hasLoaded = false
     @State private var showActivateNextTripAlert = false
     @State private var skipNextRefresh = false
-    @State private var isLoadingFeed = true
-    @State private var feedFailed = false
     @ObservedObject private var chatStore = ChatStore.shared
     @ObservedObject private var placeDeepLink = PlaceDeepLink.shared
     @EnvironmentObject private var authState: AuthState
@@ -678,6 +675,8 @@ struct InicioView: View {
     }
 
     private var scrollBody: some View {
+        // Con una foto en zoom el Home no se mueve: el pellizco no debe
+        // convertirse en scroll a mitad de camino.
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: 0).id("inicioTop")
@@ -747,12 +746,10 @@ struct InicioView: View {
                     communityLiveSection
                         .padding(.top, Spacing.md)
                 }
-
-                communitySection
-                    .padding(.top, Spacing.xl)
             }
             .padding(.bottom, 100)
         }
+        .scrollDisabled(carouselZoom.isZooming)
     }
 
     /// Abre la guía del destino resuelto por GPS. Sin trip no hay un APIJourney
@@ -1317,7 +1314,6 @@ struct InicioView: View {
         guard Session.hasSession else {
             print("🏠 [loadData] sin sesión — solo contenido público")
             await MainActor.run { isLoadingData = false }
-            await loadFeed()
             await refreshHomeCommunityContext()
             await loadCommunityPulseIfNeeded()
             return
@@ -1410,9 +1406,8 @@ struct InicioView: View {
             }
         }
 
-        // Feed de trips publicados — con un reintento: un timeout puntual
-        // no puede dejar la comunidad vacía en silencio
-        await loadFeed()
+        // "Historias de viajeros" vive ahora en el tab Trips
+        // (TravelerStoriesSection): el Home ya no pide el feed.
 
         // Buddies cerca para el composer de la Home + resolvedLocation fresco.
         // PRIMERO: loadRecentHelp depende de effectiveHomeContext, que a su vez
@@ -1435,53 +1430,6 @@ struct InicioView: View {
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
     private var feedLng: Double? { locationService.userLocation?.coordinate.longitude }
 
-    // Primera página del feed (cursor pagination + ranking servidor)
-    private func loadFeed() async {
-        // Solo activar skeleton si no hay datos previos — evita parpadeo en refresh.
-        // feedFailed se resetea solo si el request tiene éxito.
-        if publicJourneys.isEmpty { isLoadingFeed = true }
-        for attempt in 0..<2 {
-            do {
-                let page = try await APIClient.shared.fetchStories(
-                    destinationId: nil, lat: feedLat, lng: feedLng, cursor: nil)
-                print("🗞️ [loadFeed] items=\(page.items.count)")
-                for (i, item) in page.items.enumerated() {
-                    let thumbs = item.pageThumbs ?? []
-                    let dest   = item.destination?.name ?? item.title ?? "nil"
-                    let author = item.users?.fullName ?? "nil"
-                    print("🗞️ [loadFeed] [\(i)] id=\(item.id.prefix(8)) dest=\(dest) author=\(author) thumbs=\(thumbs.count)")
-                    if thumbs.isEmpty {
-                        print("🗞️ [loadFeed] [\(i)] ⚠️ SIN THUMBS — mostrará fondo")
-                    }
-                }
-                publicJourneys = page.items
-                seenStoryIds = Set(page.items.map(\.id))
-                feedCursor = page.nextCursor
-                feedHasMore = page.hasMore
-                feedFailed = false
-                isLoadingFeed = false
-                return
-            } catch {
-                if attempt == 0 { try? await Task.sleep(for: .seconds(1.5)) }
-            }
-        }
-        isLoadingFeed = false
-        feedFailed = publicJourneys.isEmpty
-    }
-
-    // Carga incremental — se dispara al acercarse al final (scroll infinito)
-    private func loadMoreFeed() async {
-        guard feedHasMore, !isLoadingMoreFeed, let cursor = feedCursor else { return }
-        isLoadingMoreFeed = true
-        defer { isLoadingMoreFeed = false }
-        guard let page = try? await APIClient.shared.fetchStories(
-            destinationId: nil, lat: feedLat, lng: feedLng, cursor: cursor) else { return }
-        // Append + dedupe (los items de afinidad pueden reaparecer en la cola global)
-        let fresh = page.items.filter { seenStoryIds.insert($0.id).inserted }
-        publicJourneys.append(contentsOf: fresh)
-        feedCursor = page.nextCursor
-        feedHasMore = page.hasMore
-    }
 
     private func activatePendingJourney(_ journey: APIJourney) async {
         try? await APIClient.shared.updateJourneyStatus(journeyId: journey.id, status: "active")
@@ -1616,6 +1564,11 @@ struct InicioView: View {
             }
         }
         .padding(.horizontal, Spacing.edge)
+        .sheet(item: $pulseProfileTarget) { target in
+            TravelerProfileView(travelerId: target.id,
+                                previewName: target.name,
+                                previewAvatarUrl: target.avatarUrl)
+        }
     }
 
     /// Dos líneas: la acción arriba, el contexto abajo. Cada fila responde las
@@ -1629,6 +1582,12 @@ struct InicioView: View {
     @ViewBuilder
     private func communityRow(_ item: APIPulseItem) -> some View {
         let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
+        // La fila nombra a una persona: tocarla abre su perfil. Solo cuando el
+        // pulso trae su id — sin id no hay perfil que abrir y la fila se queda
+        // como estaba, una señal que se lee y no se toca.
+        let target = item.buddyId.map {
+            PulseProfileTarget(id: $0, name: item.buddyName, avatarUrl: item.buddyAvatarUrl)
+        }
         // .top y no centrado: el avatar se alinea con la línea 1, que es la que
         // ancla la fila, igual que en Mail y Mensajes.
         HStack(alignment: .top, spacing: 10) {
@@ -1682,6 +1641,12 @@ struct InicioView: View {
                         .layoutPriority(1)
                 }
             }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let target else { return }
+            Haptic.light()
+            pulseProfileTarget = target
         }
     }
 
@@ -1749,111 +1714,6 @@ struct InicioView: View {
         if s < 3600  { return "hace \(Int(s / 60)) min" }
         if s < 86400 { return "hace \(Int(s / 3600)) h" }
         return "hace \(Int(s / 86400)) d"
-    }
-
-    private var communitySection: some View {
-        Group {
-            if isLoadingFeed && publicJourneys.isEmpty {
-                // Skeleton de publicación: mismo layout, mismo orden (foto → footer) y
-                // mismo chrome (radio/sombra/padding) que PublishedTripCard real, para
-                // que al llegar el feed no haya salto — solo las barras se vuelven texto.
-                VStack(alignment: .leading, spacing: Spacing.lg) {
-                    Text("HISTORIAS DE VIAJEROS")
-                        .font(BT.eyebrow)
-                        .tracking(1.5)
-                        .foregroundStyle(Color.ink)
-                        .padding(.horizontal, Spacing.edge)
-                    VStack(alignment: .leading, spacing: 0) {
-                        SkeletonBox(cornerRadius: 0).frame(height: 480)
-                        HStack(spacing: 8) {
-                            SkeletonBox(cornerRadius: 12).frame(width: 24, height: 24)
-                            SkeletonBox(cornerRadius: 4).frame(width: 100, height: 13)
-                            Spacer(minLength: 4)
-                            SkeletonBox(cornerRadius: 4).frame(width: 50, height: 12)
-                        }
-                        .padding(14)
-                    }
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-                    .cardShadow()
-                    .padding(.horizontal, Spacing.edge)
-                }
-                .skeletonPulse()
-            } else if feedFailed {
-                // El feed falló tras reintentos — se dice y se ofrece reintentar
-                VStack(spacing: Spacing.sm) {
-                    Text("No pudimos cargar la comunidad")
-                        .font(BT.callout)
-                        .foregroundStyle(Color.inkMuted)
-                    Button {
-                        isLoadingFeed = true
-                        Task { await loadFeed() }
-                    } label: {
-                        Text("Reintentar")
-                            .font(BT.footnoteBold)
-                            .foregroundStyle(Color.ink)
-                            .padding(.horizontal, Spacing.lg)
-                            .padding(.vertical, 10)
-                            .background(Color.surface)
-                            .clipShape(Capsule())
-                            .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, Spacing.xl)
-            } else if !publicJourneys.isEmpty {
-                // Lazy: con VStack se construían las 24 cards (carrusel + fotos)
-                // de golpe cada vez que el Home volvía a pantalla — por ejemplo
-                // al cerrar el mapa — y todos los onAppear disparaban a la vez,
-                // incluido el de "cargar más", que pedía la página siguiente
-                // sin que nadie hubiera hecho scroll.
-                LazyVStack(alignment: .leading, spacing: Spacing.lg) {
-                    Text("HISTORIAS DE VIAJEROS")
-                        .font(BT.eyebrow)
-                        .tracking(1.5)
-                        .foregroundStyle(Color.ink)
-                        .padding(.horizontal, Spacing.edge)
-
-                    // Biblioteca de viajes — orden y ranking vienen del servidor.
-                    // Scroll infinito: al acercarse al final, carga el siguiente lote.
-                    ForEach(publicJourneys) { journey in
-                        PublishedTripCard(journey: journey)
-                            .equatable()  // skip re-render if journey.id + flags unchanged
-                            .onAppear {
-                                if journey.id == publicJourneys.suffix(4).first?.id {
-                                    Task { await loadMoreFeed() }
-                                }
-                            }
-                    }
-                    if isLoadingMoreFeed {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, Spacing.md)
-                    }
-                }
-            } else {
-                // Estado vacío — diario, no feed
-                VStack(alignment: .leading, spacing: Spacing.md) {
-                    Text("HISTORIAS DE VIAJEROS")
-                        .font(BT.eyebrow).tracking(1.5).foregroundStyle(Color.ink)
-                        .padding(.horizontal, Spacing.edge)
-                    VStack(spacing: 8) {
-                        Image(systemName: "book.closed")
-                            .font(.system(size: 38, weight: .light))
-                            .foregroundStyle(Color.inkMuted.opacity(0.5))
-                        Text("Aún nadie ha contado su paso por aquí")
-                            .font(BT.callout).foregroundStyle(Color.ink)
-                        Text("Cuando termines tu trip, tu historia será la primera.")
-                            .font(BT.footnote).foregroundStyle(Color.inkMuted)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, Spacing.xl)
-                    .padding(.horizontal, Spacing.edge)
-                }
-            }
-        }
     }
 }
 
@@ -2255,6 +2115,13 @@ struct DestinationThumbCard: View {
 // La unidad es un trip finalizado, presentado como ÁLBUM. Carrusel estilo IG:
 // cada momento se ve COMPLETO (sin recortar) y se desliza ←/→.
 
+/// Identifica al buddy de una fila del pulso para presentar su perfil.
+struct PulseProfileTarget: Identifiable {
+    let id: String
+    let name: String?
+    let avatarUrl: String?
+}
+
 struct PublishedTripCard: View {
     let journey: APIJourney
     var featured: Bool = false
@@ -2262,6 +2129,7 @@ struct PublishedTripCard: View {
     var nearby: Bool = false
 
     @State private var showStory = false
+    @State private var showAuthorProfile = false
     @State private var page = 0
 
     private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
@@ -2405,6 +2273,28 @@ struct PublishedTripCard: View {
     // Pie minimalista: solo viajero + duración (sin destino ni "Ver álbum")
     private var footer: some View {
         HStack(spacing: 8) {
+            authorRow
+            Spacer(minLength: 4)
+            if let d = durationLine {
+                Text(d).font(BT.subhead).foregroundStyle(Color.inkMuted)
+            }
+        }
+        .padding(14)
+        .contentShape(Rectangle())
+        .onTapGesture { Haptic.light(); showStory = true }
+        .sheet(isPresented: $showAuthorProfile) {
+            if let id = journey.users?.id {
+                TravelerProfileView(travelerId: id,
+                                    previewName: journey.users?.fullName,
+                                    previewAvatarUrl: journey.users?.avatarUrl)
+            }
+        }
+    }
+
+    /// Avatar + nombre. Con id de autor abre su perfil; sin id se comporta
+    /// como el resto del pie y abre la historia.
+    private var authorRow: some View {
+        HStack(spacing: 8) {
             Circle().fill(Color.tealDeep).frame(width: 24, height: 24)
                 .overlay {
                     CachedImage(urlString: journey.users?.avatarUrl) { img in
@@ -2414,15 +2304,16 @@ struct PublishedTripCard: View {
                             .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
                     }
                 }
-            Text(authorName).font(BT.footnote).foregroundStyle(Color.ink)
-            Spacer(minLength: 4)
-            if let d = durationLine {
-                Text(d).font(BT.subhead).foregroundStyle(Color.inkMuted)
-            }
+            Text(authorName)
+                .font(BT.footnote)
+                .foregroundStyle(Color.ink)
         }
-        .padding(14)
         .contentShape(Rectangle())
-        .onTapGesture { Haptic.light(); showStory = true }
+        .onTapGesture {
+            guard journey.users?.id != nil else { Haptic.light(); showStory = true; return }
+            Haptic.light()
+            showAuthorProfile = true
+        }
     }
 }
 

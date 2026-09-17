@@ -817,8 +817,9 @@ final class APIClient {
 
     /// Journeys del Traveler actual (guest o verified) — no requiere userId,
     /// el backend lo resuelve desde el traveler_id en el JWT.
-    func fetchTravelerJourneys() async throws -> [APIJourney] {
-        try await request(path: "/travelers/me/journeys")
+    func fetchTravelerJourneys(file: String = #fileID, line: Int = #line) async throws -> [APIJourney] {
+        print("🧭 [origen] journeys ← \(file):\(line)")
+        return try await request(path: "/travelers/me/journeys")
     }
 
     /// Publicaciones del perfil AGRUPADAS por viaje (una por trip, con momentos
@@ -1046,8 +1047,11 @@ final class APIClient {
     }
 
     // No path parameter — backend resolves ownership from the JWT.
-    func fetchMatches() async throws -> [APIMatch] {
-        try await request(path: "/matching/matches")
+    /// El origen va en el log porque estas dos llamadas se repitieron decenas
+    /// de veces en un arranque y no había forma de saber quién las pedía.
+    func fetchMatches(file: String = #fileID, line: Int = #line) async throws -> [APIMatch] {
+        print("🧭 [origen] matches ← \(file):\(line)")
+        return try await request(path: "/matching/matches")
     }
 
     func fetchMyOffers() async throws -> [APIBuddyOffer] {

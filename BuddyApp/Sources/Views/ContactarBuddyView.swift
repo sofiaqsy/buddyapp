@@ -570,9 +570,19 @@ struct ContactarBuddyView: View {
 
 // Reutilizable: el mismo composer del modal se embebe en la Home para iniciar
 // el flujo de ayuda sin pasos intermedios.
+/// Mientras se pellizca una foto, nada más se mueve: ni el carrusel ni el
+/// Home. Con el scroll vivo, el menor desplazamiento del dedo arrastraba la
+/// pantalla y el zoom se perdía a mitad del gesto.
+final class CarouselZoomState: ObservableObject {
+    static let shared = CarouselZoomState()
+    @Published var isZooming = false
+    private init() {}
+}
+
 struct CategoryPickerView: View {
     /// El más cercano con margen lo calcula SpotsStore; aquí solo se lee.
     @ObservedObject private var spotsStore = SpotsStore.shared
+    @ObservedObject private var zoomState = CarouselZoomState.shared
     var buddyCount: Int = 0
     var preselectedCategory: String? = nil
     var destinationName: String? = nil
@@ -827,8 +837,12 @@ struct CategoryPickerView: View {
                 // medidas y la misma card central agrandada, lo que aparece
                 // después ocupa exactamente el lugar que ya estaba reservado.
                 exploreSkeleton
+                    .padding(.top, exploreTopOffset)
             } else if !placeCards.isEmpty {
+                // Más abajo que el título: el carrusel queda en la zona del
+                // pulgar y deslizar las cards no obliga a estirar la mano.
                 exploreCarousel
+                    .padding(.top, exploreTopOffset)
             } else if hidesCategoryGrid {
                 consultCTA
                     .padding(.horizontal, Spacing.edge)
@@ -1023,20 +1037,43 @@ struct CategoryPickerView: View {
     /// gris genérica — la silueta ya dice "acá van a aparecer fotos".
     private var exploreSkeleton: some View {
         VStack(spacing: 0) {
+            // Las tres cards van en un overlay sobre un área de ancho completo.
+            // Antes el HStack medía 3 cards fijas + espacios, MÁS que la
+            // pantalla: .frame(maxWidth:) no lo impedía, la columna entera del
+            // Home crecía, se centraba y todo quedaba corrido a la izquierda
+            // ("nsulta con un buddy", "UNIDAD VIVA") hasta que llegaban los
+            // datos. Un overlay no aporta tamaño: el peek lateral se recorta.
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
+                .overlay {
             HStack(spacing: exploreCardSpacing) {
                 ForEach(0..<3, id: \.self) { index in
                     RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                         .fill(Color.groupedBg)
                         .frame(width: exploreCardWidth, height: exploreCardHeight)
+                        // Zona de foto con el alto real de la card (crece con
+                        // exploreCardPhotoHeight): así la silueta se lee como
+                        // foto + ficha y no como un bloque liso más grande.
+                        .overlay(alignment: .top) {
+                            UnevenRoundedRectangle(
+                                topLeadingRadius: Radius.md, bottomLeadingRadius: 0,
+                                bottomTrailingRadius: 0, topTrailingRadius: Radius.md,
+                                style: .continuous
+                            )
+                            .fill(Color.border.opacity(0.35))
+                            .frame(height: exploreCardPhotoHeight)
+                        }
                         .overlay(alignment: .bottom) {
-                            // La banda de la ficha, con sus tres líneas: es lo
-                            // que distingue esta silueta de un rectángulo.
-                            VStack(spacing: 5) {
-                                SkeletonBox(cornerRadius: 2).frame(width: 34, height: 5)
-                                SkeletonBox(cornerRadius: 3).frame(width: 78, height: 9)
-                                SkeletonBox(cornerRadius: 3).frame(width: 96, height: 7)
+                            // La banda de la ficha, con sus tres líneas en
+                            // proporción al ancho: con medidas fijas se veían
+                            // diminutas en la card agrandada.
+                            VStack(spacing: 6) {
+                                SkeletonBox(cornerRadius: 2).frame(width: exploreCardWidth * 0.22, height: 6)
+                                SkeletonBox(cornerRadius: 3).frame(width: exploreCardWidth * 0.52, height: 10)
+                                SkeletonBox(cornerRadius: 3).frame(width: exploreCardWidth * 0.64, height: 8)
                             }
-                            .padding(.bottom, 14)
+                            .frame(height: exploreCardHeight - exploreCardPhotoHeight)
                         }
                         .overlay(
                             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
@@ -1047,8 +1084,9 @@ struct CategoryPickerView: View {
                         .scaleEffect(index == 1 ? 1 + exploreScaleDelta : 1)
                 }
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
+            .fixedSize()
+                }
+                .clipped()
 
             HStack(spacing: 6) {
                 Circle().fill(Color.border).frame(width: 6, height: 6)
@@ -1098,7 +1136,7 @@ struct CategoryPickerView: View {
     /// zIndex dibujan la del centro invadiendo el espacio de sus vecinas, como
     /// el carrusel destacado de la App Store. El alto crece más que el ancho
     /// para que la card quede más vertical sin comerse el peek lateral.
-    private let exploreCardWidth: CGFloat = 160
+    private let exploreCardWidth: CGFloat = 160 * exploreSizeFactor
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
@@ -1194,8 +1232,18 @@ struct CategoryPickerView: View {
                                     let cardMidX = proxy.frame(in: .named("explore")).midX
                                     let viewportCenter = geo.size.width / 2
                                     let distance = abs(cardMidX - viewportCenter)
-                                    let normalized = min(distance / 160, 1)
-                                    let scale = 1.0 + (1 - normalized) * exploreScaleDelta
+                                    // Normalizado por el PASO real (ancho + separación)
+                                    // y no por un 160 fijo: con las cards más grandes
+                                    // el 160 se agotaba antes de que llegara la vecina,
+                                    // así que la card se quedaba plana un tramo y el
+                                    // cambio salía de golpe al final.
+                                    let step = exploreCardWidth + exploreCardSpacing
+                                    let normalized = min(distance / step, 1)
+                                    // Curva suave (smoothstep) en vez de recta: entra y
+                                    // sale despacio, que es lo que hace que el paso de
+                                    // una foto a otra no se sienta mecánico.
+                                    let eased = normalized * normalized * (3 - 2 * normalized)
+                                    let scale = 1.0 + (1 - eased) * exploreScaleDelta
                                     return content.scaleEffect(scale)
                                 }
                                 .zIndex(exploreZIndex(for: photo, index: index))
@@ -1246,6 +1294,7 @@ struct CategoryPickerView: View {
                     // envuelve nada.
                     .scrollTargetLayout()
                 }
+                .scrollDisabled(zoomState.isZooming)
                 .contentMargins(.horizontal, (geo.size.width - exploreCardWidth) / 2, for: .scrollContent)
                 .contentMargins(.vertical, exploreVerticalSlack, for: .scrollContent)
                 .coordinateSpace(name: "explore")
@@ -1677,7 +1726,22 @@ private struct PendingConversationView: View {
 /// Alto de la foto, compartido por la card y por el carrusel que la mide: la
 /// ficha de abajo suma su banda a este valor, así el aire del texto nunca sale
 /// del espacio de la imagen.
-private let exploreCardPhotoHeight: CGFloat = 207
+/// Carrusel de lugares un 30% más grande que el diseño base (160×207), con
+/// tope: la card central escalada (×1.22) no pasa de la mitad del alto de la
+/// pantalla. En un iPhone grande crece el 30% completo; en uno chico (SE) se
+/// queda en el tamaño base para que "Consultar a buddies" siga a la vista.
+private let exploreSizeFactor: CGFloat = {
+    let screenHeight = UIScreen.main.bounds.height
+    let maxCardHeight = screenHeight * 0.55 / 1.22
+    let factorByHeight = (maxCardHeight - 70) / (207 * explorePhotoExtra)
+    return min(1.3, max(1.0, factorByHeight))
+}()
+/// La foto, además, más alta que la card (+15%, +10% y +10%): pesa más la
+/// imagen del lugar sin ensanchar la card (el peek lateral se mantiene).
+private let explorePhotoExtra: CGFloat = 1.15 * 1.10 * 1.10 * 1.10
+/// Aire extra entre el título y el carrusel (misma medida en el esqueleto).
+private let exploreTopOffset: CGFloat = 8
+private let exploreCardPhotoHeight: CGFloat = 207 * explorePhotoExtra * exploreSizeFactor
 
 /// El papel de la ficha. Va acá y no inline porque el degradado tiene que
 /// terminar EXACTAMENTE en este color: si se separan, aparece una costura entre
@@ -1704,6 +1768,12 @@ private struct ExploreCarouselCard: View {
     @State private var shownDistance: Double?
     /// Con histéresis: se enciende a 30 m y se apaga pasados 45 m.
     @State private var isHere = false
+    /// Pellizcar para ver de cerca: la gente lo intenta por instinto al ver una
+    /// foto. Vuelve sola a su tamaño al soltar (como en Instagram), así que no
+    /// hay un estado "con zoom" que el usuario tenga que deshacer.
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.8)))
+    private var zoom: CGFloat = 1
+    @State private var zoomAnchor: UnitPoint = .center
     private var place: APIPlaceCard { photo.place }
 
     /// Fondo de la ficha: el mismo pie de la foto, repetido y visto a través del
@@ -1771,9 +1841,26 @@ private struct ExploreCarouselCard: View {
             } placeholder: {
                 Rectangle().fill(Color.sandLight)
             }
+            .scaleEffect(zoom, anchor: zoomAnchor)
             .frame(maxWidth: .infinity)
             .frame(height: exploreCardPhotoHeight)
             .clipped()
+            .contentShape(Rectangle())
+            // Simultáneo: el pellizco (dos dedos) no bloquea el deslizamiento
+            // del carrusel (un dedo). El zoom se queda dentro de la foto.
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        zoomAnchor = value.startAnchor
+                        if !CarouselZoomState.shared.isZooming {
+                            CarouselZoomState.shared.isZooming = true
+                        }
+                    }
+                    .updating($zoom) { value, state, _ in
+                        state = min(max(value.magnification, 1), 4)
+                    }
+                    .onEnded { _ in CarouselZoomState.shared.isZooming = false }
+            )
             // Distancia sobre la foto y no en la ficha: la ficha tiene sus 70pt
             // repartidos al punto, y en la esquina de la imagen un chip con
             // material se lee sobre cualquier fondo. "Estás aquí" va en color
@@ -4587,3 +4674,4 @@ struct PlacePickerSheet: View {
         isLoading = false
     }
 }
+

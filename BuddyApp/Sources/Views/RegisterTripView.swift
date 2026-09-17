@@ -27,19 +27,24 @@ struct RegisterTripView: View {
     @State private var knowsHowToGet = true
     @State private var hasLodging = true
     @State private var popularDestsLoadFailed = false
+    /// Destino resuelto por GPS al abrir el formulario. Prellena el campo para
+    /// que "Ya estoy aquí" no obligue a buscar el sitio donde el usuario ya está.
+    @State private var prefilledDestinationId: String? = nil
 
     enum QuickOption { case here, today, tomorrow }
 
     private var showPlanningQuestions: Bool { quickOption != .here }
 
-    private var canCreate: Bool { selectedDest != nil || selectedPlace != nil }
+    private var canCreate: Bool { selectedDest != nil || selectedPlace != nil || prefilledDestinationId != nil }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
 
-                        // Eyebrow — refleja si el usuario ya está en destino o planifica
-                        Text(quickOption == .here ? "DÓNDE ESTÁS AHORA" : "TU PRÓXIMO TRIP")
+                        // Eyebrow — solo cuando el usuario planifica; si ya está
+                        // en el lugar el campo viene prellenado y no hace falta título.
+                        if quickOption != .here {
+                        Text("TU PRÓXIMO TRIP")
                             .font(BT.eyebrow)
                             .tracking(2)
                             .foregroundStyle(Color.inkMuted)
@@ -47,9 +52,10 @@ struct RegisterTripView: View {
                             .padding(.top, Spacing.lg)
                             .padding(.bottom, Spacing.md)
                             .animation(.none, value: quickOption)
+                        }
 
                         // ── Destination ─────────────────────────
-                        sectionLabel("¿DÓNDE ESTÁS O A DÓNDE VAS?")
+                        sectionLabel("¿DÓNDE ESTÁS?")
 
                         // Search field
                         HStack(spacing: Spacing.sm) {
@@ -66,6 +72,9 @@ struct RegisterTripView: View {
                                 .onChange(of: searchText) { _, newValue in
                                     if let sel = selectedDest,  sel.name  != newValue { selectedDest  = nil }
                                     if let sel = selectedPlace, sel.title != newValue { selectedPlace = nil }
+                                    if prefilledDestinationId != nil, newValue != prefilledDestinationName {
+                                        prefilledDestinationId = nil
+                                    }
                                     triggerSearch(query: newValue)
                                 }
                             if !searchText.isEmpty {
@@ -73,6 +82,7 @@ struct RegisterTripView: View {
                                     searchText       = ""
                                     selectedDest     = nil
                                     selectedPlace    = nil
+                                    prefilledDestinationId = nil
                                     searchResults    = []
                                     lastValidResults = []
                                     placeContext     = nil
@@ -130,7 +140,7 @@ struct RegisterTripView: View {
 
                         // ── Resultados de búsqueda en vivo ──────────
                         let hasTyped = !searchText.trimmingCharacters(in: .whitespaces).isEmpty
-                        let nothingSelected = selectedDest == nil && selectedPlace == nil
+                        let nothingSelected = selectedDest == nil && selectedPlace == nil && prefilledDestinationId == nil
 
                         if hasTyped && nothingSelected {
                             if !isSearching && searchResults.isEmpty {
@@ -215,7 +225,7 @@ struct RegisterTripView: View {
                         }
 
                         // ── Community context card ───────────────
-                        if selectedPlace != nil || selectedDest != nil {
+                        if selectedPlace != nil || selectedDest != nil || prefilledDestinationId != nil {
                             PlaceCommunityCard(context: placeContext, isLoading: isLoadingContext)
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.sm)
@@ -344,6 +354,7 @@ struct RegisterTripView: View {
                 print("❌ [RegisterTrip] fetchDestinations error: \(error)")
                 popularDestsLoadFailed = true
             }
+            await prefillCurrentLocation()
         }
         .alert("No pudimos crear tu trip", isPresented: $showCreateError) {
             Button("Reintentar") { createTrip() }
@@ -373,6 +384,33 @@ struct RegisterTripView: View {
                 print("❌ [context] id=\(id) error: \(error)")
                 await MainActor.run { isLoadingContext = false }
             }
+        }
+    }
+
+    // MARK: – Prefill con la ubicación actual
+
+    @State private var prefilledDestinationName: String = ""
+
+    /// Resuelve el GPS contra el backend y deja el campo listo con el lugar
+    /// donde el usuario está. Si no hay permiso, fix o destino resuelto, el
+    /// formulario se queda vacío como antes.
+    private func prefillCurrentLocation() async {
+        guard searchText.isEmpty, selectedDest == nil, selectedPlace == nil else { return }
+        guard let loc = LocationService.current?.stableLocation
+                     ?? LocationService.current?.userLocation else { return }
+        do {
+            guard let resolved = try await APIClient.shared.resolveLocation(
+                lat: loc.coordinate.latitude,
+                lng: loc.coordinate.longitude) else { return }
+            await MainActor.run {
+                guard searchText.isEmpty, selectedDest == nil, selectedPlace == nil else { return }
+                prefilledDestinationId   = resolved.destinationId
+                prefilledDestinationName = resolved.destinationName
+                searchText               = resolved.destinationName
+                fetchContext(id: resolved.destinationId, source: "destination")
+            }
+        } catch {
+            print("❌ [RegisterTrip] prefill resolveLocation: \(error)")
         }
     }
 
@@ -414,7 +452,7 @@ struct RegisterTripView: View {
 
     private func createTrip() {
         // Resolver qué enviar al backend según el origen del lugar seleccionado
-        var destinationId: String? = selectedDest?.id
+        var destinationId: String? = selectedDest?.id ?? prefilledDestinationId
         var placeId:       String? = nil
         var osmId:         String? = nil
         var lat:           Double? = nil

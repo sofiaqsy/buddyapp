@@ -89,34 +89,17 @@ struct TripsView: View {
         visibleTrips.first { $0.id == selectedTripId } ?? visibleTrips.first
     }
 
+    /// Sube al arrastrar para refrescar: TravelerStoriesSection recarga con él.
+    @State private var storiesReloadToken = 0
+
     var body: some View {
         NavigationStack(path: $navPath) {
+          ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
 
-                    // Header — título + acciones del trip seleccionado
-                    HStack(alignment: .center) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("TU BITÁCORA")
-                                .font(BT.eyebrow)
-                                .tracking(2)
-                                .foregroundStyle(Color.inkMuted)
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text("Tu")
-                                    .font(BT.title1)
-                                    .foregroundStyle(Color.ink)
-                                Text("trip.")
-                                    .font(BT.displayLarge)
-                                    .foregroundStyle(Color.sand)
-                            }
-                        }
-                        Spacer()
-                        if let trip = selectedTrip {
-                            tripActionsMenu(for: trip)
-                        }
-                    }
-                    .padding(.horizontal, Spacing.edge)
-                    .padding(.top, Spacing.md)
+                    // Ancla del re-tap del tab: volver arriba.
+                    Color.clear.frame(height: 0).id("tripsTop")
 
                     // Selector horizontal de trips — navegación, no contenido.
                     // Solo aparece si hay más de un trip que recordar.
@@ -134,7 +117,14 @@ struct TripsView: View {
                             .padding(.horizontal, Spacing.edge)
                             .padding(.top, Spacing.md)
                     } else if let journey = selectedTrip {
+                        // Las acciones del trip viven dentro de su propia
+                        // tarjeta: sin cabecera, no hay dónde colgarlas fuera.
                         tripCard(for: journey)
+                            .overlay(alignment: .topTrailing) {
+                                tripActionsMenu(for: journey)
+                                    .padding(.trailing, 4)
+                                    .padding(.top, 4)
+                            }
                             .id("\(journey.id)-\(journey.status ?? "")")
                             .transition(.opacity)
                             .padding(.horizontal, Spacing.edge)
@@ -143,6 +133,11 @@ struct TripsView: View {
                         emptyState
                     }
 
+                    // Historias de otros viajeros, después de lo propio (el trip
+                    // en curso o la invitación a registrar uno).
+                    TravelerStoriesSection(reloadToken: storiesReloadToken)
+                        .padding(.top, Spacing.xl)
+
                     Spacer().frame(height: 100)
                 }
             }
@@ -150,14 +145,22 @@ struct TripsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    (Text("BU").foregroundColor(Color.ink)
-                     + Text("DDY").foregroundColor(Color.sand))
-                        .font(BT.eyebrow)
-                        .tracking(4)
+                    Image("BuddyLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 30)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
+                guard note.object as? Int == AppTab.trips.rawValue else { return }
+                if !navPath.isEmpty { navPath = NavigationPath() }
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("tripsTop", anchor: .top) }
+            }
             .task { await loadJourneys() }
-            .refreshable { await loadJourneys() }
+            .refreshable {
+                storiesReloadToken += 1
+                await loadJourneys()
+            }
             // Al volver del flujo de registro (pop a raíz), un refresh dirigido
             .onChange(of: navPath.count) { old, new in
                 if new == 0 && old > 0 { Task { await loadJourneys() } }
@@ -186,6 +189,7 @@ struct TripsView: View {
                     }
                 }
             }
+          }
         }
         .onReceive(NotificationCenter.default.publisher(for: .journeyActivated)) { _ in
             navPath = NavigationPath()
@@ -397,13 +401,10 @@ struct TripsView: View {
     @ViewBuilder
     private var emptyState: some View {
         VStack(spacing: Spacing.md) {
-            Image(systemName: "map")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Color.inkMuted)
             Text("Tu próximo trip te espera")
                 .font(BT.title3)
                 .foregroundStyle(Color.ink)
-            Text("Registra tu próximo destino\ny conecta con un buddy.")
+            Text("Registra tu próximo destino\ny comparte tu trip.")
                 .font(BT.callout)
                 .foregroundStyle(Color.inkMuted)
                 .multilineTextAlignment(.center)
@@ -1528,3 +1529,158 @@ struct TripEntry: Identifiable {
 }
 
 // MARK: – GPS Place Map Gate
+
+// MARK: – Historias de viajeros
+// Antes vivía en el Home. Se mudó al tab Trips: el Home queda para lugares
+// cerca y consultar buddies, y deja de cargar el feed más pesado de la app.
+// Carga su propio contenido (cerca de la ubicación actual) con paginación.
+
+struct TravelerStoriesSection: View {
+    /// Cambia al refrescar el tab: vuelve a pedir la primera página.
+    var reloadToken: Int
+
+    @State private var stories: [APIJourney] = []
+    @State private var cursor: String? = nil
+    @State private var hasMore = true
+    @State private var isLoading = true
+    @State private var isLoadingMore = false
+    @State private var failed = false
+    @State private var seenIds = Set<String>()
+
+    private var lat: Double? { LocationService.current?.userLocation?.coordinate.latitude }
+    private var lng: Double? { LocationService.current?.userLocation?.coordinate.longitude }
+
+    var body: some View {
+        Group {
+            if isLoading && stories.isEmpty {
+                VStack(alignment: .leading, spacing: Spacing.lg) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        SkeletonBox(cornerRadius: 0).frame(height: 480)
+                        HStack(spacing: 8) {
+                            SkeletonBox(cornerRadius: 12).frame(width: 24, height: 24)
+                            SkeletonBox(cornerRadius: 4).frame(width: 100, height: 13)
+                            Spacer(minLength: 4)
+                            SkeletonBox(cornerRadius: 4).frame(width: 50, height: 12)
+                        }
+                        .padding(14)
+                    }
+                    .background(Color.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
+                    .padding(.horizontal, Spacing.edge)
+                }
+                .skeletonPulse()
+            } else if failed {
+                VStack(spacing: Spacing.sm) {
+                    Text("No pudimos cargar las historias")
+                        .font(BT.callout)
+                        .foregroundStyle(Color.inkMuted)
+                    Button {
+                        Task { await load() }
+                    } label: {
+                        Text("Reintentar")
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, Spacing.lg)
+                            .padding(.vertical, 10)
+                            .background(Color.surface)
+                            .clipShape(Capsule())
+                            .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Spacing.xl)
+            } else if !stories.isEmpty {
+                LazyVStack(alignment: .leading, spacing: Spacing.lg) {
+                    ForEach(stories) { journey in
+                        PublishedTripCard(journey: journey)
+                            .equatable()
+                            .onAppear {
+                                if journey.id == stories.suffix(4).first?.id {
+                                    Task { await loadMore() }
+                                }
+                            }
+                    }
+                    if isLoadingMore {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Spacing.md)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: Spacing.md) {
+                    VStack(spacing: 8) {
+                        Text("Aún nadie ha contado su paso por aquí")
+                            .font(BT.callout).foregroundStyle(Color.ink)
+                        Text("Cuando termines tu trip, tu historia será la primera.")
+                            .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Spacing.xl)
+                    .padding(.horizontal, Spacing.edge)
+                }
+            }
+        }
+        .task(id: reloadToken) { await load() }
+    }
+
+    /// Primera página, con un reintento: un timeout puntual no puede dejar la
+    /// sección vacía en silencio.
+    private func load() async {
+        if stories.isEmpty { isLoading = true }
+        for attempt in 0..<2 {
+            do {
+                let page = try await APIClient.shared.fetchStories(
+                    destinationId: nil, lat: lat, lng: lng, cursor: nil)
+                print("🗞️ [TravelerStories] items=\(page.items.count)")
+                stories = page.items
+                seenIds = Set(page.items.map(\.id))
+                cursor = page.nextCursor
+                hasMore = page.hasMore
+                failed = false
+                isLoading = false
+                return
+            } catch {
+                if Task.isCancelled { return }
+                print("❌ [TravelerStories] intento \(attempt + 1) falló: \(error)")
+                if attempt == 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
+            }
+        }
+        isLoading = false
+        failed = stories.isEmpty
+    }
+
+    /// Siguiente página. Una página puede volver ENTERA repetida (el servidor
+    /// mezcla una cabecera de trips cercanos en la primera página y luego no la
+    /// excluye), y entonces no se agrega ninguna tarjeta nueva: sin tarjeta
+    /// nueva no hay onAppear que dispare la página siguiente y el listado se
+    /// queda clavado. Por eso se sigue pidiendo mientras el servidor diga que
+    /// hay más y no llegue nada nuevo, con un tope para no encadenar llamadas.
+    private func loadMore() async {
+        guard hasMore, !isLoadingMore, cursor != nil else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+
+        for intento in 0..<3 {
+            guard hasMore, let cursorActual = cursor else { return }
+            do {
+                let page = try await APIClient.shared.fetchStories(
+                    destinationId: nil, lat: lat, lng: lng, cursor: cursorActual)
+                let fresh = page.items.filter { seenIds.insert($0.id).inserted }
+                cursor  = page.nextCursor
+                hasMore = page.hasMore && page.nextCursor != nil
+                if !fresh.isEmpty {
+                    stories.append(contentsOf: fresh)
+                    return
+                }
+                print("🗞️ [TravelerStories] página \(intento + 1) sin novedades (\(page.items.count) repetidos) — sigo")
+            } catch {
+                if Task.isCancelled { return }
+                print("❌ [TravelerStories] loadMore: \(error)")
+                return
+            }
+        }
+    }
+}

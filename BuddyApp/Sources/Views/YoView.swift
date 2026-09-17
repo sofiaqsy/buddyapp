@@ -79,9 +79,6 @@ struct YoView: View {
                             // Apertura editorial
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("TU PERFIL")
-                                        .font(BT.eyebrow).tracking(2)
-                                        .foregroundStyle(Color.inkMuted)
                                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                                         Text("Tu")
                                             .font(BT.title1).foregroundStyle(Color.ink)
@@ -141,10 +138,6 @@ struct YoView: View {
                                         .padding(.top, Spacing.md)
                                 }
                             }
-
-                            // 4 — Colección (historia del viajero)
-                            stickerSection
-                                .padding(.top, Spacing.xl)
 
                             // Visible si puede aportar (necesita la entrada) o
                             // si ya aportó (no se le esconde lo suyo aunque su
@@ -351,9 +344,7 @@ struct YoView: View {
     private var metaLine: String {
         let trips = journeys.count
         let tripsLabel = trips == 1 ? "1 trip" : "\(trips) trips"
-        let stickersLabel = stickers.isEmpty ? nil
-            : (stickers.count == 1 ? "1 sticker" : "\(stickers.count) stickers")
-        return [tripsLabel, stickersLabel].compactMap { $0 }.joined(separator: " · ")
+        return [tripsLabel].compactMap { $0 }.joined(separator: " · ")
     }
 
     // MARK: – Bio
@@ -789,9 +780,6 @@ struct YoView: View {
                 // Header
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("TU PERFIL")
-                            .font(BT.eyebrow).tracking(2)
-                            .foregroundStyle(Color.inkMuted)
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text("Tu")
                                 .font(BT.title1).foregroundStyle(Color.ink)

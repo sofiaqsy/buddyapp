@@ -506,10 +506,6 @@ struct ConexionesView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // Header — misma voz que el tab Trips
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("TU GENTE")
-                        .font(BT.eyebrow)
-                        .tracking(2)
-                        .foregroundStyle(Color.inkMuted)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("Tus")
                             .font(BT.title1)

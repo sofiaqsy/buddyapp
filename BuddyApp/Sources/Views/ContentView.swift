@@ -25,7 +25,7 @@ enum AppTab: Int, CaseIterable {
     var label: String {
         switch self {
         case .inicio:     return "Inicio"
-        case .trips:      return "Tu trip"
+        case .trips:      return "Trips"
         case .conexiones: return "Conexiones"
         case .yo:         return "Yo"
         }
