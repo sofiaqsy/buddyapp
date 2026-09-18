@@ -1134,9 +1134,14 @@ struct CategoryPickerView: View {
     /// las 3 cards terminan ocupando el mismo espacio visual y el efecto se
     /// pierde. Acá el HStack siempre reserva este ancho por card; scaleEffect +
     /// zIndex dibujan la del centro invadiendo el espacio de sus vecinas, como
-    /// el carrusel destacado de la App Store. El alto crece más que el ancho
-    /// para que la card quede más vertical sin comerse el peek lateral.
-    private let exploreCardWidth: CGFloat = 160 * exploreSizeFactor
+    /// el carrusel destacado de la App Store.
+    ///
+    /// El ancho sale del alto de la foto en proporción 3:4, la de una foto
+    /// vertical de teléfono. Antes era 160 fijo mientras el alto crecía por
+    /// su cuenta (+15%, +10%, +10%, +10%): la foto terminó en casi 1:2, una
+    /// tira delgada y alargada que recortaba la imagen original. 3:4 muestra la
+    /// foto como se tomó y sigue dejando asomar a las vecinas.
+    private let exploreCardWidth: CGFloat = exploreCardPhotoHeight * 3 / 4
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
@@ -1736,8 +1741,8 @@ private let exploreSizeFactor: CGFloat = {
     let factorByHeight = (maxCardHeight - 70) / (207 * explorePhotoExtra)
     return min(1.3, max(1.0, factorByHeight))
 }()
-/// La foto, además, más alta que la card (+15%, +10% y +10%): pesa más la
-/// imagen del lugar sin ensanchar la card (el peek lateral se mantiene).
+/// La foto, además, más alta que el diseño base (+15%, +10%, +10% y +10%). El
+/// ancho de la card acompaña en 3:4 (exploreCardWidth) para no deformarla.
 private let explorePhotoExtra: CGFloat = 1.15 * 1.10 * 1.10 * 1.10
 /// Aire extra entre el título y el carrusel (misma medida en el esqueleto).
 private let exploreTopOffset: CGFloat = 8
