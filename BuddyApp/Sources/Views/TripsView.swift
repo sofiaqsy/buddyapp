@@ -156,14 +156,14 @@ struct TripsView: View {
                 if !navPath.isEmpty { navPath = NavigationPath() }
                 withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("tripsTop", anchor: .top) }
             }
-            .task { await loadJourneys() }
+            .task { await loadJourneys(trigger: "task") }
             .refreshable {
                 storiesReloadToken += 1
-                await loadJourneys()
+                await loadJourneys(trigger: "refreshable")
             }
             // Al volver del flujo de registro (pop a raíz), un refresh dirigido
             .onChange(of: navPath.count) { old, new in
-                if new == 0 && old > 0 { Task { await loadJourneys() } }
+                if new == 0 && old > 0 { Task { await loadJourneys(trigger: "navPath") } }
             }
             .onChange(of: authState.isLoggedIn) { _, loggedIn in
                 if !loggedIn {
@@ -174,7 +174,7 @@ struct TripsView: View {
                     selectedTripId      = nil
                     navPath             = NavigationPath()
                 } else {
-                    Task { await loadJourneys() }
+                    Task { await loadJourneys(trigger: "isLoggedIn") }
                 }
             }
             .navigationDestination(for: APIJourney.self) { journey in
@@ -185,7 +185,7 @@ struct TripsView: View {
                 if route == "register" {
                     RegisterTripView { _ in
                         navPath = NavigationPath()
-                        Task { await loadJourneys() }
+                        Task { await loadJourneys(trigger: "registerTrip") }
                     }
                 }
             }
@@ -194,7 +194,7 @@ struct TripsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .journeyActivated)) { _ in
             navPath = NavigationPath()
             // El trip pasó de "por llegar" a "en curso" — un solo refresh dirigido
-            Task { await loadJourneys() }
+            Task { await loadJourneys(trigger: "notif:journeyActivated") }
         }
         .onReceive(NotificationCenter.default.publisher(for: .journeyPublished)) { note in
             // Publicar saca el trip del tab (pasa a completado → vive en el perfil).
@@ -204,7 +204,7 @@ struct TripsView: View {
                 if selectedTripId == id { selectedTripId = nil }
             }
             locallyActivatedId = nil
-            Task { await loadJourneys() }
+            Task { await loadJourneys(trigger: "notif:journeyPublished") }
         }
         .onReceive(NotificationCenter.default.publisher(for: .journeyCancelled)) { note in
             // Cancelar/eliminar SÍ borra del backend → se excluye de inmediato.
@@ -212,11 +212,11 @@ struct TripsView: View {
                 dismissedJourneyIds.insert(id)
             }
             locallyActivatedId = nil
-            Task { await loadJourneys() }
+            Task { await loadJourneys(trigger: "notif:journeyCancelled") }
         }
         .fullScreenCover(item: $editTarget) { target in
             TripEditorSheet(journey: target.journey, initialPage: target.pageIndex) {
-                Task { await loadJourneys() }
+                Task { await loadJourneys(trigger: "sheetDismiss:editor") }
             }
         }
         .sheet(isPresented: $showIdentitySheet, onDismiss: {
@@ -425,7 +425,10 @@ struct TripsView: View {
         .padding(.top, 60)
     }
 
-    private func loadJourneys() async {
+    /// `trigger` y `line` solo instrumentan: nueve sitios llaman a esta
+    /// función y el log no distinguía cuál. Sin behavior change.
+    private func loadJourneys(trigger: String, line: Int = #line) async {
+        print("🧳 [TripsView.load] trigger=\(trigger) line=\(line)")
         guard Session.hasSession else { isLoading = false; return }
         if !hasLoadedOnce { isLoading = true }
         let snapshotId = Session.travelerId
