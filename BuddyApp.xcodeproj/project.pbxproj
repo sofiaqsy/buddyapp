@@ -28,6 +28,7 @@
 		88410F8131ADCC4534D1EA76 /* Route.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F86A484605FC5E66B0582CA /* Route.swift */; };
 		8AAFD8633C1F1B064B73CD5C /* CollageItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE50A79D7F31EAB2EC2521BD /* CollageItem.swift */; };
 		8BB04F916CB3FA0622651384 /* TripsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7237947F0CFF86BB760D14 /* TripsView.swift */; };
+		00CCA323D451ECDE2CD57A79 /* JourneysStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 029375B610003095B75BE163 /* JourneysStore.swift */; };
 		3AA8F48E7B04C1A652AC1F4C /* TravelerProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83823938C67419BDA52F8756 /* TravelerProfileView.swift */; };
 		8E59C55F4ED4D6802B646444 /* UIImage+Trim.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAFBE299D69767E57D35F51A /* UIImage+Trim.swift */; };
 		90CB03866B252B760F8EEC25 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FAB1FFBA5D8CD53C619B5E7 /* DesignSystem.swift */; };
@@ -129,6 +130,7 @@
 		F645EC972FF8202E0089C6F7 /* IdentityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityProvider.swift; sourceTree = "<group>"; };
 		F645EC992FF8203C0089C6F7 /* AuthCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthCoordinator.swift; sourceTree = "<group>"; };
 		FA7237947F0CFF86BB760D14 /* TripsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripsView.swift; sourceTree = "<group>"; };
+		029375B610003095B75BE163 /* JourneysStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JourneysStore.swift; sourceTree = "<group>"; };
 		83823938C67419BDA52F8756 /* TravelerProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelerProfileView.swift; sourceTree = "<group>"; };
 		FDF4715224A85FF8A7487615 /* HostProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProfile.swift; sourceTree = "<group>"; };
 		FE50A79D7F31EAB2EC2521BD /* CollageItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CollageItem.swift; sourceTree = "<group>"; };
@@ -166,6 +168,7 @@
 				F645EC992FF8203C0089C6F7 /* AuthCoordinator.swift */,
 				F645EC972FF8202E0089C6F7 /* IdentityProvider.swift */,
 				DA30CFE9A8B0E789377C3BA7 /* APIClient.swift */,
+				029375B610003095B75BE163 /* JourneysStore.swift */,
 				2A9C67F4EF4667A52E7D1795 /* AuthService.swift */,
 				D4E5F6A7B8C90819304A5B6C /* TravelerService.swift */,
 				F0EB252C314CCE2E4E806F6C /* ImageCache.swift */,
@@ -434,6 +437,7 @@
 				E665E7BFB5526A156F150269 /* TripDetailView.swift in Sources */,
 				F47B6C814587AC55947EA053 /* TripListView.swift in Sources */,
 				8BB04F916CB3FA0622651384 /* TripsView.swift in Sources */,
+				00CCA323D451ECDE2CD57A79 /* JourneysStore.swift in Sources */,
 				3AA8F48E7B04C1A652AC1F4C /* TravelerProfileView.swift in Sources */,
 				F63B1229581DC121E84CE61A /* YoView.swift in Sources */,
 				AA1B2C3D4E5F6A7B8C9D0E1F /* BuddyProfileView.swift in Sources */,

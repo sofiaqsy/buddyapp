@@ -167,6 +167,9 @@ struct TripsView: View {
             }
             .onChange(of: authState.isLoggedIn) { _, loggedIn in
                 if !loggedIn {
+                    // El store es compartido: si no se vacía, la cuenta
+                    // siguiente vería los journeys de la anterior.
+                    JourneysStore.shared.clear()
                     journeys            = []
                     hasLoadedOnce       = false
                     dismissedJourneyIds = []
@@ -434,7 +437,15 @@ struct TripsView: View {
         let snapshotId = Session.travelerId
         // Solo actualizamos en ÉXITO. Si la red falla (offline transitorio),
         // conservamos los journeys que ya teníamos → la info no desaparece.
-        if let fetched = try? await APIClient.shared.fetchTravelerJourneys() {
+        //
+        // El store decide si hay que ir al servidor: aparecer en pantalla no es
+        // motivo suficiente, y el .task de esta vista reaparece muchas veces
+        // porque el TabView recrea la pestaña. Un pull-to-refresh sí lo es.
+        let store = JourneysStore.shared
+        let fresco = trigger == "refreshable"
+            ? try? await store.refresh(trigger: "trips:\(trigger)")
+            : try? await store.load(trigger: "trips:\(trigger)")
+        if let fetched = fresco {
             // Anti cross-account: descarta si la identidad cambió durante el fetch.
             if Session.travelerId == snapshotId {
                 journeys = fetched

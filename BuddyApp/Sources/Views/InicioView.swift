@@ -1150,7 +1150,7 @@ struct InicioView: View {
 
         // Mark refresh time to throttle scenePhase changes
         await MainActor.run { lastRefreshTripStateAt = Date() }
-        guard let journeys = try? await APIClient.shared.fetchTravelerJourneys() else {
+        guard let journeys = try? await JourneysStore.shared.load(trigger: "inicio:refreshTripState") else {
             print("❌ [refreshTripState] fetchTravelerJourneys falló")
             return
         }
@@ -1270,7 +1270,7 @@ struct InicioView: View {
         }
         // Cancel any in-flight loadData — only the latest matters.
         loadDataTask?.cancel()
-        let task = Task<Void, Never> { [self] in await _loadDataBody() }
+        let task = Task<Void, Never> { [self] in await _loadDataBody(force: force) }
         loadDataTask = task
         await task.value
         if loadDataTask == task {
@@ -1279,7 +1279,7 @@ struct InicioView: View {
         }
     }
 
-    private func _loadDataBody() async {
+    private func _loadDataBody(force: Bool) async {
         guard !Task.isCancelled else { return }
         await MainActor.run { loadDataFailed = false }
         // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
@@ -1324,7 +1324,13 @@ struct InicioView: View {
             // fetchTravelerJourneys usa el JWT (traveler o Supabase) — válido para ambos.
             let snapshotId = Session.travelerId   // capturar ANTES del await
             print("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
-            let journeys = try await APIClient.shared.fetchTravelerJourneys()
+            let store = JourneysStore.shared
+            let journeys: [APIJourney]
+            if force {
+                journeys = try await store.refresh(trigger: "inicio:loadData")
+            } else {
+                journeys = try await store.load(trigger: "inicio:loadData")
+            }
             guard !Task.isCancelled else { return }
             print("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
             // Anti cross-account guard: if identity was hydrated mid-flight (cold launch
