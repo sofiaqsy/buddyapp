@@ -34,6 +34,47 @@ final class APIClient {
 
     private init() {}
 
+    // MARK: – Deduplicación de peticiones en vuelo
+    //
+    // Cuatro vistas piden /matching/matches en el arranque y tres piden
+    // /travelers/me/journeys; context, recent-help y destinations se repiten
+    // igual. Cada una es dueña de su propia carga, así que la única capa donde
+    // se pueden juntar sin decidir todavía quién manda es esta.
+    //
+    // Esto NO es un cache: solo las peticiones que se solapan EN EL TIEMPO
+    // comparten respuesta. Una petición cinco segundos después vuelve a salir a
+    // la red, que es justo lo que queremos en esta etapa.
+    //
+    // Solo GET. Un POST/PATCH/DELETE repetido es una acción repetida del
+    // usuario, no la misma lectura: unirlos perdería una de las dos.
+    private actor InFlightRequests {
+        private var tasks: [String: Task<(Data, HTTPURLResponse), Error>] = [:]
+
+        func run(key: String,
+                 operation: @escaping @Sendable () async throws -> (Data, HTTPURLResponse)
+        ) async throws -> (Data, HTTPURLResponse) {
+            if let existing = tasks[key] {
+                print("🔗 [APIClient] \(key) — ya en vuelo, me engancho")
+                return try await existing.value
+            }
+            let task = Task { try await operation() }
+            tasks[key] = task
+            // La entrada se borra pase lo que pase —éxito, error, timeout o
+            // cancelación—. Si quedara viva, ese path no volvería a pedirse
+            // nunca: todos se engancharían para siempre a una tarea muerta.
+            do {
+                let result = try await task.value
+                tasks[key] = nil
+                return result
+            } catch {
+                tasks[key] = nil
+                throw error
+            }
+        }
+    }
+
+    private let inFlight = InFlightRequests()
+
     // La deduplicación vive ahora en TravelerService.forceRefresh y en
     // AuthService.tryRefresh, cada una tras un RefreshCoalescer.
     //
@@ -100,11 +141,20 @@ final class APIClient {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
-        let (data, response) = try await APIClient.session.data(for: req)
-
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.unknown
+        let (data, http): (Data, HTTPURLResponse)
+        if method == "GET" {
+            let enviar: @Sendable () async throws -> (Data, HTTPURLResponse) = {
+                print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
+                let (d, r) = try await APIClient.session.data(for: req)
+                guard let h = r as? HTTPURLResponse else { throw APIError.unknown }
+                return (d, h)
+            }
+            (data, http) = try await inFlight.run(key: "GET \(path)", operation: enviar)
+        } else {
+            print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
+            let (d, response) = try await APIClient.session.data(for: req)
+            guard let h = response as? HTTPURLResponse else { throw APIError.unknown }
+            (data, http) = (d, h)
         }
 
         if http.statusCode == 401, !isRetry {
