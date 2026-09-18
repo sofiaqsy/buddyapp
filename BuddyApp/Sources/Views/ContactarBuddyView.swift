@@ -1370,9 +1370,12 @@ struct CategoryPickerView: View {
                         .fill(noBuddies ? Color.sand : Color.onlineGreen)
                         .frame(width: 6, height: 6)
                     Text(exploreAvailabilityText)
-                        .font(BT.caption1)
-                        .foregroundStyle(Color.inkMuted)
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.ink)
                 }
+                // Centrada bajo la tarjeta del medio: se lee como el estado de la
+                // comunidad, no como una nota al pie alineada a la izquierda.
+                .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 12)
                 .redacted(reason: isSkeleton ? .placeholder : [])
             }
