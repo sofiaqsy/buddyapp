@@ -47,7 +47,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     func application(_ application: UIApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
-        print("[APNs] Device token: \(token)")
+        // El token entero no vuelve a aparecer en el log: identifica al
+        // dispositivo y sirve para mandarle notificaciones. Con saber que
+        // llegó y sus últimos cuatro caracteres alcanza para diagnosticar.
+        print("[APNs] Device token registrado (…\(token.suffix(4)))")
         // Save locally and send to server
         UserDefaults.standard.set(token, forKey: "apns_device_token")
         Task { await PushService.shared.registerToken(token) }
