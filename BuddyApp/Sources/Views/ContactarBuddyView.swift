@@ -1748,7 +1748,7 @@ private let explorePhotoExtra: CGFloat = 1.15 * 1.10 * 1.10 * 1.10
 private let exploreTopOffset: CGFloat = 8
 /// ×1.3 y luego −10%: la tarjeta completa queda 17% más grande que antes del
 /// cambio a 3:4. El ancho acompaña solo, porque sale de este alto.
-private let exploreCardBoost: CGFloat = 1.3 * 0.9
+private let exploreCardBoost: CGFloat = 1.3 * 0.9 * 1.05
 private let exploreCardPhotoHeight: CGFloat = 207 * explorePhotoExtra * exploreSizeFactor * exploreCardBoost
 
 /// El papel de la ficha. Va acá y no inline porque el degradado tiene que
