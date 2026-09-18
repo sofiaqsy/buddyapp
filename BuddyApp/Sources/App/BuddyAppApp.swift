@@ -123,7 +123,7 @@ final class AuthState: ObservableObject {
         travelerCreatedCancellable = NotificationCenter.default.addObserver(
             forName: .travelerSessionCreated, object: nil, queue: .main
         ) { [weak self] _ in
-            print("🧳 travelerSessionCreated — guest session activa")
+            dlog("🧳 travelerSessionCreated — guest session activa")
             self?.travelerStatus = "guest"
             // Request push now — guest has done their first meaningful action
             // (requested help), so they need to receive buddy-accepted notifications.

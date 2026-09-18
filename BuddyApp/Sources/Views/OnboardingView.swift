@@ -196,13 +196,13 @@ struct WelcomeStep: View {
 
     // Google: el proveedor obtiene la credencial internamente
     private func handleSocialSignIn(provider: IdentityProvider) {
-        print("🌐 [WelcomeStep] Google sign in…")
+        dlog("🌐 [WelcomeStep] Google sign in…")
         socialLoading = true; socialError = nil
         Task {
             do {
                 let result      = try await AuthService.shared.signIn(with: provider)
                 let destination = AuthCoordinator.shared.handle(result)
-                print("🌐 [WelcomeStep] ✅ status=\(result.status) destination=\(destination)")
+                dlog("🌐 [WelcomeStep] ✅ status=\(result.status) destination=\(destination)")
                 await MainActor.run {
                     socialLoading = false
                     switch destination {

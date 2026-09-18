@@ -31,14 +31,14 @@ final class SpotsStore: ObservableObject {
 
     private init() {
         spots = Self.loadCache()
-        print("🗂️ [spots] cache al arrancar → \(spots.count) spot(s)")
+        dlog("🗂️ [spots] cache al arrancar → \(spots.count) spot(s)")
     }
 
     func refresh(lat: Double?, lng: Double?, reason: String) async {
         let coords = lat.flatMap { la in lng.map { CLLocation(latitude: la, longitude: $0) } }
 
         if let inFlight, Self.equivalent(inFlightCoords, coords) {
-            print("🗂️ [spots] \(reason): ya hay una petición equivalente en vuelo — me engancho")
+            dlog("🗂️ [spots] \(reason): ya hay una petición equivalente en vuelo — me engancho")
             await inFlight.value
             return
         }
@@ -51,15 +51,15 @@ final class SpotsStore: ObservableObject {
                 let cards = try await APIClient.shared.fetchPlaceCards(lat: lat, lng: lng)
                 guard let self else { return }
                 guard gen == self.generation else {
-                    print("🗂️ [spots] \(reason): respuesta superada por una petición más nueva — descartada")
+                    dlog("🗂️ [spots] \(reason): respuesta superada por una petición más nueva — descartada")
                     return
                 }
                 withAnimation(.easeInOut(duration: 0.25)) { self.spots = cards }
                 Self.saveCache(cards)
-                print("🗂️ [spots] \(reason): \(cards.count) spot(s) — guardados en cache")
+                dlog("🗂️ [spots] \(reason): \(cards.count) spot(s) — guardados en cache")
             } catch {
                 guard let self else { return }
-                print("🗂️ [spots] \(reason): falló (\(error.localizedDescription)) — conservo \(self.spots.count) spot(s)")
+                dlog("🗂️ [spots] \(reason): falló (\(error.localizedDescription)) — conservo \(self.spots.count) spot(s)")
             }
         }
         inFlight = task
@@ -74,7 +74,7 @@ final class SpotsStore: ObservableObject {
     func reorder(from loc: CLLocation) {
         let ordenados = DistanceResolver.stableOrder(spots, from: loc)
         if ordenados.map(\.id) != spots.map(\.id) {
-            print("🗂️ [spots] nuevo orden: \(ordenados.prefix(3).map(\.name).joined(separator: " · "))")
+            dlog("🗂️ [spots] nuevo orden: \(ordenados.prefix(3).map(\.name).joined(separator: " · "))")
             withAnimation(.easeInOut(duration: 0.25)) { spots = ordenados }
         }
         let candidatos = spots.compactMap { card -> (id: String, distance: Double)? in
@@ -82,7 +82,7 @@ final class SpotsStore: ObservableObject {
         }
         let nuevo = DistanceResolver.nearest(current: nearestId, candidates: candidatos)
         if nuevo != nearestId {
-            print("🗂️ [spots] más cercano: \(spots.first { $0.id == nuevo }?.name ?? "ninguno")")
+            dlog("🗂️ [spots] más cercano: \(spots.first { $0.id == nuevo }?.name ?? "ninguno")")
             nearestId = nuevo
         }
     }

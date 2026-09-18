@@ -432,7 +432,7 @@ struct TripsView: View {
     /// `trigger` y `line` solo instrumentan: nueve sitios llaman a esta
     /// función y el log no distinguía cuál. Sin behavior change.
     private func loadJourneys(trigger: String, line: Int = #line) async {
-        print("🧳 [TripsView.load] trigger=\(trigger) line=\(line)")
+        dlog("🧳 [TripsView.load] trigger=\(trigger) line=\(line)")
         guard Session.hasSession else { isLoading = false; return }
         if !hasLoadedOnce { isLoading = true }
         let snapshotId = Session.travelerId
@@ -457,7 +457,7 @@ struct TripsView: View {
                    fetched.allSatisfy({ $0.tripId != dtid || $0.status == "cancelled" }) {
                     dismissedTripId = nil
                 }
-                print("🧳 [TripsView.load] journeys=\(fetched.map { "\($0.destination?.name ?? $0.place?.name ?? "·"):\($0.status ?? "nil"):trip=\(($0.tripId ?? "nil").prefix(6))" })")
+                dlog("🧳 [TripsView.load] journeys=\(fetched.map { "\($0.destination?.name ?? $0.place?.name ?? "·"):\($0.status ?? "nil"):trip=\(($0.tripId ?? "nil").prefix(6))" })")
             } else {
                 print("⚠️ [TripsView] travelerId cambió durante el fetch — descarto resultado")
             }
@@ -468,7 +468,7 @@ struct TripsView: View {
             selectedTripId = visibleTrips.first?.id
         }
         if let t = visibleTrips.first(where: { $0.id == selectedTripId }) ?? visibleTrips.first {
-            print("🧳 [TripsView] selectedTrip id=\(t.id.prefix(8)) dest=\(t.destination?.name ?? "nil") place=\(t.place?.name ?? "nil") title=\(t.title ?? "nil")")
+            dlog("🧳 [TripsView] selectedTrip id=\(t.id.prefix(8)) dest=\(t.destination?.name ?? "nil") place=\(t.place?.name ?? "nil") title=\(t.title ?? "nil")")
         }
         // Cargar match activo para mostrar avatar del buddy
         let hasActive = journeys.contains { $0.status == "active" }
@@ -851,7 +851,7 @@ struct TripFeedCard: View {
         else if let p = placeId { id = p; source = "place" }
         else { await MainActor.run { hasBuddies = false }; return }
         guard let ctx = try? await APIClient.shared.fetchPlaceContext(id: id, source: source) else { return }
-        print("🧳 [TripFeedCard] buddyContext id=\(id.prefix(8)) total=\(ctx.totalBuddies) status=\(ctx.status)")
+        dlog("🧳 [TripFeedCard] buddyContext id=\(id.prefix(8)) total=\(ctx.totalBuddies) status=\(ctx.status)")
         await MainActor.run { hasBuddies = ctx.totalBuddies > 0 }
     }
 
@@ -1005,22 +1005,22 @@ struct TripFeedCard: View {
 
     private func publishTrip() {
         let jId = journey.id
-        print("📤 [publishTrip] journeyId=\(jId) pages.count=\(pages.count)")
+        dlog("📤 [publishTrip] journeyId=\(jId) pages.count=\(pages.count)")
         guard hasPublishableContent else {
-            print("📤 [publishTrip] BLOQUEADO: hasPublishableContent=false — no hay páginas con items ni bgFile")
+            dlog("📤 [publishTrip] BLOQUEADO: hasPublishableContent=false — no hay páginas con items ni bgFile")
             showBlankPublishAlert = true
             return
         }
         // Solo se publican las portadas con contenido real; las vacías se descartan
         let currentPages: [CollagePage]
         do {
-            print("📤 [publishTrip] BEFORE filter: \(pages.count) page(s)")
+            dlog("📤 [publishTrip] BEFORE filter: \(pages.count) page(s)")
             for (i, p) in pages.enumerated() {
                 let kept = MemoirPersistence.isPublishable(p)
-                print("📤 [publishTrip]   page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumb=\(p.thumbnailFileName ?? "nil") → \(kept ? "KEPT" : "DISCARDED")")
+                dlog("📤 [publishTrip]   page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumb=\(p.thumbnailFileName ?? "nil") → \(kept ? "KEPT" : "DISCARDED")")
             }
             currentPages = pages.filter(MemoirPersistence.isPublishable)
-            print("📤 [publishTrip] AFTER filter: \(currentPages.count) page(s)")
+            dlog("📤 [publishTrip] AFTER filter: \(currentPages.count) page(s)")
         }
         isPublishing = true
         Task {
@@ -1649,7 +1649,7 @@ struct TravelerStoriesSection: View {
             do {
                 let page = try await APIClient.shared.fetchStories(
                     destinationId: nil, lat: lat, lng: lng, cursor: nil)
-                print("🗞️ [TravelerStories] items=\(page.items.count)")
+                dlog("🗞️ [TravelerStories] items=\(page.items.count)")
                 stories = page.items
                 seenIds = Set(page.items.map(\.id))
                 cursor = page.nextCursor
@@ -1690,7 +1690,7 @@ struct TravelerStoriesSection: View {
                     stories.append(contentsOf: fresh)
                     return
                 }
-                print("🗞️ [TravelerStories] página \(intento + 1) sin novedades (\(page.items.count) repetidos) — sigo")
+                dlog("🗞️ [TravelerStories] página \(intento + 1) sin novedades (\(page.items.count) repetidos) — sigo")
             } catch {
                 if Task.isCancelled { return }
                 print("❌ [TravelerStories] loadMore: \(error)")

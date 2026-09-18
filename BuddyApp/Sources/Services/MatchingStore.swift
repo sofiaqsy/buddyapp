@@ -34,7 +34,7 @@ final class MatchingStore: ObservableObject {
         if let at = lastFetchedAt {
             let edad = Date().timeIntervalSince(at)
             if edad < freshness {
-                print("🤝 [MatchingStore] \(trigger) → reutilizo (\(String(format: "%.1f", edad))s, \(matches.count) match(es))")
+                dlog("🤝 [MatchingStore] \(trigger) → reutilizo (\(String(format: "%.1f", edad))s, \(matches.count) match(es))")
                 return matches
             }
         }
@@ -50,7 +50,7 @@ final class MatchingStore: ObservableObject {
 
     private func fetch(trigger: String) async throws -> [APIMatch] {
         if let inFlight {
-            print("🤝 [MatchingStore] \(trigger) → ya hay una carga en vuelo, me engancho")
+            dlog("🤝 [MatchingStore] \(trigger) → ya hay una carga en vuelo, me engancho")
             return try await inFlight.value
         }
         let task = Task { try await APIClient.shared.fetchMatches() }

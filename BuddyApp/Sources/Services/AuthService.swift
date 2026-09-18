@@ -90,7 +90,7 @@ final class AuthService {
         let (data, response) = try await URLSession.shared.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
-        print("👤 completeProfileMinimal → status: \(status), body: \(bodyStr)")
+        dlog("👤 completeProfileMinimal → status: \(status), body: \(bodyStr)")
 
         guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
         UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
@@ -119,7 +119,7 @@ final class AuthService {
         let (data, response) = try await URLSession.shared.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
-        print("👤 completeProfile → status: \(status), body: \(bodyStr)")
+        dlog("👤 completeProfile → status: \(status), body: \(bodyStr)")
 
         guard (200...299).contains(status) else {
             throw AuthError.sendFailed(bodyStr)
@@ -153,7 +153,7 @@ final class AuthService {
         if TravelerService.shared.isVerified, let tid = TravelerService.shared.travelerId {
             do {
                 _ = try await TravelerService.shared.forceRefresh(travelerId: tid)
-                print("🔄 [validateSession] social JWT renovado en silencio")
+                dlog("🔄 [validateSession] social JWT renovado en silencio")
                 return true
             } catch {
                 // Red caída ≠ sesión inválida: solo cerrar sesión si el servidor
@@ -249,7 +249,7 @@ final class AuthService {
                     UserDefaults.standard.removeObject(forKey: "buddy.traveler.token")
                     UserDefaults.standard.removeObject(forKey: "buddy.traveler.id")
                 }
-                print("🔄 session refreshed silently")
+                dlog("🔄 session refreshed silently")
                 return true
             } else {
                 // Server rejected refresh token (truly invalid) → clear stale tokens
@@ -338,7 +338,7 @@ final class AuthService {
         let (data, response) = try await URLSession.shared.data(for: req)
         let status  = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
-        print("👤 completeProfileSocial → status: \(status), body: \(bodyStr)")
+        dlog("👤 completeProfileSocial → status: \(status), body: \(bodyStr)")
 
         guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
         UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")

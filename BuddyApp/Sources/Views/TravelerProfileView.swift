@@ -201,7 +201,7 @@ struct TravelerProfileView: View {
         async let sharesTask = try? APIClient.shared.fetchUserShares(travelerId: travelerId)
         async let tripsTask  = try? APIClient.shared.fetchUserTrips(travelerId: travelerId)
         let (u, s, t) = await (userTask, sharesTask, tripsTask)
-        print("👤 [TravelerProfile] id=\(travelerId.prefix(8)) user=\(u != nil) shares=\(s?.count ?? -1) trips=\(t?.items.count ?? -1)")
+        dlog("👤 [TravelerProfile] id=\(travelerId.prefix(8)) user=\(u != nil) shares=\(s?.count ?? -1) trips=\(t?.items.count ?? -1)")
         user   = u
         shares = s ?? []
         trips  = t?.items ?? []

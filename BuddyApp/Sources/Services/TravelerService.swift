@@ -91,7 +91,7 @@ final class TravelerService {
     /// Returns the valid JWT to use in Authorization headers.
     @discardableResult
     func ensureSession() async throws -> String {
-        print("🧳 [TravelerService.ensureSession] hasSession=\(hasSession) travelerId=\(travelerId?.prefix(8) ?? "NIL")")
+        dlog("🧳 [TravelerService.ensureSession] hasSession=\(hasSession) travelerId=\(travelerId?.prefix(8) ?? "NIL")")
         // Already have a traveler — just ensure the token is fresh
         if let tid = travelerId {
             // Instalaciones anteriores a este cambio no tenían el estado en el
@@ -117,7 +117,7 @@ final class TravelerService {
             // SIEMPRE como "guest", y una cuenta verificada terminaba borrada y
             // reemplazada por un guest nuevo al primer refresh fallido.
             let restoredStatus = loadStatusFromKeychain() ?? "guest"
-            print("🧳 [TravelerService.ensureSession] → restored traveler_id from Keychain: \(restoredId.prefix(8))… status=\(restoredStatus)")
+            dlog("🧳 [TravelerService.ensureSession] → restored traveler_id from Keychain: \(restoredId.prefix(8))… status=\(restoredStatus)")
             UserDefaults.standard.set(restoredId,     forKey: "buddy.traveler.id")
             UserDefaults.standard.set(restoredStatus, forKey: "buddy.traveler.status")
             do {
@@ -134,7 +134,7 @@ final class TravelerService {
             }
         }
         // First meaningful action: create a new guest traveler
-        print("🧳 [TravelerService.ensureSession] → no session found, calling /travelers/init")
+        dlog("🧳 [TravelerService.ensureSession] → no session found, calling /travelers/init")
         return try await createGuestSession()
     }
 
@@ -147,7 +147,7 @@ final class TravelerService {
             print("🔒 [TravelerService] createGuestSession bloqueado — hay una cuenta verificada guardada")
             throw TravelerError.sessionExpired
         }
-        print("🧳 [TravelerService] POST /travelers/init → device_id=\(deviceId.prefix(8))…")
+        dlog("🧳 [TravelerService] POST /travelers/init → device_id=\(deviceId.prefix(8))…")
         let url = URL(string: "\(coreURL)/init")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -156,7 +156,7 @@ final class TravelerService {
 
         let (data, response) = try await URLSession.shared.data(for: req)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-        print("🧳 [TravelerService] /travelers/init → statusCode=\(statusCode) bytes=\(data.count)")
+        dlog("🧳 [TravelerService] /travelers/init → statusCode=\(statusCode) bytes=\(data.count)")
         // 409 account_requires_auth: este device tiene una cuenta VERIFICADA viva.
         // /init no la autentica ni crea un guest encima; se pide login.
         if statusCode == 409 {
@@ -271,7 +271,7 @@ final class TravelerService {
             saveStatusToKeychain(newStatus)
         }
         UserDefaults.standard.set(token, forKey: "buddy.traveler.token")
-        print("🔄 [TravelerService] token refreshed → \(travelerId)")
+        dlog("🔄 [TravelerService] token refreshed → \(travelerId)")
         return token
     }
 

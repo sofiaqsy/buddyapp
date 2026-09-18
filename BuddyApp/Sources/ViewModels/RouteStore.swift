@@ -68,7 +68,7 @@ final class RouteStore: ObservableObject {
     @MainActor
     func refreshAfterPhotoChange() {
         guard let key = loadedKey, let fetch = lastFetch else { return }
-        print("🗺️ [RouteStore] fotos cambiaron — recargando \(key)")
+        dlog("🗺️ [RouteStore] fotos cambiaron — recargando \(key)")
         loadedKey = nil
         Task { @MainActor in _ = await fetch() }
     }
@@ -98,10 +98,10 @@ final class RouteStore: ObservableObject {
                 await self._fetchDestState(destId: destId)
             }
         } else if let lat = journey.destination?.lat, let lng = journey.destination?.lng {
-            print("🗺️ [RouteStore] sin guía, solo coords del destination ref")
+            dlog("🗺️ [RouteStore] sin guía, solo coords del destination ref")
             return .noGuide(lat: lat, lng: lng)
         } else {
-            print("🗺️ [RouteStore] sin guía ni coordenadas para journey=\(journey.id.prefix(8))")
+            dlog("🗺️ [RouteStore] sin guía ni coordenadas para journey=\(journey.id.prefix(8))")
             return .noData
         }
     }
@@ -122,12 +122,12 @@ final class RouteStore: ObservableObject {
     private func _ensureLoaded(key: String, fetch: @escaping () async -> MapLoadState) async -> MapLoadState {
         // Caché hit
         if loadedKey == key, isReady {
-            print("🗺️ [RouteStore] caché válido para \(key) — sin fetch")
+            dlog("🗺️ [RouteStore] caché válido para \(key) — sin fetch")
             return .guideAvailable
         }
         // Fetch en vuelo para la misma key — esperar
         if fetchingKey == key, let task = fetchingTask {
-            print("🗺️ [RouteStore] fetch en vuelo para \(key) — esperando")
+            dlog("🗺️ [RouteStore] fetch en vuelo para \(key) — esperando")
             return await task.value
         }
         // Cache miss: limpiar datos del destino anterior inmediatamente
@@ -146,13 +146,13 @@ final class RouteStore: ObservableObject {
 
     @MainActor
     private func _fetchDestState(destId: String) async -> MapLoadState {
-        print("🗺️ [RouteStore] fetch destination destId=\(destId.prefix(8))")
+        dlog("🗺️ [RouteStore] fetch destination destId=\(destId.prefix(8))")
         isLoading = true
         defer { isLoading = false }
         do {
             let dest = try await APIClient.shared.fetchDestination(id: destId)
             let places: [Place] = (dest.places ?? []).map { $0.asPlace }
-            print("🗺️ [RouteStore] destination=\(dest.name) lat=\(dest.lat) lng=\(dest.lng) spots=\(places.count)")
+            dlog("🗺️ [RouteStore] destination=\(dest.name) lat=\(dest.lat) lng=\(dest.lng) spots=\(places.count)")
             route = Route(
                 id: UUID(uuidString: dest.id) ?? UUID(),
                 title: dest.name,
@@ -175,7 +175,7 @@ final class RouteStore: ObservableObject {
 
     @MainActor
     private func _fetchPlaceState(placeId: String, journey: APIJourney) async -> MapLoadState {
-        print("🗺️ [RouteStore] fetch place placeId=\(placeId.prefix(8))")
+        dlog("🗺️ [RouteStore] fetch place placeId=\(placeId.prefix(8))")
         isLoading = true
         defer { isLoading = false }
         do {
@@ -184,7 +184,7 @@ final class RouteStore: ObservableObject {
             // Coords: preferir las del guide; fallback al destination ref del journey
             let lat = guide.lat ?? journey.destination?.lat
             let lng = guide.lng ?? journey.destination?.lng
-            print("🗺️ [RouteStore] place guide.lat=\(guide.lat.map{String($0)} ?? "nil") guide.lng=\(guide.lng.map{String($0)} ?? "nil") → lat=\(lat.map{String($0)} ?? "nil")")
+            dlog("🗺️ [RouteStore] place guide.lat=\(guide.lat.map{String($0)} ?? "nil") guide.lng=\(guide.lng.map{String($0)} ?? "nil") → lat=\(lat.map{String($0)} ?? "nil")")
 
             let destName: String?
             let destCity: String?

@@ -72,12 +72,12 @@ final class MemoirPersistence {
     func removePage(id: UUID, journeyId: String) {
         var pages = load(journeyId: journeyId)
         guard let index = pages.firstIndex(where: { $0.id == id }) else {
-            print("📓 [removePage] journeyId=\(journeyId) id=\(id) no está en el libro (páginas=\(pages.count))")
+            dlog("📓 [removePage] journeyId=\(journeyId) id=\(id) no está en el libro (páginas=\(pages.count))")
             return
         }
         pages.remove(at: index)
         save(pages, journeyId: journeyId)
-        print("📓 [removePage] journeyId=\(journeyId) id=\(id) → quedan \(pages.count) página(s)")
+        dlog("📓 [removePage] journeyId=\(journeyId) id=\(id) → quedan \(pages.count) página(s)")
     }
 
     /// Variante por posición, SOLO para fotos anteriores a client_page_id.
@@ -90,13 +90,13 @@ final class MemoirPersistence {
         var pages = load(journeyId: journeyId)
         let published = pages.indices.filter { MemoirPersistence.isPublishable(pages[$0]) }
         guard published.indices.contains(publishedIndex) else {
-            print("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) fuera de rango (publicables=\(published.count) de \(pages.count))")
+            dlog("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) fuera de rango (publicables=\(published.count) de \(pages.count))")
             return
         }
         let index = published[publishedIndex]
         pages.remove(at: index)
         save(pages, journeyId: journeyId)
-        print("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) → local[\(index)] → quedan \(pages.count) página(s)")
+        dlog("📓 [removePublishedPage] journeyId=\(journeyId) page_index=\(publishedIndex) → local[\(index)] → quedan \(pages.count) página(s)")
     }
 
     /// Qué páginas llegan al servidor. Vive acá para que el mapeo de índices y

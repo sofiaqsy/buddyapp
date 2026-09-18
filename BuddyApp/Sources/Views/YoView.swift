@@ -254,7 +254,7 @@ struct YoView: View {
                 editingShareJourney = nuevo
             }) {
                 CompartirLugarSheet { journey in
-                    print("🌍 [YoView] compartido creado journey=\(journey.id)")
+                    dlog("🌍 [YoView] compartido creado journey=\(journey.id)")
                     pendingShareJourney = journey
                 }
             }
@@ -1030,25 +1030,25 @@ struct YoView: View {
     }
 
     private func uploadAvatar(item: PhotosPickerItem) async {
-        print("🖼️ [uploadAvatar] iniciando…")
+        dlog("🖼️ [uploadAvatar] iniciando…")
 
         guard let data = try? await item.loadTransferable(type: Data.self) else {
             print("🖼️ [uploadAvatar] ❌ loadTransferable falló — formato no soportado")
             return
         }
-        print("🖼️ [uploadAvatar] imagen original: \(data.count / 1024) KB")
+        dlog("🖼️ [uploadAvatar] imagen original: \(data.count / 1024) KB")
 
         guard let uiImg = UIImage(data: data),
               let jpegData = uiImg.limitedToMaxDimension(400).jpegData(compressionQuality: 0.85) else {
             print("🖼️ [uploadAvatar] ❌ compresión JPEG falló")
             return
         }
-        print("🖼️ [uploadAvatar] JPEG comprimido: \(jpegData.count / 1024) KB — enviando a backend…")
+        dlog("🖼️ [uploadAvatar] JPEG comprimido: \(jpegData.count / 1024) KB — enviando a backend…")
 
         await MainActor.run { isUploadingAvatar = true }
         do {
             let url = try await APIClient.shared.uploadAvatar(imageData: jpegData)
-            print("🖼️ [uploadAvatar] ✅ \(url.suffix(60))")
+            dlog("🖼️ [uploadAvatar] ✅ \(url.suffix(60))")
             await MainActor.run {
                 user = user.map { u in var copy = u; copy.avatarUrl = url; return copy }
                 isUploadingAvatar = false
@@ -1090,7 +1090,7 @@ struct YoView: View {
                 unattendedPlaceName = place.name
             }
         } catch {
-            print("👤 [YoView] loadUnattendedDemand falló:", error.localizedDescription)
+            dlog("👤 [YoView] loadUnattendedDemand falló:", error.localizedDescription)
         }
     }
 
@@ -1106,17 +1106,17 @@ struct YoView: View {
         // Solo si existe: ni siquiera el prefijo de un token va al log.
         let ttok = TravelerService.shared.token != nil ? "sí" : "no"
         let atok = AuthService.shared.accessToken != nil ? "sí" : "no"
-        print("👤 [YoView] loadProfile — travelerId=\(tid) travelerToken=\(ttok) authToken=\(atok) hasSession=\(Session.hasSession) isVerified=\(Session.isVerified) forceRefresh=\(forceRefresh)")
+        dlog("👤 [YoView] loadProfile — travelerId=\(tid) travelerToken=\(ttok) authToken=\(atok) hasSession=\(Session.hasSession) isVerified=\(Session.isVerified) forceRefresh=\(forceRefresh)")
 
         guard Session.hasSession else {
-            print("👤 [YoView] sin sesión — saliendo")
+            dlog("👤 [YoView] sin sesión — saliendo")
             isLoading = false; return
         }
 
         // Cache: si los datos tienen menos de 60 s y no hay forzado, no recargar.
         if !forceRefresh, let fetchedAt = lastFetchedAt,
            Date().timeIntervalSince(fetchedAt) < 60, user != nil {
-            print("👤 [YoView] perfil en caché (\(Int(Date().timeIntervalSince(fetchedAt)))s) — omitiendo recarga")
+            dlog("👤 [YoView] perfil en caché (\(Int(Date().timeIntervalSince(fetchedAt)))s) — omitiendo recarga")
             isLoading = false; return
         }
 
@@ -1131,10 +1131,10 @@ struct YoView: View {
         // El contenido inferior (stickers, trips) se carga en fase 2.
         // Retry once after a brief delay — backend may need a moment to create the user
         // record after social sign-in (Apple in particular has a propagation delay).
-        print("👤 [YoView] fetchCurrentUser → /users/me…")
+        dlog("👤 [YoView] fetchCurrentUser → /users/me…")
         var me: APIUser? = try? await APIClient.shared.fetchCurrentUser()
         if me == nil {
-            print("👤 [YoView] fetchCurrentUser falló — reintentando en 1.5s…")
+            dlog("👤 [YoView] fetchCurrentUser falló — reintentando en 1.5s…")
             try? await Task.sleep(for: .seconds(1.5))
             me = try? await APIClient.shared.fetchCurrentUser()
         }
@@ -1142,7 +1142,7 @@ struct YoView: View {
             print("👤 [YoView] ❌ fetchCurrentUser falló — token inválido, sin red, o sin perfil en DB")
             isLoading = false; return
         }
-        print("👤 [YoView] fetchCurrentUser ✅ → id=\(me.id.prefix(8)) name=\(me.fullName ?? "nil") role=\(me.role ?? "nil")")
+        dlog("👤 [YoView] fetchCurrentUser ✅ → id=\(me.id.prefix(8)) name=\(me.fullName ?? "nil") role=\(me.role ?? "nil")")
 
         // Header visible: el usuario ve nombre, avatar y buddy card antes de que
         // terminen de cargar los stickers y los trips.
@@ -1150,7 +1150,7 @@ struct YoView: View {
         isLoading = false
 
         // ── Fase 2: contenido inferior (paralelo) ──────────────────────────────
-        print("👤 [YoView] cargando stickers/trips/buddy para id=\(me.id.prefix(8))…")
+        dlog("👤 [YoView] cargando stickers/trips/buddy para id=\(me.id.prefix(8))…")
         async let stickersTask = try? APIClient.shared.fetchUserStickers(travelerId: me.id)
         async let tripsTask    = try? APIClient.shared.fetchUserTrips(travelerId: me.id)
         async let buddyTask    = try? APIClient.shared.fetchBuddyMe()
@@ -1158,7 +1158,7 @@ struct YoView: View {
         async let sharesTask   = try? APIClient.shared.fetchUserShares(travelerId: me.id)
 
         let (s, tp, b, d, sh) = await (stickersTask, tripsTask, buddyTask, destsTask, sharesTask)
-        print("👤 [YoView] datos cargados — stickers=\(s?.count ?? 0) shares=\(sh?.count ?? 0) trips=\(tp?.items.count ?? 0) hasMore=\(tp?.hasMore ?? false) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
+        dlog("👤 [YoView] datos cargados — stickers=\(s?.count ?? 0) shares=\(sh?.count ?? 0) trips=\(tp?.items.count ?? 0) hasMore=\(tp?.hasMore ?? false) buddy=\(b?.isBuddy == true ? "sí" : "no") isBuddy=\(b?.profile?.verificationStatus ?? "no-profile")")
 
         stickers        = s ?? []
         journeys        = tp?.items ?? []
@@ -1174,14 +1174,14 @@ struct YoView: View {
 
     private func loadMoreTrips() async {
         guard tripsHasMore, !isLoadingMoreTrips, let userId = user?.id else { return }
-        print("👤 [YoView] loadMoreTrips — cursor=\(tripsNextCursor ?? "nil")")
+        dlog("👤 [YoView] loadMoreTrips — cursor=\(tripsNextCursor ?? "nil")")
         isLoadingMoreTrips = true
         defer { isLoadingMoreTrips = false }
         guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: userId, cursor: tripsNextCursor) else { return }
         journeys        += page.items
         tripsNextCursor  = page.nextCursor
         tripsHasMore     = page.hasMore
-        print("👤 [YoView] loadMoreTrips ✅ — +\(page.items.count) trips totalNow=\(journeys.count)")
+        dlog("👤 [YoView] loadMoreTrips ✅ — +\(page.items.count) trips totalNow=\(journeys.count)")
     }
 
     /// Crea el perfil de buddy del usuario y refresca la sección.

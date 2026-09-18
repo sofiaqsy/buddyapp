@@ -297,7 +297,7 @@ final class ChatStore: ObservableObject {
         loadLock.lock()
         if let enCurso = loadInFlight {
             loadLock.unlock()
-            print("💬 [ChatStore] load ya en curso — espero esa en vez de repetir")
+            dlog("💬 [ChatStore] load ya en curso — espero esa en vez de repetir")
             await enCurso.value
             return
         }

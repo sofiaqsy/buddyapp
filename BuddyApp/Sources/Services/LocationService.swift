@@ -49,14 +49,14 @@ final class LocationService: NSObject, ObservableObject {
     func startTracking() {
         guard !isTracking else { return }
         isTracking = true
-        print("📡 [gps] tracking ON")
+        dlog("📡 [gps] tracking ON")
         manager.startUpdatingLocation()
     }
 
     func stopTracking() {
         guard isTracking else { return }
         isTracking = false
-        print("📡 [gps] tracking OFF")
+        dlog("📡 [gps] tracking OFF")
         manager.stopUpdatingLocation()
     }
 
@@ -93,7 +93,7 @@ extension LocationService: CLLocationManagerDelegate {
         // de "el GPS no entrega fixes" cuando la UI no reacciona.
         let delta = lastFixLogged.map { Int(loc.distance(from: $0)) }
         let segs  = lastFixLogged.map { String(format: "%.0f", loc.timestamp.timeIntervalSince($0.timestamp)) }
-        print("📡 [gps] fix \(String(format: "%.6f", loc.coordinate.latitude)),\(String(format: "%.6f", loc.coordinate.longitude)) ±\(Int(loc.horizontalAccuracy))m" +
+        dlog("📡 [gps] fix \(String(format: "%.6f", loc.coordinate.latitude)),\(String(format: "%.6f", loc.coordinate.longitude)) ±\(Int(loc.horizontalAccuracy))m" +
               (delta.map { " · movido \($0)m" } ?? " · primer fix") +
               (segs.map { " en \($0)s" } ?? "") +
               (loc.speed >= 0 ? " · \(String(format: "%.1f", loc.speed))m/s" : ""))
@@ -101,7 +101,7 @@ extension LocationService: CLLocationManagerDelegate {
         if LocationFilter.accept(loc, hasStable: stableLocation != nil) {
             stableLocation = loc
         } else {
-            print("📡 [gps] descartado ±\(Int(loc.horizontalAccuracy))m (umbral \(Int(LocationFilter.maxAccuracy))m)")
+            dlog("📡 [gps] descartado ±\(Int(loc.horizontalAccuracy))m (umbral \(Int(LocationFilter.maxAccuracy))m)")
         }
         // Re-geocode si es la primera vez, o si el usuario se movió más de 5 km desde la última geocodificación
         let distanceMoved = lastGeocodedLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
@@ -111,7 +111,7 @@ extension LocationService: CLLocationManagerDelegate {
         CLGeocoder().reverseGeocodeLocation(loc) { [weak self] placemarks, _ in
             let city = placemarks?.first?.locality
             let district = placemarks?.first?.subLocality
-            print("📍 [LocationService] currentCity=\(city ?? "nil") currentDistrict=\(district ?? "nil")")
+            dlog("📍 [LocationService] currentCity=\(city ?? "nil") currentDistrict=\(district ?? "nil")")
             DispatchQueue.main.async {
                 self?.currentCity = city
                 self?.currentDistrict = district

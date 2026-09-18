@@ -37,7 +37,7 @@ final class JourneysStore: ObservableObject {
         if let at = lastFetchedAt {
             let edad = Date().timeIntervalSince(at)
             if edad < freshness {
-                print("📦 [JourneysStore] \(trigger) → reutilizo (\(String(format: "%.1f", edad))s, \(journeys.count) journey(s))")
+                dlog("📦 [JourneysStore] \(trigger) → reutilizo (\(String(format: "%.1f", edad))s, \(journeys.count) journey(s))")
                 return journeys
             }
         }
@@ -52,7 +52,7 @@ final class JourneysStore: ObservableObject {
 
     private func fetch(trigger: String) async throws -> [APIJourney] {
         if let inFlight {
-            print("📦 [JourneysStore] \(trigger) → ya hay una carga en vuelo, me engancho")
+            dlog("📦 [JourneysStore] \(trigger) → ya hay una carga en vuelo, me engancho")
             return try await inFlight.value
         }
         let task = Task { try await APIClient.shared.fetchTravelerJourneys() }

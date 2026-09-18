@@ -28,6 +28,7 @@
 		88410F8131ADCC4534D1EA76 /* Route.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F86A484605FC5E66B0582CA /* Route.swift */; };
 		8AAFD8633C1F1B064B73CD5C /* CollageItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE50A79D7F31EAB2EC2521BD /* CollageItem.swift */; };
 		8BB04F916CB3FA0622651384 /* TripsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7237947F0CFF86BB760D14 /* TripsView.swift */; };
+		3895A409E3EB92C3F8F00D2B /* Logging.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDCC4C7B89A75F82F16B1792 /* Logging.swift */; };
 		AEE6B19628994A5345EFDF34 /* MatchingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0556B9A62DDC98070441A013 /* MatchingStore.swift */; };
 		00CCA323D451ECDE2CD57A79 /* JourneysStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 029375B610003095B75BE163 /* JourneysStore.swift */; };
 		3AA8F48E7B04C1A652AC1F4C /* TravelerProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83823938C67419BDA52F8756 /* TravelerProfileView.swift */; };
@@ -131,6 +132,7 @@
 		F645EC972FF8202E0089C6F7 /* IdentityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityProvider.swift; sourceTree = "<group>"; };
 		F645EC992FF8203C0089C6F7 /* AuthCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthCoordinator.swift; sourceTree = "<group>"; };
 		FA7237947F0CFF86BB760D14 /* TripsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripsView.swift; sourceTree = "<group>"; };
+		FDCC4C7B89A75F82F16B1792 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
 		0556B9A62DDC98070441A013 /* MatchingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchingStore.swift; sourceTree = "<group>"; };
 		029375B610003095B75BE163 /* JourneysStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JourneysStore.swift; sourceTree = "<group>"; };
 		83823938C67419BDA52F8756 /* TravelerProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelerProfileView.swift; sourceTree = "<group>"; };
@@ -170,6 +172,7 @@
 				F645EC992FF8203C0089C6F7 /* AuthCoordinator.swift */,
 				F645EC972FF8202E0089C6F7 /* IdentityProvider.swift */,
 				DA30CFE9A8B0E789377C3BA7 /* APIClient.swift */,
+				FDCC4C7B89A75F82F16B1792 /* Logging.swift */,
 				0556B9A62DDC98070441A013 /* MatchingStore.swift */,
 				029375B610003095B75BE163 /* JourneysStore.swift */,
 				2A9C67F4EF4667A52E7D1795 /* AuthService.swift */,
@@ -440,6 +443,7 @@
 				E665E7BFB5526A156F150269 /* TripDetailView.swift in Sources */,
 				F47B6C814587AC55947EA053 /* TripListView.swift in Sources */,
 				8BB04F916CB3FA0622651384 /* TripsView.swift in Sources */,
+				3895A409E3EB92C3F8F00D2B /* Logging.swift in Sources */,
 				AEE6B19628994A5345EFDF34 /* MatchingStore.swift in Sources */,
 				00CCA323D451ECDE2CD57A79 /* JourneysStore.swift in Sources */,
 				3AA8F48E7B04C1A652AC1F4C /* TravelerProfileView.swift in Sources */,

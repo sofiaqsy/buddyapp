@@ -285,7 +285,7 @@ struct InicioView: View {
             // número grande, aborta el proceso. Solo se formatea cuando hay
             // una distancia real que contar.
             let desde = lastCommunityContextLocation == nil ? "primer fix" : "\(Int(moved))m"
-            print("🏠 [gps] \(desde) desde la última consulta → refresco ubicación + spots")
+            dlog("🏠 [gps] \(desde) desde la última consulta → refresco ubicación + spots")
             lastCommunityContextLocation = loc
             lastCommunityContextAt = Date()
             Task { await refreshHomeCommunityContext() }
@@ -519,7 +519,7 @@ struct InicioView: View {
         if let activeJourney = effectiveTripJourney {
             // Pioneer: no hay buddies en este lugar → redirigir al tab Tu trip
             if homeCommunityContext?.totalBuddies == 0 {
-                print("📍 [submitHelpFromHome] pioneer con trip activo → Tu trip tab")
+                dlog("📍 [submitHelpFromHome] pioneer con trip activo → Tu trip tab")
                 await MainActor.run { router.switchTo(.trips) }
                 return
             }
@@ -539,7 +539,7 @@ struct InicioView: View {
         // "buscar" — el trip + solicitud se crean automáticamente y se navega
         // a Tu trip (misma regla que Android: pioneerRegister con destino).
         if homeCommunityContext?.totalBuddies == 0, let dest = resolvedLocation {
-            print("📍 [submitHelpFromHome] pioneer con destino \(dest.destinationName) → crear trip automático")
+            dlog("📍 [submitHelpFromHome] pioneer con destino \(dest.destinationName) → crear trip automático")
             await pioneerHelpFlow(category: category, description: description,
                                   destinationId: dest.destinationId, cityName: dest.destinationName)
             return
@@ -549,7 +549,7 @@ struct InicioView: View {
         guard let dest = resolvedLocation else {
             if let loc = locationService.userLocation, homeCommunityContext?.totalBuddies == 0 {
                 // Pioneer sin trip: crear el trip + request, luego ir a Tu trip
-                print("📍 [submitHelpFromHome] pioneer sin trip + cat=\(category) → crear trip + Tu trip tab")
+                dlog("📍 [submitHelpFromHome] pioneer sin trip + cat=\(category) → crear trip + Tu trip tab")
                 await pioneerHelpFlow(category: category, description: description, loc: loc)
                 await MainActor.run { router.switchTo(.trips) }
             } else if let loc = locationService.userLocation, homeCommunityContext != nil {
@@ -610,7 +610,7 @@ struct InicioView: View {
                         // SSE (travelerMatchSignature) y notificaciones.
                         let age = Date().timeIntervalSince(lastRefreshTripStateAt ?? .distantPast)
                         guard age >= 60 else { return }
-                        print("🔄 [refreshTripState] onAppear (última hace \(Int(age))s)")
+                        dlog("🔄 [refreshTripState] onAppear (última hace \(Int(age))s)")
                         Task { await refreshTripState() }
                     }
                 }
@@ -881,17 +881,17 @@ struct InicioView: View {
     @ViewBuilder private func stringDestination(route: String) -> some View {
         if route == "register" {
             RegisterTripView { journey in
-                print("🧳 [onJourneyCreated] id=\(journey.id.prefix(8)) dest=\(journey.destination?.name ?? journey.destinationId ?? "?") liveJourneys.before=\(liveJourneys.count)")
+                dlog("🧳 [onJourneyCreated] id=\(journey.id.prefix(8)) dest=\(journey.destination?.name ?? journey.destinationId ?? "?") liveJourneys.before=\(liveJourneys.count)")
                 navPath = NavigationPath()
                 if homeHelpSeed != nil {
-                    print("🧳 [onJourneyCreated] path=contactSheet — seteando activeJourney directo")
+                    dlog("🧳 [onJourneyCreated] path=contactSheet — seteando activeJourney directo")
                     confirmedHelpSeed = homeHelpSeed
                     homeHelpSeed = nil
                     activeJourney = journey
                     lastContactSheetJourney = journey
                     contactSheetJourney = journey
                 } else {
-                    print("🧳 [onJourneyCreated] path=switchToTrips — liveJourneys sigue en \(liveJourneys.count)")
+                    dlog("🧳 [onJourneyCreated] path=switchToTrips — liveJourneys sigue en \(liveJourneys.count)")
                     router.switchTo(.trips)
                 }
             }
@@ -927,7 +927,7 @@ struct InicioView: View {
         let requests = (try? await APIClient.shared.fetchOpenRequests(destinationId: destId)) ?? []
         let mine = requests.first { $0.travelerId == myId && $0.isActive }
         await MainActor.run { openRequest = mine }
-        print("🏠 [refreshOpenRequest] destId=\(destId.prefix(8)) → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
+        dlog("🏠 [refreshOpenRequest] destId=\(destId.prefix(8)) → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
     }
 
     /// Resuelve el GPS contra el backend y actualiza `resolvedLocation`.
@@ -954,7 +954,7 @@ struct InicioView: View {
         let movido = lastResolveLocation.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
         let edad   = Date().timeIntervalSince(lastResolveAt ?? .distantPast)
         if movido < Self.locationRefreshMeters, edad < 60, resolvedLocation != nil {
-            print("🏠 [refreshResolvedLocation] sin cambios (\(Int(movido))m, \(Int(edad))s) — reutilizo \(resolvedLocation?.destinationName ?? "nil")")
+            dlog("🏠 [refreshResolvedLocation] sin cambios (\(Int(movido))m, \(Int(edad))s) — reutilizo \(resolvedLocation?.destinationName ?? "nil")")
             return
         }
         await MainActor.run {
@@ -996,7 +996,7 @@ struct InicioView: View {
         // "Ahora en Villa Rica" no es una novedad, es el estado inicial.
         guard let previousId, previousId != resolution.destinationId else { return }
 
-        print("🏠 [location] \(previousName ?? "?") → \(resolution.destinationName)")
+        dlog("🏠 [location] \(previousName ?? "?") → \(resolution.destinationName)")
         locationChangeMessage = "Ahora en \(resolution.destinationName)"
         showLocationChangeToast = true
     }
@@ -1038,15 +1038,15 @@ struct InicioView: View {
         // siempre coincide con la ubicación que realmente se usará para el
         // Help Request.
         if let j = effectiveTripJourney {
-            print("🏠 [refreshHomeCommunityContext] active trip — loading context")
+            dlog("🏠 [refreshHomeCommunityContext] active trip — loading context")
             if let destId = j.destination?.id ?? j.destinationId,
                let ctx = try? await APIClient.shared.fetchPlaceContext(id: destId, source: "destination") {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
-                print("🏠 [refreshHomeCommunityContext] ✅ loaded from destination: buddies=\(ctx.buddies)")
+                dlog("🏠 [refreshHomeCommunityContext] ✅ loaded from destination: buddies=\(ctx.buddies)")
             } else if let placeId = j.placeId,
                       let ctx = try? await APIClient.shared.fetchPlaceContext(id: placeId, source: "place") {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
-                print("🏠 [refreshHomeCommunityContext] ✅ loaded from place: buddies=\(ctx.buddies)")
+                dlog("🏠 [refreshHomeCommunityContext] ✅ loaded from place: buddies=\(ctx.buddies)")
             } else {
                 await MainActor.run {
                     homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
@@ -1060,7 +1060,7 @@ struct InicioView: View {
         // (polígono → radio). Nunca la lista de 5 destacados: elegía el vecino
         // equivocado (ej: "Estás en La Merced" estando en Villa Rica).
         if let resolution = resolvedLocation {
-            print("🏠 [refreshHomeCommunityContext] sin trip → \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
+            dlog("🏠 [refreshHomeCommunityContext] sin trip → \(resolution.destinationName) (\(resolution.matchedBy), \(resolution.distanceMeters)m)")
             // Con el destino resuelto ya se puede cargar "Comunidad viva"
             // aunque no exista trip (loadRecentHelp usa resolvedLocation).
             await loadRecentHelp()
@@ -1073,7 +1073,7 @@ struct InicioView: View {
             if let ctx = try? await APIClient.shared.fetchPlaceContext(id: resolution.destinationId, source: "destination",
                                                                       lat: feedLat, lng: feedLng) {
                 await MainActor.run { homeCommunityContext = ctx; homeBuddyCount = ctx.buddies }
-                print("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
+                dlog("🏠 [refreshHomeCommunityContext] ✅ loaded context: buddies=\(ctx.buddies)")
                 return
             }
 
@@ -1082,16 +1082,16 @@ struct InicioView: View {
                 homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
                 homeBuddyCount = 0
             }
-            print("🏠 [refreshHomeCommunityContext] → pioneer mode (0 buddies)")
+            dlog("🏠 [refreshHomeCommunityContext] → pioneer mode (0 buddies)")
         } else if locationService.userLocation != nil {
             // Hay GPS pero fuera de cobertura de todo destino conocido.
             await MainActor.run {
                 homeCommunityContext = APIPlaceContext(buddies: 0, totalBuddies: 0, stories: 0, status: "pioneer")
                 homeBuddyCount = 0
             }
-            print("🏠 [refreshHomeCommunityContext] sin match de ubicación → pioneer mode")
+            dlog("🏠 [refreshHomeCommunityContext] sin match de ubicación → pioneer mode")
         } else {
-            print("🏠 [refreshHomeCommunityContext] no location — skipping")
+            dlog("🏠 [refreshHomeCommunityContext] no location — skipping")
         }
     }
 
@@ -1136,7 +1136,7 @@ struct InicioView: View {
         // Quién la pidió: al arrancar corre justo al terminar loadData y repite
         // journeys, matches, contexto y recent-help sin causa visible.
         let desdeCarga = Int(Date().timeIntervalSince(lastLoadDataAt ?? .distantPast))
-        print("🔄 [refreshTripState] pedida — línea \(line) (última carga completa hace \(desdeCarga)s)")
+        dlog("🔄 [refreshTripState] pedida — línea \(line) (última carga completa hace \(desdeCarga)s)")
         refreshStateTask?.cancel()
         let t = Task<Void, Never> { await _refreshTripStateBody() }
         refreshStateTask = t
@@ -1154,7 +1154,7 @@ struct InicioView: View {
             print("❌ [refreshTripState] fetchTravelerJourneys falló")
             return
         }
-        print("🔄 [refreshTripState] \(journeys.count) journey(s): \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
+        dlog("🔄 [refreshTripState] \(journeys.count) journey(s): \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
         let active   = journeys.first(where: { $0.status == "active" })
         let planning = journeys.first(where: { $0.status == "planning" })
 
@@ -1176,7 +1176,7 @@ struct InicioView: View {
             liveJourneys   = journeys
                 .filter { ["active", "planning"].contains($0.status) }
                 .sorted { ($0.status == "active" ? 0 : 1) < ($1.status == "active" ? 0 : 1) }
-            print("🔄 [refreshTripState] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(liveJourneys.count)")
+            dlog("🔄 [refreshTripState] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(liveJourneys.count)")
         }
         // refreshHomeCommunityContext PRIMERO: resuelve resolvedLocation, del que
         // depende effectiveHomeContext — loadRecentHelp necesita ese valor fresco
@@ -1262,10 +1262,10 @@ struct InicioView: View {
         // Quién la pidió: sin esto no se sabe qué disparó una segunda carga
         // completa (la de las 20:29:13 no tenía causa visible en los logs).
         let origen = reason.isEmpty ? "línea \(line)" : "\(reason), línea \(line)"
-        print("🏠 [loadData] pedida — \(origen)\(force ? " (force)" : "")")
+        dlog("🏠 [loadData] pedida — \(origen)\(force ? " (force)" : "")")
         let edad = Date().timeIntervalSince(lastLoadDataAt ?? .distantPast)
         if !force, loadDataTask != nil || edad < 5 {
-            print("🏠 [loadData] \(reason.isEmpty ? "" : "(\(reason)) ")ignorado — \(loadDataTask != nil ? "ya hay una carga en vuelo" : "última hace \(Int(edad))s")")
+            dlog("🏠 [loadData] \(reason.isEmpty ? "" : "(\(reason)) ")ignorado — \(loadDataTask != nil ? "ya hay una carga en vuelo" : "última hace \(Int(edad))s")")
             return
         }
         // Cancel any in-flight loadData — only the latest matters.
@@ -1299,7 +1299,7 @@ struct InicioView: View {
         if feedLat != nil || !authorized {
             Task { await SpotsStore.shared.refresh(lat: feedLat, lng: feedLng, reason: "loadData") }
         } else {
-            print("🗂️ [spots] loadData: esperando el primer fix del GPS para pedir con coordenadas")
+            dlog("🗂️ [spots] loadData: esperando el primer fix del GPS para pedir con coordenadas")
         }
 
         let fetchedDests = (try? await APIClient.shared.fetchDestinations()) ?? []
@@ -1310,9 +1310,9 @@ struct InicioView: View {
 
         // Sin ninguna sesión (ni guest ni verified): solo contenido público.
         let tid = Session.travelerId
-        print("🏠 [loadData] hasSession=\(Session.hasSession) travelerId=\(tid?.prefix(8) ?? "nil") isVerified=\(Session.isVerified)")
+        dlog("🏠 [loadData] hasSession=\(Session.hasSession) travelerId=\(tid?.prefix(8) ?? "nil") isVerified=\(Session.isVerified)")
         guard Session.hasSession else {
-            print("🏠 [loadData] sin sesión — solo contenido público")
+            dlog("🏠 [loadData] sin sesión — solo contenido público")
             await MainActor.run { isLoadingData = false }
             await refreshHomeCommunityContext()
             await loadCommunityPulseIfNeeded()
@@ -1323,7 +1323,7 @@ struct InicioView: View {
         do {
             // fetchTravelerJourneys usa el JWT (traveler o Supabase) — válido para ambos.
             let snapshotId = Session.travelerId   // capturar ANTES del await
-            print("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
+            dlog("🏠 [loadData] fetching journeys para travelerId=\(snapshotId?.prefix(8) ?? "nil")…")
             let store = JourneysStore.shared
             let journeys: [APIJourney]
             if force {
@@ -1332,7 +1332,7 @@ struct InicioView: View {
                 journeys = try await store.load(trigger: "inicio:loadData")
             }
             guard !Task.isCancelled else { return }
-            print("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
+            dlog("🏠 [loadData] \(journeys.count) journey(s) recibidos: \(journeys.map { "\($0.destination?.name ?? "?"):\($0.status ?? "nil")" })")
             // Anti cross-account guard: if identity was hydrated mid-flight (cold launch
             // where validate() forces a refresh after loadData already started with nil),
             // discard the stale response and retry immediately with the correct identity.
@@ -1345,7 +1345,7 @@ struct InicioView: View {
             }
             let active   = journeys.first(where: { $0.status == "active" })
             let planning = journeys.first(where: { $0.status == "planning" })
-            print("🏠 [loadData] active=\(active?.id.prefix(8) ?? "nil") planning=\(planning?.id.prefix(8) ?? "nil")")
+            dlog("🏠 [loadData] active=\(active?.id.prefix(8) ?? "nil") planning=\(planning?.id.prefix(8) ?? "nil")")
 
             if let active, !routeStore.isReady {
                 let destId = active.destination?.id ?? active.destinationId
@@ -1367,14 +1367,14 @@ struct InicioView: View {
                 }
                 pendingJourney = planning
                 liveJourneys   = newLive
-                print("🏠 [loadData] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(newLive.count)")
+                dlog("🏠 [loadData] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(newLive.count)")
             }
 
             let shouldFetchMatch = await MainActor.run { activeJourney != nil }
             if shouldFetchMatch {
                 let matches = try await MatchingStore.shared.load(trigger: "inicio:loadData")
                 guard !Task.isCancelled else { return }
-                print("🏠 [loadData] \(matches.count) match(es): \(matches.map { "\($0.status ?? "?")" })")
+                dlog("🏠 [loadData] \(matches.count) match(es): \(matches.map { "\($0.status ?? "?")" })")
                 // Must filter by travelerId: user may simultaneously be a buddy for
                 // another traveler, and fetchMatches() returns matches in both roles.
                 // Without this guard, the buddy-role match can win the .first() and
@@ -1395,14 +1395,16 @@ struct InicioView: View {
                 || (error as? URLError)?.code == .cancelled
                 || Task.isCancelled
             if cancelada {
-                print("🏠 [loadData] cancelada por una carga más nueva — no es un error")
+                dlog("🏠 [loadData] cancelada por una carga más nueva — no es un error")
             } else {
                 print("❌ [loadData] ERROR: \(error)")
                 await MainActor.run { loadDataFailed = true }
             }
         }
         await MainActor.run { isLoadingData = false }
-        print("🏠 [loadData] done — activeJourney=\(await MainActor.run { activeJourney?.id.prefix(8) ?? "nil" }) liveJourneys=\(await MainActor.run { liveJourneys.count })")
+        let doneJourney = await MainActor.run { activeJourney?.id.prefix(8) ?? "nil" }
+        let doneLive = await MainActor.run { liveJourneys.count }
+        dlog("🏠 [loadData] done — activeJourney=\(doneJourney) liveJourneys=\(doneLive)")
 
         // Si viene de "Ya llegué", navegar directo al mapa
         await MainActor.run {
@@ -1701,12 +1703,12 @@ struct InicioView: View {
     private func loadCommunityPulseIfNeeded() async {
         // El pulso global cambia lento — no refetchar en < 60 s.
         if let at = communityPulseLoadedAt, Date().timeIntervalSince(at) < 60, !communityPulse.isEmpty {
-            print("🌐 [loadCommunityPulseIfNeeded] throttled — usando cache de \(communityPulse.count) item(s)")
+            dlog("🌐 [loadCommunityPulseIfNeeded] throttled — usando cache de \(communityPulse.count) item(s)")
             return
         }
         do {
             let pulse = try await APIClient.shared.fetchCommunityPulse()
-            print("🌐 [loadCommunityPulseIfNeeded] ✅ \(pulse.count) item(s): \(pulse.map { "\($0.type)@\($0.city)" })")
+            dlog("🌐 [loadCommunityPulseIfNeeded] ✅ \(pulse.count) item(s): \(pulse.map { "\($0.type)@\($0.city)" })")
             await MainActor.run { communityPulse = pulse; communityPulseLoadedAt = Date() }
         } catch {
             print("❌ [loadCommunityPulseIfNeeded] ERROR: \(error)")
@@ -1799,7 +1801,7 @@ struct TripDetailGate: View {
         }
         .task {
             let state = await routeStore.ensureLoaded(for: journey)
-            print("🗺️ [TripDetailGate] journey=\(journey.id.prefix(8)) dest=\(journey.destination?.name ?? "nil") placeId=\(journey.placeId ?? "nil") → mapState=\(state)")
+            dlog("🗺️ [TripDetailGate] journey=\(journey.id.prefix(8)) dest=\(journey.destination?.name ?? "nil") placeId=\(journey.placeId ?? "nil") → mapState=\(state)")
             mapState = state
         }
     }

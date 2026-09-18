@@ -54,13 +54,13 @@ struct TripDetailView: View {
         // Si el destino no tiene spots curados, centrar el mapa en las coords explícitas
         // desde el inicio — sin esperar el delay de fitMap().
         if route.places.isEmpty, let center = route.explicitCenter {
-            print("🗺️ [TripDetailView.init] places=0 explicitCenter=(\(center.latitude),\(center.longitude)) → camera centrada en destino")
+            dlog("🗺️ [TripDetailView.init] places=0 explicitCenter=(\(center.latitude),\(center.longitude)) → camera centrada en destino")
             _camera = State(initialValue: .region(MKCoordinateRegion(
                 center: center,
                 span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)
             )))
         } else {
-            print("🗺️ [TripDetailView.init] places=\(route.places.count) centerLat=\(route.centerLat.map{String($0)} ?? "nil") → camera=.automatic")
+            dlog("🗺️ [TripDetailView.init] places=\(route.places.count) centerLat=\(route.centerLat.map{String($0)} ?? "nil") → camera=.automatic")
             _camera = State(initialValue: .automatic)
         }
     }
@@ -424,12 +424,12 @@ struct TripDetailView: View {
 
     private func openInGoogleMaps() {
         guard let p = navigationTarget else {
-            print("🧭 [ComoLlegar] googleMaps — navigationTarget=nil, no se abre nada")
+            dlog("🧭 [ComoLlegar] googleMaps — navigationTarget=nil, no se abre nada")
             return
         }
         let url = URL(string: "https://www.google.com/maps/dir/?api=1&destination=\(p.latitude),\(p.longitude)&travelmode=driving")!
-        print("🧭 [ComoLlegar] googleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
-        print("🧭 [ComoLlegar] googleMaps URL: \(url.absoluteString)")
+        dlog("🧭 [ComoLlegar] googleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
+        dlog("🧭 [ComoLlegar] googleMaps URL: \(url.absoluteString)")
         UIApplication.shared.open(url) { ok in
             print(ok ? "🧭 [ComoLlegar] googleMaps ✅ abierto" : "🧭 [ComoLlegar] googleMaps ❌ open falló")
         }
@@ -437,12 +437,12 @@ struct TripDetailView: View {
 
     private func openInWaze() {
         guard let p = navigationTarget else {
-            print("🧭 [ComoLlegar] waze — navigationTarget=nil, no se abre nada")
+            dlog("🧭 [ComoLlegar] waze — navigationTarget=nil, no se abre nada")
             return
         }
         let url = URL(string: "https://waze.com/ul?ll=\(p.latitude),\(p.longitude)&navigate=yes")!
-        print("🧭 [ComoLlegar] waze → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
-        print("🧭 [ComoLlegar] waze URL: \(url.absoluteString)")
+        dlog("🧭 [ComoLlegar] waze → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
+        dlog("🧭 [ComoLlegar] waze URL: \(url.absoluteString)")
         UIApplication.shared.open(url) { ok in
             print(ok ? "🧭 [ComoLlegar] waze ✅ abierto" : "🧭 [ComoLlegar] waze ❌ open falló")
         }
@@ -450,13 +450,13 @@ struct TripDetailView: View {
 
     private func openInAppleMaps() {
         guard let p = navigationTarget else {
-            print("🧭 [ComoLlegar] appleMaps — navigationTarget=nil, no se abre nada")
+            dlog("🧭 [ComoLlegar] appleMaps — navigationTarget=nil, no se abre nada")
             return
         }
         let name = p.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? p.name
         let url = URL(string: "https://maps.apple.com/?daddr=\(p.latitude),\(p.longitude)&q=\(name)")!
-        print("🧭 [ComoLlegar] appleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
-        print("🧭 [ComoLlegar] appleMaps URL: \(url.absoluteString)")
+        dlog("🧭 [ComoLlegar] appleMaps → place=\(p.name) lat=\(p.latitude) lng=\(p.longitude)")
+        dlog("🧭 [ComoLlegar] appleMaps URL: \(url.absoluteString)")
         UIApplication.shared.open(url) { ok in
             print(ok ? "🧭 [ComoLlegar] appleMaps ✅ abierto" : "🧭 [ComoLlegar] appleMaps ❌ open falló")
         }
@@ -675,14 +675,14 @@ struct TripDetailView: View {
                         boundsPlaces = nuevos
                     }
                 }
-                print("🗺️ [TripDetailView] en pantalla: \(nuevos.count) lugar(es) — \(nuevos.prefix(5).map(\.name).joined(separator: ", "))")
+                dlog("🗺️ [TripDetailView] en pantalla: \(nuevos.count) lugar(es) — \(nuevos.prefix(5).map(\.name).joined(separator: ", "))")
             } catch is CancellationError {
                 // Reemplazada por un gesto más nuevo: no es un fallo.
             } catch let e as URLError where e.code == .cancelled {
                 // Idem, cancelada a nivel de red.
             } catch {
                 // Un fallo conserva los pins de antes: no dejar el mapa vacío.
-                print("🗺️ [TripDetailView] spotsInBounds falló (\(error.localizedDescription)) — conservo \(boundsPlaces.count)")
+                dlog("🗺️ [TripDetailView] spotsInBounds falló (\(error.localizedDescription)) — conservo \(boundsPlaces.count)")
             }
         }
     }
@@ -690,13 +690,13 @@ struct TripDetailView: View {
     private func fitMap() {
         // Encuadra los lugares cargados (primer lote en la carga inicial)
         let coords = displayedPlaces.map(\.coordinate)
-        print("🗺️ [fitMap] places=\(livePlaces.count) displayed=\(displayedPlaces.count) route.center=\(route.centerLat.map{String($0)} ?? "nil") routeStore.center=\(routeStore.route.centerLat.map{String($0)} ?? "nil")")
+        dlog("🗺️ [fitMap] places=\(livePlaces.count) displayed=\(displayedPlaces.count) route.center=\(route.centerLat.map{String($0)} ?? "nil") routeStore.center=\(routeStore.route.centerLat.map{String($0)} ?? "nil")")
         if coords.isEmpty {
             // Sin spots: centrar en la coordenada explícita. Preferir `route` (prop del view)
             // sobre `routeStore.route` porque este puede ser .placeholder si onChange dispara
             // antes de que termine el fetch.
             let center = route.explicitCenter ?? routeStore.route.explicitCenter
-            print("🗺️ [fitMap] sin places → center=\(center.map { "(\($0.latitude),\($0.longitude))" } ?? "NIL — mapa no se mueve")")
+            dlog("🗺️ [fitMap] sin places → center=\(center.map { "(\($0.latitude),\($0.longitude))" } ?? "NIL — mapa no se mueve")")
             if let center {
                 withAnimation(.easeInOut(duration: 0.6)) {
                     camera = .region(MKCoordinateRegion(

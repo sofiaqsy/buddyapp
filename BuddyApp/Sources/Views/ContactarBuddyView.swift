@@ -247,7 +247,7 @@ struct ContactarBuddyView: View {
 
     private func checkStatus() async {
         phase = .loading
-        print("🔍 [checkStatus] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
+        dlog("🔍 [checkStatus] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
         // Ensure a Traveler session exists before doing anything.
         // On a fresh install Session.travelerId is nil — this call hits /travelers/init
         // and persists the guest JWT so all subsequent guards and API calls succeed.
@@ -257,7 +257,7 @@ struct ContactarBuddyView: View {
                 await MainActor.run {
                     NotificationCenter.default.post(name: .travelerSessionCreated, object: nil)
                 }
-                print("🔍 [checkStatus] guest session created → travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
+                dlog("🔍 [checkStatus] guest session created → travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
             } catch {
                 phase = .error("No se pudo iniciar sesión. Verifica tu conexión.")
                 return
@@ -266,7 +266,7 @@ struct ContactarBuddyView: View {
         guard let userId = effectiveUserId else { phase = .error("Sin sesión."); return }
         do {
             let matches = try await MatchingStore.shared.refresh(trigger: "contactar:checkStatus")
-            print("🔎 [checkStatus] userId=\(userId) — \(matches.count) match(es) recibidos")
+            dlog("🔎 [checkStatus] userId=\(userId) — \(matches.count) match(es) recibidos")
             for m in matches {
                 print("   • match id=\(m.id) status=\(m.status ?? "nil") travelerId=\(m.travelerId) buddyId=\(m.buddyId ?? "nil")")
             }
@@ -288,7 +288,7 @@ struct ContactarBuddyView: View {
             guard let destId = destIdOpt else { phase = .selectCategory; return }
             let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
             if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
-                print("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) cat=\(open.category) → retomando conversación")
+                dlog("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) cat=\(open.category) → retomando conversación")
                 activeRequestId = open.id
                 isExpandingSearch = false
                 // Reconstruir la conversación al volver. Sin esto la solicitud
@@ -313,7 +313,7 @@ struct ContactarBuddyView: View {
     }
 
     func handleRequest(category: String, description: String?) async {
-        print("📤 [handleRequest] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL") category=\(category)")
+        dlog("📤 [handleRequest] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL") category=\(category)")
         guard phase == .selectCategory || phase == .composing else {
             print("⚠️ [handleRequest] ignorado — phase ya es \(phase)")
             return
@@ -396,26 +396,26 @@ struct ContactarBuddyView: View {
 
     private func startPolling() {
         pollTask?.cancel()
-        print("⏱️ [startPolling] iniciado — requestId=\(activeRequestId ?? "nil")")
+        dlog("⏱️ [startPolling] iniciado — requestId=\(activeRequestId ?? "nil")")
         pollTask = Task {
             var tick = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard !Task.isCancelled else {
-                    print("⏱️ [startPolling] tick #\(tick) cancelado tras el sleep — saliendo")
+                    dlog("⏱️ [startPolling] tick #\(tick) cancelado tras el sleep — saliendo")
                     return
                 }
                 tick += 1
-                print("⏱️ [startPolling] tick #\(tick) — llamando pollForMatch() requestId=\(activeRequestId ?? "nil")")
+                dlog("⏱️ [startPolling] tick #\(tick) — llamando pollForMatch() requestId=\(activeRequestId ?? "nil")")
                 await pollForMatch()
             }
-            print("⏱️ [startPolling] loop terminado (Task.isCancelled=true) tras \(tick) ticks")
+            dlog("⏱️ [startPolling] loop terminado (Task.isCancelled=true) tras \(tick) ticks")
         }
     }
 
     private func startSSEMatch(requestId: String) {
         sseMatchTask?.cancel()
-        print("📡 [startSSEMatch] iniciado — requestId=\(requestId)")
+        dlog("📡 [startSSEMatch] iniciado — requestId=\(requestId)")
         sseMatchTask = Task {
             // Bucle de reconexión con backoff exponencial — igual que ChatStore.startEventStream.
             var attempt = 0
@@ -430,23 +430,23 @@ struct ContactarBuddyView: View {
                 req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                 req.timeoutInterval = 300
 
-                print("📡 [startSSEMatch] conectando (intento \(attempt)) requestId=\(requestId)")
+                dlog("📡 [startSSEMatch] conectando (intento \(attempt)) requestId=\(requestId)")
                 guard let (stream, _) = try? await URLSession.shared.bytes(for: req) else {
-                    print("📡 [startSSEMatch] conexión falló (intento \(attempt)) — Task.isCancelled=\(Task.isCancelled)")
+                    dlog("📡 [startSSEMatch] conexión falló (intento \(attempt)) — Task.isCancelled=\(Task.isCancelled)")
                     if Task.isCancelled { return }
                     await sseBackoff(&attempt); continue
                 }
 
-                print("📡 [startSSEMatch] conectado requestId=\(requestId)")
+                dlog("📡 [startSSEMatch] conectado requestId=\(requestId)")
                 attempt = 0   // conexión exitosa
                 do {
                     for try await line in stream.lines {
                         guard !Task.isCancelled else {
-                            print("📡 [startSSEMatch] Task.isCancelled durante el stream — saliendo")
+                            dlog("📡 [startSSEMatch] Task.isCancelled durante el stream — saliendo")
                             return
                         }
                         if line.hasPrefix("event: matched") {
-                            print("📡 [startSSEMatch] event: matched recibido — transicionando")
+                            dlog("📡 [startSSEMatch] event: matched recibido — transicionando")
                             // El SSE es la fuente de verdad primaria: cuando confirma el match
                             // transitamos directamente, sin pasar por el guard de isPollInFlight
                             // que pertenece al camino de recuperación del timer.
@@ -459,13 +459,13 @@ struct ContactarBuddyView: View {
                         }
                     }
                 } catch {
-                    print("📡 [startSSEMatch] stream terminó con error: \(error)")
+                    dlog("📡 [startSSEMatch] stream terminó con error: \(error)")
                 }
 
-                print("📡 [startSSEMatch] stream cerrado (sin error explícito) requestId=\(requestId) — reconectando")
+                dlog("📡 [startSSEMatch] stream cerrado (sin error explícito) requestId=\(requestId) — reconectando")
                 await sseBackoff(&attempt)
             }
-            print("📡 [startSSEMatch] loop de reconexión terminado (Task.isCancelled=true) requestId=\(requestId)")
+            dlog("📡 [startSSEMatch] loop de reconexión terminado (Task.isCancelled=true) requestId=\(requestId)")
         }
     }
 
@@ -490,7 +490,7 @@ struct ContactarBuddyView: View {
     }
 
     private func stopSSEMatch() {
-        print("📡 [stopSSEMatch] cancelando sseMatchTask (era nil=\(sseMatchTask == nil))")
+        dlog("📡 [stopSSEMatch] cancelando sseMatchTask (era nil=\(sseMatchTask == nil))")
         sseMatchTask?.cancel()
         sseMatchTask = nil
     }
@@ -498,11 +498,11 @@ struct ContactarBuddyView: View {
     private func pollForMatch() async {
         // Un solo poll en vuelo a la vez — evita llamadas paralelas del timer y del SSE.
         guard !isPollInFlight else {
-            print("📶 [pollForMatch] ya hay un poll en vuelo — omitido")
+            dlog("📶 [pollForMatch] ya hay un poll en vuelo — omitido")
             return
         }
         guard let requestId = activeRequestId else {
-            print("📶 [pollForMatch] activeRequestId=nil — omitido")
+            dlog("📶 [pollForMatch] activeRequestId=nil — omitido")
             return
         }
         isPollInFlight = true
@@ -510,7 +510,7 @@ struct ContactarBuddyView: View {
 
         do {
             let status = try await APIClient.shared.fetchMatchingStatus(requestId: requestId)
-            print("📶 [pollForMatch] requestId=\(requestId) → status=\(status.status) position=\(status.position?.description ?? "nil")")
+            dlog("📶 [pollForMatch] requestId=\(requestId) → status=\(status.status) position=\(status.position?.description ?? "nil")")
             switch status.status {
 
             case "matched":
@@ -518,7 +518,7 @@ struct ContactarBuddyView: View {
                 // Solo en este caso hacemos el segundo fetch (fetchMatches); durante
                 // el estado "searching" basta con el endpoint de estado (barato).
                 let userId = effectiveUserId
-                let matches = try await MatchingStore.shared.refresh(trigger: "contactar:poll")
+                let matches = try await MatchingStore.shared.refresh(trigger: "buddyPolling")
                 let activeStatuses = ["pending", "accepted", "active"]
                 if let active = matches.first(where: {
                     activeStatuses.contains($0.status ?? "") && $0.travelerId == userId
@@ -2498,7 +2498,7 @@ struct BuddyChatView: View {
                         withAnimation(nil) { proxy.scrollTo(bottomID, anchor: .bottom) }
                         initialScrollDone = true
                         isNearBottom = true
-                        print("⏱ [scroll] initial jump done — \(newCount) messages")
+                        dlog("⏱ [scroll] initial jump done — \(newCount) messages")
                     } else if !isLoadingMore && newCount > oldCount {
                         // ── New message appended (SSE / send) ────────────────────
                         if isNearBottom {
@@ -2520,7 +2520,7 @@ struct BuddyChatView: View {
                     // Jumping to anchorId with .top anchor restores the user's visual
                     // position so load-more feels seamless, not jarring.
                     withAnimation(nil) { proxy.scrollTo(anchorId, anchor: .top) }
-                    print("⏱ [scroll] position restored after prepend → anchor=\(anchorId.prefix(6))")
+                    dlog("⏱ [scroll] position restored after prepend → anchor=\(anchorId.prefix(6))")
                     prependAnchorId = nil
                 }
                 .onChange(of: pendingAudioLocalURL) { _, _ in
@@ -2531,16 +2531,16 @@ struct BuddyChatView: View {
                     let t = KeyboardTiming.now()
                     print("⌨️ [focus] inputFocused → \(focused) t=\(String(format: "%.3f", t.truncatingRemainder(dividingBy: 1000)))")
                     if focused, let tap = lastTapTimestamp {
-                        print("⏱ [keyboard] tap→focus delta = \(String(format: "%.1f", (t - tap) * 1000))ms")
+                        dlog("⏱ [keyboard] tap→focus delta = \(String(format: "%.1f", (t - tap) * 1000))ms")
                     }
-                    print("🎙️ [mic] inputFocused changed → \(focused) (isRecording=\(recVM.isRecording))")
+                    dlog("🎙️ [mic] inputFocused changed → \(focused) (isRecording=\(recVM.isRecording))")
                     // If the keyboard was dismissed while actively recording, restore it
                     // immediately. AVAudioSession activation (.playAndRecord) can interrupt
                     // the system audio session and cause UIKit to resign first-responder,
                     // which would collapse the input bar and move the mic button down.
                     if !focused && recVM.isRecording {
                         inputFocused = true
-                        print("🎙️ [mic] inputFocused restored — keeping keyboard up during recording")
+                        dlog("🎙️ [mic] inputFocused restored — keeping keyboard up during recording")
                         return
                     }
                     // When the keyboard appears and the user was already at the bottom,
@@ -2570,10 +2570,10 @@ struct BuddyChatView: View {
                         if recVM.cancelled && keyboardWasOpenOnRecordStart {
                             // Cancel by slide: keyboard was open before recording → restore it
                             inputFocused = true
-                            print("🎙️ [mic] isRecording ended (cancelled) → keyboard restored (was open before recording)")
+                            dlog("🎙️ [mic] isRecording ended (cancelled) → keyboard restored (was open before recording)")
                         } else {
                             inputFocused = false
-                            print("🎙️ [mic] isRecording ended → force-cleared focus (deferred)")
+                            dlog("🎙️ [mic] isRecording ended → force-cleared focus (deferred)")
                         }
                     }
                 }
@@ -2641,7 +2641,7 @@ struct BuddyChatView: View {
             let cached = ChatStore.shared.cachedHistory(for: match.id)
             if let cached, !cached.isEmpty {
                 messages = cached
-                print("⏱ [chat] cache hit — \(cached.count) msgs shown instantly")
+                dlog("⏱ [chat] cache hit — \(cached.count) msgs shown instantly")
             }
 
             // ── 2. Background fetch (network) ────────────────────────────────
@@ -2733,14 +2733,14 @@ struct BuddyChatView: View {
             let duration = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
             print("⌨️ [keyboard] willShow t=\(String(format: "%.3f", t.truncatingRemainder(dividingBy: 1000))) animDuration=\(String(format: "%.2f", duration))s")
             if let tap = lastTapTimestamp {
-                print("⏱ [keyboard] tap→willShow delta = \(String(format: "%.1f", (t - tap) * 1000))ms")
+                dlog("⏱ [keyboard] tap→willShow delta = \(String(format: "%.1f", (t - tap) * 1000))ms")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
             let t = KeyboardTiming.now()
             print("⌨️ [keyboard] didShow t=\(String(format: "%.3f", t.truncatingRemainder(dividingBy: 1000)))")
             if let tap = lastTapTimestamp {
-                print("⏱ [keyboard] tap→didShow TOTAL = \(String(format: "%.1f", (t - tap) * 1000))ms  ← this is what the user actually perceives")
+                dlog("⏱ [keyboard] tap→didShow TOTAL = \(String(format: "%.1f", (t - tap) * 1000))ms  ← this is what the user actually perceives")
             }
             if let state = keyboardSignpostState {
                 KeyboardTiming.signposter.endInterval("TapToKeyboard", state)
@@ -2979,21 +2979,21 @@ struct BuddyChatView: View {
                                 guard micHoldTask == nil, !recVM.isRecording else { return }
                                 let wasKeyboardOpen = inputFocused
                                 keyboardWasOpenOnRecordStart = wasKeyboardOpen
-                                print("🎙️ [mic] onChanged — inputFocused=\(wasKeyboardOpen) isRecording=\(recVM.isRecording)")
+                                dlog("🎙️ [mic] onChanged — inputFocused=\(wasKeyboardOpen) isRecording=\(recVM.isRecording)")
                                 // Do NOT dismiss keyboard here — it would move the input bar
                                 // (and the mic button with it) while the user is pressing.
                                 // Keyboard is dismissed in stopAndSendAudio / cancel instead.
                                 micHoldTask = Task {
                                     // 150ms: tap releases before this → nothing happens
-                                    print("🎙️ [mic] sleeping 150ms — keyboardWasOpen=\(wasKeyboardOpen)")
+                                    dlog("🎙️ [mic] sleeping 150ms — keyboardWasOpen=\(wasKeyboardOpen)")
                                     try? await Task.sleep(nanoseconds: 150_000_000)
                                     if Task.isCancelled {
-                                        print("🎙️ [mic] task cancelled during 150ms sleep — gesture ended too early")
+                                        dlog("🎙️ [mic] task cancelled during 150ms sleep — gesture ended too early")
                                         return
                                     }
-                                    print("🎙️ [mic] calling recVM.start()")
+                                    dlog("🎙️ [mic] calling recVM.start()")
                                     let ok = await recVM.start()
-                                    print("🎙️ [mic] recVM.start() → \(ok)")
+                                    dlog("🎙️ [mic] recVM.start() → \(ok)")
                                     if ok { Haptic.medium() }
                                     await MainActor.run { micHoldTask = nil }
                                 }
@@ -3002,22 +3002,22 @@ struct BuddyChatView: View {
                                 let tx = val.translation.width
                                 let wasRecording = recVM.isRecording
                                 let hadTask = micHoldTask != nil
-                                print("🎙️ [mic] onEnded — tx=\(Int(tx)) isRecording=\(wasRecording) hadTask=\(hadTask)")
+                                dlog("🎙️ [mic] onEnded — tx=\(Int(tx)) isRecording=\(wasRecording) hadTask=\(hadTask)")
                                 micHoldTask?.cancel()
                                 micHoldTask = nil
                                 guard recVM.isRecording else {
-                                    print("🎙️ [mic] onEnded — not recording (tap too short or start failed)")
+                                    dlog("🎙️ [mic] onEnded — not recording (tap too short or start failed)")
                                     return
                                 }
                                 if tx < -80 {
-                                    print("🎙️ [mic] onEnded — cancelled by slide (tx=\(Int(tx))) keyboardWasOpen=\(keyboardWasOpenOnRecordStart)")
+                                    dlog("🎙️ [mic] onEnded — cancelled by slide (tx=\(Int(tx))) keyboardWasOpen=\(keyboardWasOpenOnRecordStart)")
                                     // Only close keyboard if it wasn't open before recording started.
                                     // If the user had the keyboard up, we restore it after cancel.
                                     if !keyboardWasOpenOnRecordStart { inputFocused = false }
                                     recVM.cancel()
                                     Haptic.light()
                                 } else {
-                                    print("🎙️ [mic] onEnded — sending audio")
+                                    dlog("🎙️ [mic] onEnded — sending audio")
                                     Task { await stopAndSendAudio() }
                                 }
                             }
@@ -3102,7 +3102,7 @@ struct BuddyChatView: View {
     }
 
     private func sendImage(data: Data) async {
-        print("📤 [chat] sendImage — \(data.count / 1024) KB → matchId=\(match.id)")
+        dlog("📤 [chat] sendImage — \(data.count / 1024) KB → matchId=\(match.id)")
         await MainActor.run { isSendingImage = true }
         let clientId = UUID().uuidString
         do {
@@ -3198,12 +3198,12 @@ struct BuddyChatView: View {
                         !fetched.contains(where: { $0.id == msg.id })
                     }
                 }
-                print("⏱ [chat] loadMessages merge: \(fetched.count) fetched, \(newOnes.count) new, total=\(messages.count)")
+                dlog("⏱ [chat] loadMessages merge: \(fetched.count) fetched, \(newOnes.count) new, total=\(messages.count)")
             }
             hasMoreMessages = fetched.count == 30
             // Write to cache so next open is instant
             ChatStore.shared.updateCache(messages, for: match.id)
-            print("⏱ [chat] loadMessages: \(fetched.count) msgs, network=\(networkMs)ms, cache written")
+            dlog("⏱ [chat] loadMessages: \(fetched.count) msgs, network=\(networkMs)ms, cache written")
         } catch {
             print("❌ loadMessages error → \(error)")
         }
@@ -3284,22 +3284,22 @@ struct BuddyChatView: View {
     }
 
     private func stopAndSendAudio() async {
-        print("🎙️ [mic] stopAndSendAudio() called — stopping recorder")
+        dlog("🎙️ [mic] stopAndSendAudio() called — stopping recorder")
         // Set inputFocused = false BEFORE recVM.stop() publishes isRecording = false.
         // When isRecording goes false, SwiftUI re-renders and UIKit tries to restore
         // first responder to the TextField. Pre-emptively clearing focus blocks that.
         inputFocused = false
         guard let fileURL = recVM.stop() else {
-            print("🎙️ [mic] stopAndSendAudio() — recVM.stop() returned nil (was cancelled)")
+            dlog("🎙️ [mic] stopAndSendAudio() — recVM.stop() returned nil (was cancelled)")
             return
         }
-        print("🎙️ [mic] stopAndSendAudio() — uploading \(fileURL.lastPathComponent)")
+        dlog("🎙️ [mic] stopAndSendAudio() — uploading \(fileURL.lastPathComponent)")
         withAnimation(.spring(response: 0.3)) { pendingAudioLocalURL = fileURL }
         Haptic.light()
         let audioClientId = UUID().uuidString
         do {
             let msg = try await recVM.upload(fileURL: fileURL, matchId: match.id, clientMessageId: audioClientId)
-            print("🎙️ [mic] stopAndSendAudio() — upload OK msgId=\(msg.id.prefix(8))")
+            dlog("🎙️ [mic] stopAndSendAudio() — upload OK msgId=\(msg.id.prefix(8))")
             if !messages.contains(where: { $0.id == msg.id }) {
                 messages.append(msg)
             }
@@ -3344,7 +3344,7 @@ struct BuddyChatView: View {
     }
 
     private func startSSE() {
-        print("📡 [presence] startSSE — opening chat stream (this device → 'online')")
+        dlog("📡 [presence] startSSE — opening chat stream (this device → 'online')")
         sseTask?.cancel()
         sseTask = Task {
             await connectSSE()
@@ -3359,7 +3359,7 @@ struct BuddyChatView: View {
             // Reset presence on every (re)connect — corrected state arrives immediately via
             // the `presence` event the backend emits for already-online participants.
             await MainActor.run { buddyIsOnline = false }
-            print("📡 [presence] connectSSE — connecting to \(url.path)")
+            dlog("📡 [presence] connectSSE — connecting to \(url.path)")
             var request = URLRequest(url: url)
             if let token = Session.token {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -3425,7 +3425,7 @@ struct BuddyChatView: View {
                     }
                 }
             } catch {
-                print("📡 [presence] SSE dropped (\(error.localizedDescription)) cancelled=\(Task.isCancelled)")
+                dlog("📡 [presence] SSE dropped (\(error.localizedDescription)) cancelled=\(Task.isCancelled)")
             }
 
             await sseBackoff(&attempt)
@@ -3806,21 +3806,21 @@ final class AudioRecorderVM: NSObject, ObservableObject, AVAudioRecorderDelegate
 
     func start() async -> Bool {
         let permOk = await requestPermission()
-        print("🎙️ [recVM] start() — permission=\(permOk)")
+        dlog("🎙️ [recVM] start() — permission=\(permOk)")
         guard permOk else { return false }
         let session = AVAudioSession.sharedInstance()
         let currentCategory = session.category
         let currentMode = session.mode
-        print("🎙️ [recVM] AVAudioSession before setCategory — category=\(currentCategory.rawValue) mode=\(currentMode.rawValue)")
+        dlog("🎙️ [recVM] AVAudioSession before setCategory — category=\(currentCategory.rawValue) mode=\(currentMode.rawValue)")
         do {
             // .mixWithOthers prevents the session from interrupting the system audio
             // (keyboard click sounds etc.) which would otherwise resign the TextField's
             // first-responder and collapse the input bar mid-gesture.
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .mixWithOthers])
             try session.setActive(true)
-            print("🎙️ [recVM] AVAudioSession activated ✓")
+            dlog("🎙️ [recVM] AVAudioSession activated ✓")
         } catch {
-            print("🎙️ [recVM] AVAudioSession error: \(error)")
+            dlog("🎙️ [recVM] AVAudioSession error: \(error)")
         }
 
         // Listen for interruptions (phone call, etc.)
@@ -3840,13 +3840,13 @@ final class AudioRecorderVM: NSObject, ObservableObject, AVAudioRecorderDelegate
         ]
         guard let url = fileURL,
               let rec = try? AVAudioRecorder(url: url, settings: settings) else {
-            print("🎙️ [recVM] AVAudioRecorder init failed — url=\(fileURL?.lastPathComponent ?? "nil")")
+            dlog("🎙️ [recVM] AVAudioRecorder init failed — url=\(fileURL?.lastPathComponent ?? "nil")")
             return false
         }
         recorder = rec
         recorder?.delegate = self
         let started = rec.record()
-        print("🎙️ [recVM] rec.record() → \(started)")
+        dlog("🎙️ [recVM] rec.record() → \(started)")
         isRecording = true; seconds = 0; cancelled = false
 
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -3856,20 +3856,20 @@ final class AudioRecorderVM: NSObject, ObservableObject, AVAudioRecorderDelegate
     }
 
     func stop() -> URL? {
-        print("🎙️ [recVM] stop() — isRecording=\(isRecording) cancelled=\(cancelled) secs=\(seconds)")
+        dlog("🎙️ [recVM] stop() — isRecording=\(isRecording) cancelled=\(cancelled) secs=\(seconds)")
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
         timer?.invalidate(); timer = nil
         recorder?.stop(); recorder = nil
         isRecording = false
         let result = cancelled ? nil : fileURL
-        print("🎙️ [recVM] stop() → returning \(result?.lastPathComponent ?? "nil (cancelled)")")
+        dlog("🎙️ [recVM] stop() → returning \(result?.lastPathComponent ?? "nil (cancelled)")")
         return result
     }
 
     func cancel() {
-        print("🎙️ [recVM] cancel() — isRecording=\(isRecording) secs=\(seconds)")
+        dlog("🎙️ [recVM] cancel() — isRecording=\(isRecording) secs=\(seconds)")
         guard isRecording || recorder != nil else {
-            print("🎙️ [recVM] cancel() — already stopped, ignoring")
+            dlog("🎙️ [recVM] cancel() — already stopped, ignoring")
             return
         }
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
@@ -3886,14 +3886,14 @@ final class AudioRecorderVM: NSObject, ObservableObject, AVAudioRecorderDelegate
         guard let info = notification.userInfo,
               let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-        print("🎙️ [recVM] AVAudioSession interruption — type=\(type == .began ? "began" : "ended") isRecording=\(isRecording)")
+        dlog("🎙️ [recVM] AVAudioSession interruption — type=\(type == .began ? "began" : "ended") isRecording=\(isRecording)")
         guard type == .began else { return }
         Task { @MainActor in self.cancel() }
     }
 
     // AVAudioRecorderDelegate: recording stopped externally
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        print("🎙️ [recVM] audioRecorderDidFinishRecording — success=\(flag) isRecording=\(isRecording)")
+        dlog("🎙️ [recVM] audioRecorderDidFinishRecording — success=\(flag) isRecording=\(isRecording)")
         if !flag { Task { @MainActor in self.cancel() } }
     }
 

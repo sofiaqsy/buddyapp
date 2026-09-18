@@ -54,7 +54,7 @@ final class APIClient {
                  operation: @escaping @Sendable () async throws -> (Data, HTTPURLResponse)
         ) async throws -> (Data, HTTPURLResponse) {
             if let existing = tasks[key] {
-                print("🔗 [APIClient] \(key) — ya en vuelo, me engancho")
+                dlog("🔗 [APIClient] \(key) — ya en vuelo, me engancho")
                 return try await existing.value
             }
             let task = Task { try await operation() }
@@ -122,9 +122,9 @@ final class APIClient {
         let writeMethods = ["POST", "PATCH", "PUT", "DELETE"]
         let needsIdentity = writeMethods.contains(method) && !Session.hasSession
         if needsIdentity, !TravelerService.shared.hasSession {
-            print("🌐 [APIClient] → lazy session creation triggered by \(method) \(path)")
+            dlog("🌐 [APIClient] → lazy session creation triggered by \(method) \(path)")
             let token = try await TravelerService.shared.ensureSession()
-            print("🧳 [APIClient] guest session created")
+            dlog("🧳 [APIClient] guest session created")
             await MainActor.run {
                 // Sync AuthState so views react (e.g. tabs update their empty state)
                 NotificationCenter.default.post(name: .travelerSessionCreated, object: nil)
@@ -144,14 +144,14 @@ final class APIClient {
         let (data, http): (Data, HTTPURLResponse)
         if method == "GET" {
             let enviar: @Sendable () async throws -> (Data, HTTPURLResponse) = {
-                print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
+                dlog("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
                 let (d, r) = try await APIClient.session.data(for: req)
                 guard let h = r as? HTTPURLResponse else { throw APIError.unknown }
                 return (d, h)
             }
             (data, http) = try await inFlight.run(key: "GET \(path)", operation: enviar)
         } else {
-            print("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
+            dlog("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
             let (d, response) = try await APIClient.session.data(for: req)
             guard let h = response as? HTTPURLResponse else { throw APIError.unknown }
             (data, http) = (d, h)
@@ -304,7 +304,7 @@ final class APIClient {
     func searchPlaces(query: String) async throws -> [APIPlaceResult] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let response: PlaceSearchResponse = try await request(path: "/search/places?q=\(encoded)")
-        print("🔍 [APIClient] searchPlaces q=\(query) → \(response.items.count) results")
+        dlog("🔍 [APIClient] searchPlaces q=\(query) → \(response.items.count) results")
         return response.items
     }
 
@@ -317,7 +317,7 @@ final class APIClient {
     func fetchDestinationContext(id: String) async throws -> APIPlaceContext {
         let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let ctx: APIPlaceContext = try await request(path: "/destinations/\(encodedId)/context")
-        print("📍 [APIClient] destinationContext id=\(id.prefix(8)) → buddies=\(ctx.buddies) stories=\(ctx.stories) status=\(ctx.status)")
+        dlog("📍 [APIClient] destinationContext id=\(id.prefix(8)) → buddies=\(ctx.buddies) stories=\(ctx.stories) status=\(ctx.status)")
         return ctx
     }
 
@@ -336,13 +336,13 @@ final class APIClient {
         let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let punto = (lat != nil && lng != nil) ? String(format: "&lat=%.5f&lng=%.5f", lat!, lng!) : ""
         let ctx: APIPlaceContext = try await request(path: "/places/\(encodedId)/context?source=\(source)\(punto)")
-        print("🏙 [APIClient] placeContext id=\(id) source=\(source) → buddies=\(ctx.buddies) stories=\(ctx.stories) status=\(ctx.status)")
+        dlog("🏙 [APIClient] placeContext id=\(id) source=\(source) → buddies=\(ctx.buddies) stories=\(ctx.stories) status=\(ctx.status)")
         return ctx
     }
 
     func fetchPlaceGuide(id: String, source: String) async throws -> APIPlaceGuide {
         let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        print("🗺️ [APIClient] fetchPlaceGuide id=\(id.prefix(8)) source=\(source)")
+        dlog("🗺️ [APIClient] fetchPlaceGuide id=\(id.prefix(8)) source=\(source)")
         return try await request(path: "/places/\(encodedId)/guide?source=\(source)")
     }
 
@@ -367,7 +367,7 @@ final class APIClient {
         let f = { (v: Double) in String(format: "%.5f", v) }
         let path = "/places/in-bounds?min_lat=\(f(minLat))&min_lng=\(f(minLng))&max_lat=\(f(maxLat))&max_lng=\(f(maxLng))&limit=\(limit)"
         let res: APISpotsInBoundsResponse = try await request(path: path)
-        print("🗺️ [APIClient] spotsInBounds → \(res.spots.count)\(res.truncated == true ? " (recortado)" : "")\(res.tooWide == true ? " (área demasiado grande)" : "")")
+        dlog("🗺️ [APIClient] spotsInBounds → \(res.spots.count)\(res.truncated == true ? " (recortado)" : "")\(res.tooWide == true ? " (área demasiado grande)" : "")")
         return res
     }
 
@@ -442,9 +442,9 @@ final class APIClient {
         if let arrivalAt       { body["arrival_at"]        = ISO8601DateFormatter().string(from: arrivalAt) }
         if let knowsHowToGet   { body["knows_how_to_get"] = knowsHowToGet }
         if let hasLodging      { body["has_lodging"]       = hasLodging }
-        print("🧳 [APIClient] createJourney destination_id=\(destinationId ?? "nil") place_id=\(placeId ?? "nil") spot_id=\(spotId ?? "nil") osm_id=\(osmId ?? "nil") lat=\(lat.map { "\($0)" } ?? "nil") lng=\(lng.map { "\($0)" } ?? "nil") attach_to_trip=\(attachToTrip)")
+        dlog("🧳 [APIClient] createJourney destination_id=\(destinationId ?? "nil") place_id=\(placeId ?? "nil") spot_id=\(spotId ?? "nil") osm_id=\(osmId ?? "nil") lat=\(lat.map { "\($0)" } ?? "nil") lng=\(lng.map { "\($0)" } ?? "nil") attach_to_trip=\(attachToTrip)")
         let journey: APIJourney = try await request(path: "/journeys", method: "POST", body: body)
-        print("🧳 [APIClient] createJourney -> id=\(journey.id) status=\(journey.status ?? "nil") tripId=\(journey.tripId ?? "nil") spot=\(journey.spot?.name ?? "nil")")
+        dlog("🧳 [APIClient] createJourney -> id=\(journey.id) status=\(journey.status ?? "nil") tripId=\(journey.tripId ?? "nil") spot=\(journey.spot?.name ?? "nil")")
         return journey
     }
 
@@ -455,7 +455,7 @@ final class APIClient {
         let res: APINearbySpotsResponse = try await request(
             path: "/places/nearby?lat=\(lat)&lng=\(lng)&radius=\(radius)"
         )
-        print("📍 [APIClient] nearbySpots lat=\(lat) lng=\(lng) radius=\(radius)m → \(res.spots.count): \(res.spots.prefix(5).map { "\($0.name)@\($0.distanceMeters.map(String.init) ?? "?")m" }.joined(separator: ", "))")
+        dlog("📍 [APIClient] nearbySpots lat=\(lat) lng=\(lng) radius=\(radius)m → \(res.spots.count): \(res.spots.prefix(5).map { "\($0.name)@\($0.distanceMeters.map(String.init) ?? "?")m" }.joined(separator: ", "))")
         return res.spots
     }
 
@@ -466,7 +466,7 @@ final class APIClient {
         var path = "/places/search?q=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)"
         if let lat, let lng { path += "&lat=\(lat)&lng=\(lng)" }
         let res: APINearbySpotsResponse = try await request(path: path)
-        print("🔍 [APIClient] searchCuratedSpots q=\"\(q)\" → \(res.spots.count)")
+        dlog("🔍 [APIClient] searchCuratedSpots q=\"\(q)\" → \(res.spots.count)")
         return res.spots
     }
 
@@ -478,7 +478,7 @@ final class APIClient {
         var path = "/places/\(spotId)/gallery?source=spot&limit=\(limit)"
         if let travelerId { path += "&traveler_id=\(travelerId)" }
         let gallery: APIPlaceGallery = try await request(path: path)
-        print("🖼️ [APIClient] spotGallery \(spotId.prefix(8)) traveler=\(travelerId?.prefix(8) ?? "todos") → visitas=\(gallery.visits.count) fotos=\(gallery.totalPhotos)")
+        dlog("🖼️ [APIClient] spotGallery \(spotId.prefix(8)) traveler=\(travelerId?.prefix(8) ?? "todos") → visitas=\(gallery.visits.count) fotos=\(gallery.totalPhotos)")
         return gallery
     }
 
@@ -512,7 +512,7 @@ final class APIClient {
         var body: [String: Any] = ["name": name, "lat": lat, "lng": lng]
         if let categoryId { body["category_id"] = categoryId }
         let spot: APISpotRef = try await request(path: "/places/propose", method: "POST", body: body)
-        print("📍 [APIClient] proposeSpot name=\"\(name)\" categoria=\(categoryId ?? "ninguna") → id=\(spot.id) status=\(spot.status ?? "nil")")
+        dlog("📍 [APIClient] proposeSpot name=\"\(name)\" categoria=\(categoryId ?? "ninguna") → id=\(spot.id) status=\(spot.status ?? "nil")")
         return spot
     }
 
@@ -522,7 +522,7 @@ final class APIClient {
     /// Reusa fetchUserJourneys / createJourney / updateJourneyStatus.
     /// Resuelve o crea un Place geográfico a partir de coordenadas GPS.
     func resolvePlace(lat: Double, lng: Double) async throws -> APIResolvedPlace {
-        print("📍 [APIClient] resolvePlace lat=\(lat) lng=\(lng)")
+        dlog("📍 [APIClient] resolvePlace lat=\(lat) lng=\(lng)")
         return try await request(path: "/places/resolve", method: "POST", body: ["lat": lat, "lng": lng])
     }
 
@@ -537,12 +537,12 @@ final class APIClient {
             if existing.status != "active" {
                 try? await updateJourneyStatus(journeyId: existing.id, status: "active")
             }
-            print("📍 [APIClient] ensureActiveTripForGPS — reusing journey=\(existing.id) place=\(place.id)")
+            dlog("📍 [APIClient] ensureActiveTripForGPS — reusing journey=\(existing.id) place=\(place.id)")
             return existing
         }
         let created = try await createJourney(placeId: place.id, lat: lat, lng: lng)
         try? await updateJourneyStatus(journeyId: created.id, status: "active")
-        print("📍 [APIClient] ensureActiveTripForGPS — created journey=\(created.id) place=\(place.id)")
+        dlog("📍 [APIClient] ensureActiveTripForGPS — created journey=\(created.id) place=\(place.id)")
         return created
     }
 
@@ -551,7 +551,7 @@ final class APIClient {
     func createHelpRequestForJourney(journeyId: String, category: String, description: String?) async throws -> APIHelpRequest {
         var body: [String: Any] = ["journey_id": journeyId, "category": category]
         if let description { body["description"] = description }
-        print("📍 [APIClient] createHelpRequestForJourney journey_id=\(journeyId) category=\(category)")
+        dlog("📍 [APIClient] createHelpRequestForJourney journey_id=\(journeyId) category=\(category)")
         return try await request(path: "/matching/request", method: "POST", body: body)
     }
 
@@ -628,30 +628,30 @@ final class APIClient {
     // Sube las miniaturas del memoir a través de buddy-core (service_role),
     // evitando el RLS de Supabase Storage que rechaza tokens anon.
     private func uploadAndSavePages(journeyId: String, pages: [CollagePage]) async throws {
-        print("⬆️ [uploadAndSavePages] journeyId=\(journeyId) pages.count=\(pages.count)")
+        dlog("⬆️ [uploadAndSavePages] journeyId=\(journeyId) pages.count=\(pages.count)")
 
         // Recolectar los JPEG de cada página antes de armar el multipart
         var parts: [(index: Int, clientPageId: String, data: Data)] = []
         for (index, page) in pages.enumerated() {
-            print("⬆️ [uploadAndSavePages] page[\(index)] id=\(page.id) thumbFile=\(page.thumbnailFileName ?? "NIL")")
+            dlog("⬆️ [uploadAndSavePages] page[\(index)] id=\(page.id) thumbFile=\(page.thumbnailFileName ?? "NIL")")
             guard let filename = page.thumbnailFileName else {
-                print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — thumbnailFileName is nil")
+                dlog("⬆️ [uploadAndSavePages] page[\(index)] SKIP — thumbnailFileName is nil")
                 continue
             }
             guard let image = MemoirPersistence.shared.loadThumbnail(filename, journeyId: journeyId) else {
-                print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — loadThumbnail returned nil for file=\(filename)")
+                dlog("⬆️ [uploadAndSavePages] page[\(index)] SKIP — loadThumbnail returned nil for file=\(filename)")
                 continue
             }
             guard let data = image.jpegData(compressionQuality: 0.82) else {
-                print("⬆️ [uploadAndSavePages] page[\(index)] SKIP — jpegData failed")
+                dlog("⬆️ [uploadAndSavePages] page[\(index)] SKIP — jpegData failed")
                 continue
             }
-            print("⬆️ [uploadAndSavePages] page[\(index)] queued \(data.count) bytes")
+            dlog("⬆️ [uploadAndSavePages] page[\(index)] queued \(data.count) bytes")
             parts.append((index: index, clientPageId: page.id.uuidString, data: data))
         }
 
         guard !parts.isEmpty else {
-            print("⬆️ [uploadAndSavePages] no valid pages — skipping upload")
+            dlog("⬆️ [uploadAndSavePages] no valid pages — skipping upload")
             return
         }
 
@@ -681,14 +681,14 @@ final class APIClient {
         req.setValue("Bearer \(Session.token ?? anonKey)", forHTTPHeaderField: "Authorization")
         req.httpBody = body
 
-        print("⬆️ [uploadAndSavePages] POST /journeys/\(journeyId)/pages/upload — \(parts.count) file(s) \(body.count) bytes total")
+        dlog("⬆️ [uploadAndSavePages] POST /journeys/\(journeyId)/pages/upload — \(parts.count) file(s) \(body.count) bytes total")
         let (respData, response) = try await APIClient.session.data(for: req)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-        print("⬆️ [uploadAndSavePages] response status=\(statusCode) body=\(String(data: respData, encoding: .utf8) ?? "")")
+        dlog("⬆️ [uploadAndSavePages] response status=\(statusCode) body=\(String(data: respData, encoding: .utf8) ?? "")")
         guard (200...299).contains(statusCode) else {
             throw APIError.server(statusCode, String(data: respData, encoding: .utf8) ?? "")
         }
-        print("⬆️ [uploadAndSavePages] SUCCESS — \(parts.count) page(s) stored")
+        dlog("⬆️ [uploadAndSavePages] SUCCESS — \(parts.count) page(s) stored")
     }
 
     // MARK: - Trip (contenedor de varios lugares = una publicación)
@@ -736,7 +736,7 @@ final class APIClient {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.httpBody = body
 
-        print("🖼️ [APIClient] POST /users/me/avatar (\(imageData.count / 1024) KB)…")
+        dlog("🖼️ [APIClient] POST /users/me/avatar (\(imageData.count / 1024) KB)…")
         let (data, response) = try await APIClient.session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
 
@@ -750,7 +750,7 @@ final class APIClient {
         struct AvatarResponse: Decodable { let avatarUrl: String }
         do {
             let resp = try JSONDecoder.buddy.decode(AvatarResponse.self, from: data)
-            print("🖼️ [APIClient] ✅ avatar uploaded → \(resp.avatarUrl.suffix(50))")
+            dlog("🖼️ [APIClient] ✅ avatar uploaded → \(resp.avatarUrl.suffix(50))")
             return resp.avatarUrl
         } catch {
             print("❌ [APIClient] decode AvatarResponse: \(error)\nraw: \(String(data: data.prefix(300), encoding: .utf8) ?? "")")
@@ -838,12 +838,12 @@ final class APIClient {
             if let lng = coverage.longitude     { c["lng"] = lng }
             body["coverage"] = c
         }
-        print("🤝 [APIClient] updateBuddyMe coverage=\(coverage?.city ?? "nil") placeIds=\(placeIds ?? [])")
+        dlog("🤝 [APIClient] updateBuddyMe coverage=\(coverage?.city ?? "nil") placeIds=\(placeIds ?? [])")
         return try await request(path: "/buddy/me", method: "PATCH", body: body)
     }
 
     func fetchGeoPlace(id: String) async throws -> APIPlaceRef {
-        print("📍 [APIClient] fetchGeoPlace id=\(id.prefix(8))")
+        dlog("📍 [APIClient] fetchGeoPlace id=\(id.prefix(8))")
         return try await request(path: "/places/geo/\(id)")
     }
 
@@ -868,7 +868,7 @@ final class APIClient {
     /// Journeys del Traveler actual (guest o verified) — no requiere userId,
     /// el backend lo resuelve desde el traveler_id en el JWT.
     func fetchTravelerJourneys(file: String = #fileID, line: Int = #line) async throws -> [APIJourney] {
-        print("🧭 [origen] journeys ← \(file):\(line)")
+        dlog("🧭 [origen] journeys ← \(file):\(line)")
         return try await request(path: "/travelers/me/journeys")
     }
 
@@ -896,9 +896,9 @@ final class APIClient {
     /// del perfil, aparte de sus viajes: son aportes al catálogo, no viajes suyos.
     func fetchUserShares(travelerId: String, limit: Int = 12) async throws -> [APIPlaceCard] {
         let res: APIPlaceCardsResponse = try await request(path: "/users/\(travelerId)/shares?limit=\(limit)")
-        print("👤 [APIClient] userShares → \(res.items.count): \(res.items.map { "\($0.name)(\($0.photoCount)f)" }.joined(separator: ", "))")
+        dlog("👤 [APIClient] userShares → \(res.items.count): \(res.items.map { "\($0.name)(\($0.photoCount)f)" }.joined(separator: ", "))")
         for item in res.items.prefix(3) {
-            print("👤 [APIClient]   \(item.name) covers=\(APIClient.shortCovers(item.coverUrls))")
+            dlog("👤 [APIClient]   \(item.name) covers=\(APIClient.shortCovers(item.coverUrls))")
         }
         return res.items
     }
@@ -923,7 +923,7 @@ final class APIClient {
             let d = metros < 1000 ? "\(Int(metros))m" : String(format: "%.1fkm", metros / 1000)
             return "\(idx):\(item.name)(\(d)/\(item.photoCount)f/\(item.buddyCount)b)"
         }
-        print("🌍 [APIClient] placeCards desde \(lat.map { String(format: "%.4f", $0) } ?? "nil"),\(lng.map { String(format: "%.4f", $0) } ?? "nil") → \(res.items.count): \(conDistancia.joined(separator: " · "))")
+        dlog("🌍 [APIClient] placeCards desde \(lat.map { String(format: "%.4f", $0) } ?? "nil"),\(lng.map { String(format: "%.4f", $0) } ?? "nil") → \(res.items.count): \(conDistancia.joined(separator: " · "))")
 
         // ¿El primero es el más cercano? Es LA pregunta cuando el carrusel
         // muestra arriba un sitio que no es donde estás.
@@ -934,20 +934,20 @@ final class APIClient {
         }
         if let masCerca = distancias.min(by: { $0.1 < $1.1 }), let primero = res.items.first {
             let ordenado = zip(distancias, distancias.dropFirst()).allSatisfy { $0.1 <= $1.1 }
-            print("🌍 [APIClient] placeCards ¿ordenado por distancia?=\(ordenado ? "sí" : "NO") — primero=\"\(primero.name)\" pero el más cercano es \"\(masCerca.0)\" a \(Int(masCerca.1))m")
+            dlog("🌍 [APIClient] placeCards ¿ordenado por distancia?=\(ordenado ? "sí" : "NO") — primero=\"\(primero.name)\" pero el más cercano es \"\(masCerca.0)\" a \(Int(masCerca.1))m")
         }
         // El conteo no alcanza para diagnosticar staleness: lo que decide qué se
         // ve son estas URLs. Interesa si traen ?v= —o sea si el backend con el
         // token está desplegado— y si la borrada sigue en la lista.
         for item in res.items.prefix(3) {
-            print("🌍 [APIClient]   \(item.name) covers=\(APIClient.shortCovers(item.coverUrls))")
+            dlog("🌍 [APIClient]   \(item.name) covers=\(APIClient.shortCovers(item.coverUrls))")
         }
         // Autor POR FOTO. Si un lugar con fotos de varias personas sale con un
         // solo nombre repetido, o coverPhotos llega vacío, aquí se ve de qué
         // capa viene el problema.
         for item in res.items.prefix(3) {
             let autores = item.coverPhotos?.map { $0.authorName ?? "sin autor" } ?? []
-            print("🌍 [APIClient]   \(item.name) autores por foto=\(autores.isEmpty ? "sin coverPhotos (respaldo: \(item.coverAuthorName ?? "nil"))" : autores.joined(separator: " · "))")
+            dlog("🌍 [APIClient]   \(item.name) autores por foto=\(autores.isEmpty ? "sin coverPhotos (respaldo: \(item.coverAuthorName ?? "nil"))" : autores.joined(separator: " · "))")
         }
         return res.items
     }
@@ -1023,7 +1023,7 @@ final class APIClient {
     /// destino del usuario no tiene actividad propia.
     func fetchCommunityPulse() async throws -> [APIPulseItem] {
         let resp: APIPulseResponse = try await request(path: "/community/pulse")
-        print("🌐 [APIClient] community/pulse → \(resp.items.count) items")
+        dlog("🌐 [APIClient] community/pulse → \(resp.items.count) items")
         return resp.items
     }
 
@@ -1031,15 +1031,15 @@ final class APIClient {
     func fetchRecentHelpNearby(lat: Double, lng: Double, radiusKm: Double = 15) async throws -> [APIRecentHelp] {
         let path = "/matching/recent-help-nearby?lat=\(String(format: "%.5f", lat))&lng=\(String(format: "%.5f", lng))&radius_km=\(Int(radiusKm))"
         let result: [APIRecentHelp] = try await request(path: path)
-        print("🌐 [APIClient] recent-help-nearby → \(result.count) records")
+        dlog("🌐 [APIClient] recent-help-nearby → \(result.count) records")
         return result
     }
 
     func fetchRecentHelp(destinationId: String) async throws -> [APIRecentHelp] {
         let path = "/matching/recent-help/\(destinationId)"
-        print("🌐 [APIClient] GET \(baseURL)\(path)")
+        dlog("🌐 [APIClient] GET \(baseURL)\(path)")
         let result: [APIRecentHelp] = try await request(path: path)
-        print("🌐 [APIClient] recent-help → \(result.count) records: \(result.map { $0.id })")
+        dlog("🌐 [APIClient] recent-help → \(result.count) records: \(result.map { $0.id })")
         return result
     }
 
@@ -1047,7 +1047,7 @@ final class APIClient {
         struct CountResponse: Decodable { let count: Int }
         let punto = (lat != nil && lng != nil) ? String(format: "?lat=%.5f&lng=%.5f", lat!, lng!) : ""
         let resp: CountResponse = try await request(path: "/matching/available/\(destinationId)\(punto)")
-        print("🤝 [fetchBuddyCount] destId=\(destinationId.prefix(8)) → count=\(resp.count)")
+        dlog("🤝 [fetchBuddyCount] destId=\(destinationId.prefix(8)) → count=\(resp.count)")
         return resp.count
     }
 
@@ -1056,7 +1056,7 @@ final class APIClient {
     func fetchUnattendedCount(destinationId: String) async throws -> Int {
         struct CountResponse: Decodable { let count: Int }
         let resp: CountResponse = try await request(path: "/matching/unattended/\(destinationId)")
-        print("🤝 [fetchUnattendedCount] destId=\(destinationId.prefix(8)) → count=\(resp.count)")
+        dlog("🤝 [fetchUnattendedCount] destId=\(destinationId.prefix(8)) → count=\(resp.count)")
         return resp.count
     }
 
@@ -1067,12 +1067,12 @@ final class APIClient {
                 method: "POST",
                 body: ["lat": lat, "lng": lng]
             )
-            print("🌍 [resolveLocation] lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng)) → \(result.destinationName) (\(result.matchedBy))")
+            dlog("🌍 [resolveLocation] lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng)) → \(result.destinationName) (\(result.matchedBy))")
             return result
         } catch {
             // 204 No Content = no match found
             if let urlError = error as? URLError, urlError.code == .unknown {
-                print("🌍 [resolveLocation] No location match found")
+                dlog("🌍 [resolveLocation] No location match found")
                 return nil
             }
             throw error
@@ -1100,7 +1100,7 @@ final class APIClient {
     /// El origen va en el log porque estas dos llamadas se repitieron decenas
     /// de veces en un arranque y no había forma de saber quién las pedía.
     func fetchMatches(file: String = #fileID, line: Int = #line) async throws -> [APIMatch] {
-        print("🧭 [origen] matches ← \(file):\(line)")
+        dlog("🧭 [origen] matches ← \(file):\(line)")
         return try await request(path: "/matching/matches")
     }
 
@@ -1173,10 +1173,10 @@ final class APIClient {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.httpBody = body
 
-        print("🖼️ [APIClient] POST /messages/\(matchId)/image — \(imageData.count / 1024) KB")
+        dlog("🖼️ [APIClient] POST /messages/\(matchId)/image — \(imageData.count / 1024) KB")
         let (data, response) = try await APIClient.session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
-        print("🖼️ [APIClient] /messages/\(matchId)/image → HTTP \(http.statusCode)")
+        dlog("🖼️ [APIClient] /messages/\(matchId)/image → HTTP \(http.statusCode)")
         guard (200..<300).contains(http.statusCode) else {
             let raw = String(data: data.prefix(300), encoding: .utf8) ?? ""
             print("❌ [APIClient] image upload failed: \(raw)")

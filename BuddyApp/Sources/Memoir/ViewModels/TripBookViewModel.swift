@@ -44,16 +44,16 @@ final class TripBookViewModel: ObservableObject {
 
     func exitEdit(canvasSize: CGSize = .zero) {
         let jId = journeyId
-        print("📓 [exitEdit] journeyId=\(jId) pageCount=\(pages.count) canvasSize=\(canvasSize)")
+        dlog("📓 [exitEdit] journeyId=\(jId) pageCount=\(pages.count) canvasSize=\(canvasSize)")
         if canvasSize != .zero { editingVM.canvasSize = canvasSize }
-        print("📓 [exitEdit] vm.canvasSize after update=\(editingVM.canvasSize) items=\(editingVM.items.count)")
+        dlog("📓 [exitEdit] vm.canvasSize after update=\(editingVM.canvasSize) items=\(editingVM.items.count)")
         vmCache[pages[currentPageIndex].id] = editingVM
         flushCacheToDisk()
         discardAddedPageIfEmpty()
         vmCache.removeAll()
         isEditing = false
         for (i, p) in pages.enumerated() {
-            print("📓 [exitEdit] page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumbFile=\(p.thumbnailFileName ?? "nil")")
+            dlog("📓 [exitEdit] page[\(i)] id=\(p.id) items=\(p.itemSnapshots.count) bgFile=\(p.backgroundImageFile ?? "nil") thumbFile=\(p.thumbnailFileName ?? "nil")")
         }
         saveAsync()
     }
@@ -154,25 +154,25 @@ final class TripBookViewModel: ObservableObject {
         guard pages.count > 1,
               let idx = pages.firstIndex(where: { $0.id == addedId }),
               pages[idx].itemSnapshots.isEmpty else { return }
-        print("📓 [exitEdit] descartando página vacía id=\(addedId)")
+        dlog("📓 [exitEdit] descartando página vacía id=\(addedId)")
         pages.remove(at: idx)
         vmCache.removeValue(forKey: addedId)
         if currentPageIndex >= pages.count { currentPageIndex = pages.count - 1 }
     }
 
     private func flushCacheToDisk() {
-        print("📓 [flushCacheToDisk] journeyId=\(journeyId) vmCache.count=\(vmCache.count)")
+        dlog("📓 [flushCacheToDisk] journeyId=\(journeyId) vmCache.count=\(vmCache.count)")
         for (pageId, vm) in vmCache {
             guard let idx = pages.firstIndex(where: { $0.id == pageId }) else {
-                print("📓 [flushCacheToDisk] WARN pageId=\(pageId) not found in pages — skipped")
+                dlog("📓 [flushCacheToDisk] WARN pageId=\(pageId) not found in pages — skipped")
                 continue
             }
-            print("📓 [flushCacheToDisk] page[\(idx)] id=\(pageId) vm.items=\(vm.items.count) vm.canvasSize=\(vm.canvasSize) vm.backgroundImage=\(vm.backgroundImage != nil ? "YES" : "nil")")
+            dlog("📓 [flushCacheToDisk] page[\(idx)] id=\(pageId) vm.items=\(vm.items.count) vm.canvasSize=\(vm.canvasSize) vm.backgroundImage=\(vm.backgroundImage != nil ? "YES" : "nil")")
             var snap = persistence.snapshot(from: vm, existing: pages[idx], journeyId: journeyId)
-            print("📓 [flushCacheToDisk] page[\(idx)] snapshot.itemSnapshots=\(snap.itemSnapshots.count)")
+            dlog("📓 [flushCacheToDisk] page[\(idx)] snapshot.itemSnapshots=\(snap.itemSnapshots.count)")
             let thumb = persistence.generateThumbnail(
                 vm: vm, canvasSize: vm.canvasSize, pageId: pageId, journeyId: journeyId)
-            print("📓 [flushCacheToDisk] page[\(idx)] generateThumbnail → \(thumb ?? "NIL — canvasSize was \(vm.canvasSize)")")
+            dlog("📓 [flushCacheToDisk] page[\(idx)] generateThumbnail → \(thumb ?? "NIL — canvasSize was \(vm.canvasSize)")")
             if let thumb {
                 snap.thumbnailFileName = thumb
             }

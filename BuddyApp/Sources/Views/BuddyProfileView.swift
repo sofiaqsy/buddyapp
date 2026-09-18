@@ -461,7 +461,7 @@ struct BuddyProfileView: View {
         savingZones = true
         defer { savingZones = false }
         let placeIds = zones.map(\.id)
-        print("🤝 [BuddyProfileView] saveZones coverage=\(selectedCoverage?.city ?? "nil") placeIds=\(placeIds)")
+        dlog("🤝 [BuddyProfileView] saveZones coverage=\(selectedCoverage?.city ?? "nil") placeIds=\(placeIds)")
         do {
             // SIEMPRE enviar place_ids, incluso vacío: [] significa "sin zonas"
             // y el backend limpia la cobertura completa. Mandar nil al vaciar
@@ -492,14 +492,14 @@ struct BuddyProfileView: View {
         if !force, let loaded = guidesLoadedAt, Date().timeIntervalSince(loaded) < 60 { return }
         let currentZones = zones
         guard !currentZones.isEmpty else { return }
-        print("🗺️ [BuddyProfileView] loadGuides count=\(currentZones.count) force=\(force)")
+        dlog("🗺️ [BuddyProfileView] loadGuides count=\(currentZones.count) force=\(force)")
         await withTaskGroup(of: (String, APIPlaceGuide?).self) { group in
             for zone in currentZones {
                 group.addTask {
-                    print("🗺️ [BuddyProfileView] loadGuide zone=\(zone.id.prefix(8)) source=\(zone.source)")
+                    dlog("🗺️ [BuddyProfileView] loadGuide zone=\(zone.id.prefix(8)) source=\(zone.source)")
                     let guide = try? await APIClient.shared.fetchPlaceGuide(id: zone.id, source: zone.source)
                     if let g = guide {
-                        print("🗺️ [BuddyProfileView] guide[\(zone.id.prefix(8))] spots=\(g.spotCount)(preview=\(g.spots?.count ?? 0) hasMore=\(g.hasMoreSpots ?? false)) visits=\(g.visitCount)")
+                        dlog("🗺️ [BuddyProfileView] guide[\(zone.id.prefix(8))] spots=\(g.spotCount)(preview=\(g.spots?.count ?? 0) hasMore=\(g.hasMoreSpots ?? false)) visits=\(g.visitCount)")
                     }
                     return (zone.id, guide)
                 }

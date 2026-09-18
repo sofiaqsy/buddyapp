@@ -39,7 +39,7 @@ final class ImageCache {
     /// el resto del feed inundaría la consola.
     static func logOrigin(_ origin: String, _ url: URL) {
         guard url.absoluteString.contains("memoir-photos") else { return }
-        print("🖼️ [ImageCache] \(origin) ← \(shortLog(url))")
+        dlog("🖼️ [ImageCache] \(origin) ← \(shortLog(url))")
     }
 
     static func shortLog(_ url: URL) -> String {
