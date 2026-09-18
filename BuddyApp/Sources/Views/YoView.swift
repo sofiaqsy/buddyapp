@@ -1090,7 +1090,7 @@ struct YoView: View {
                 unattendedPlaceName = place.name
             }
         } catch {
-            dlog("👤 [YoView] loadUnattendedDemand falló:", error.localizedDescription)
+            print("❌ [YoView] loadUnattendedDemand falló: \(error.localizedDescription)")
         }
     }
 

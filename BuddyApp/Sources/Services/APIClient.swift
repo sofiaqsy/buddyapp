@@ -143,9 +143,12 @@ final class APIClient {
 
         let (data, http): (Data, HTTPURLResponse)
         if method == "GET" {
+            // Copia inmutable: capturar `req` (var) en un closure concurrente
+            // es un aviso hoy y un error en Swift 6.
+            let peticion = req
             let enviar: @Sendable () async throws -> (Data, HTTPURLResponse) = {
                 dlog("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
-                let (d, r) = try await APIClient.session.data(for: req)
+                let (d, r) = try await APIClient.session.data(for: peticion)
                 guard let h = r as? HTTPURLResponse else { throw APIError.unknown }
                 return (d, h)
             }
