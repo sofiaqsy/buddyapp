@@ -265,7 +265,7 @@ struct ContactarBuddyView: View {
         }
         guard let userId = effectiveUserId else { phase = .error("Sin sesión."); return }
         do {
-            let matches = try await APIClient.shared.fetchMatches()
+            let matches = try await MatchingStore.shared.refresh(trigger: "contactar:checkStatus")
             print("🔎 [checkStatus] userId=\(userId) — \(matches.count) match(es) recibidos")
             for m in matches {
                 print("   • match id=\(m.id) status=\(m.status ?? "nil") travelerId=\(m.travelerId) buddyId=\(m.buddyId ?? "nil")")
@@ -475,7 +475,7 @@ struct ContactarBuddyView: View {
     /// debe procesarse aunque el timer de recuperación esté en vuelo.
     private func transitionToMatched() async {
         let userId = effectiveUserId
-        guard let matches = try? await APIClient.shared.fetchMatches() else { return }
+        guard let matches = try? await MatchingStore.shared.refresh(trigger: "contactar:sse") else { return }
         let activeStatuses = ["pending", "accepted", "active"]
         guard let active = matches.first(where: {
             activeStatuses.contains($0.status ?? "") && $0.travelerId == userId
@@ -518,7 +518,7 @@ struct ContactarBuddyView: View {
                 // Solo en este caso hacemos el segundo fetch (fetchMatches); durante
                 // el estado "searching" basta con el endpoint de estado (barato).
                 let userId = effectiveUserId
-                let matches = try await APIClient.shared.fetchMatches()
+                let matches = try await MatchingStore.shared.refresh(trigger: "contactar:poll")
                 let activeStatuses = ["pending", "accepted", "active"]
                 if let active = matches.first(where: {
                     activeStatuses.contains($0.status ?? "") && $0.travelerId == userId

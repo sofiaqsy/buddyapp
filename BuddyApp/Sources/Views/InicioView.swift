@@ -1163,7 +1163,7 @@ struct InicioView: View {
         // Sin condicionar a `active`: desde el flujo conversacional el match
         // nace ANTES que el trip (el trip se crea al aceptar), así que exigir
         // trip primero dejaba al Home ciego justo en el caso nuevo.
-        let matches = (try? await APIClient.shared.fetchMatches()) ?? []
+        let matches = (try? await MatchingStore.shared.load(trigger: "inicio:refreshTripState")) ?? []
         let myId = Session.travelerId
         let resolvedMatch = matches.first(where: {
             ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId
@@ -1210,7 +1210,7 @@ struct InicioView: View {
 
         // Cargar match si hay viaje activo
         if let active {
-            let matches = try? await APIClient.shared.fetchMatches()
+            let matches = try? await MatchingStore.shared.load(trigger: "inicio:quickLoadForDetail")
             let all = matches ?? []
             let myId2 = Session.travelerId
             let found = all.first(where: { ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myId2 })
@@ -1372,7 +1372,7 @@ struct InicioView: View {
 
             let shouldFetchMatch = await MainActor.run { activeJourney != nil }
             if shouldFetchMatch {
-                let matches = try await APIClient.shared.fetchMatches()
+                let matches = try await MatchingStore.shared.load(trigger: "inicio:loadData")
                 guard !Task.isCancelled else { return }
                 print("🏠 [loadData] \(matches.count) match(es): \(matches.map { "\($0.status ?? "?")" })")
                 // Must filter by travelerId: user may simultaneously be a buddy for

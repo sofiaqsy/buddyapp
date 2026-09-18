@@ -170,6 +170,7 @@ struct TripsView: View {
                     // El store es compartido: si no se vacía, la cuenta
                     // siguiente vería los journeys de la anterior.
                     JourneysStore.shared.clear()
+                    MatchingStore.shared.clear()
                     journeys            = []
                     hasLoadedOnce       = false
                     dismissedJourneyIds = []
@@ -471,7 +472,7 @@ struct TripsView: View {
         }
         // Cargar match activo para mostrar avatar del buddy
         let hasActive = journeys.contains { $0.status == "active" }
-        if hasActive, let matches = try? await APIClient.shared.fetchMatches() {
+        if hasActive, let matches = try? await MatchingStore.shared.load(trigger: "trips:\(trigger)") {
             let myTravelerId = Session.travelerId
             activeMatch = matches.first { ["accepted", "active", "pending"].contains($0.status) && $0.travelerId == myTravelerId }
         } else if !hasActive {

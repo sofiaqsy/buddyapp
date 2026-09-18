@@ -318,7 +318,7 @@ final class ChatStore: ObservableObject {
         await MainActor.run { isLoading = true }
         do {
             let matches: [APIMatch]
-            if let prefetched { matches = prefetched } else { matches = try await APIClient.shared.fetchMatches() }
+            if let prefetched { matches = prefetched } else { matches = try await MatchingStore.shared.load(trigger: "conexiones:load") }
             // Capture cached connections so completed matches can reuse their last
             // known message without a network round-trip.
             let cachedConnections = await MainActor.run { connections }
