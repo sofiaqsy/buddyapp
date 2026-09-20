@@ -570,7 +570,9 @@ struct InicioView: View {
 
     /// Cuenta de buddies cerca, para el composer de la Home.
     private var scrollContent: some View {
-        ScrollViewReader { proxy in
+        // Sin ScrollViewReader: el Home ya no se desplaza, así que no hay a
+        // dónde llevar el scroll.
+        Group {
             scrollBody
                 .background(Color.canvas)
                 // Keyboard pre-warmer lives in BuddyChatView — InicioView has no knowledge
@@ -620,7 +622,6 @@ struct InicioView: View {
                         navPath.append(journey)
                     }
                 }
-                .refreshable { await loadData(force: true, reason: "pull") }
                 .onChange(of: navPath.count) { old, new in
                     // Al volver de navegación interna solo refrescamos estado del trip
                     // (journeys + match) — loadData completo no es necesario y causa
@@ -668,18 +669,16 @@ struct InicioView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
                     guard note.object as? Int == AppTab.inicio.rawValue else { return }
                     if !navPath.isEmpty { navPath = NavigationPath() }
-                    withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("inicioTop", anchor: .top) }
                     Task { await loadData(force: true, reason: "tab") }
                 }
         }
     }
 
+    /// El Home cabe entero en una pantalla y no se desplaza: sin scroll no hay
+    /// rebote ni "hay más abajo" que no existe. Lo que se ve —lugares cerca y
+    /// el botón de consultar— es todo lo que hay.
     private var scrollBody: some View {
-        // Con una foto en zoom el Home no se mueve: el pellizco no debe
-        // convertirse en scroll a mitad de camino.
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: 0).id("inicioTop")
+        VStack(alignment: .leading, spacing: 0) {
 
                 if loadDataFailed && !isLoadingData {
                     Button {
@@ -740,16 +739,9 @@ struct InicioView: View {
                 }
                 .animation(.easeInOut(duration: 0.15), value: isFindingBuddy)
 
-                // Comunidad viva — últimas ayudas en cualquier lugar, sin
-                // restringir al destino del usuario.
-                if communityPulse.contains(where: { $0.type == "helped" }) {
-                    communityLiveSection
-                        .padding(.top, Spacing.md)
-                }
-            }
-            .padding(.bottom, 100)
+            Spacer(minLength: 0)
         }
-        .scrollDisabled(carouselZoom.isZooming)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     /// Abre la guía del destino resuelto por GPS. Sin trip no hay un APIJourney
@@ -1064,8 +1056,7 @@ struct InicioView: View {
             // Con el destino resuelto ya se puede cargar "Comunidad viva"
             // aunque no exista trip (loadRecentHelp usa resolvedLocation).
             await loadRecentHelp()
-            await loadCommunityPulseIfNeeded()
-
+    
             // Cargar contexto de la comunidad de este destino
             // Con el GPS del viajero: el conteo es de buddies que CUBREN este
             // punto (migración 018), no solo de los que tienen el destino en su
@@ -1185,7 +1176,6 @@ struct InicioView: View {
         await refreshOpenRequest(hasMatch: resolvedMatch != nil)
         await loadRecentHelp()
         await loadRecentHelpPerTrip()
-        await loadCommunityPulseIfNeeded()
         // Ruta en background — activos y planning la necesitan para el mapa
         if let active, !routeStore.isReady {
             let destId = active.destination?.id ?? active.destinationId
@@ -1315,8 +1305,7 @@ struct InicioView: View {
             dlog("🏠 [loadData] sin sesión — solo contenido público")
             await MainActor.run { isLoadingData = false }
             await refreshHomeCommunityContext()
-            await loadCommunityPulseIfNeeded()
-            return
+                return
         }
         // ── Contenido PRIVADO: guest y verified cargan sus journeys ──
 
@@ -1432,7 +1421,6 @@ struct InicioView: View {
         // Comunidad viva es global — no depende de trip ni de GPS resuelto,
         // así que se carga siempre acá, sin importar en qué rama cayó
         // refreshHomeCommunityContext arriba.
-        await loadCommunityPulseIfNeeded()
     }
 
     private var feedLat: Double? { locationService.userLocation?.coordinate.latitude }
