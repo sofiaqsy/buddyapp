@@ -678,16 +678,12 @@ struct InicioView: View {
     /// rebote ni "hay más abajo" que no existe. Lo que se ve —lugares cerca y
     /// el botón de consultar— es todo lo que hay.
     private var scrollBody: some View {
-        // El alto que de verdad queda para el composer (ya sin barra de
-        // navegación ni tab bar) decide cuánto puede medir la foto del
-        // carrusel. Antes era un porcentaje del alto del dispositivo y se
-        // quedaba corto: "Consultar a buddies" caía fuera de una pantalla que
-        // ya no se desplaza.
-        GeometryReader { geo in
-            homeStack
-                .environment(\.exploreCardPhotoHeightOverride,
-                             exploreCardPhotoThatFits(in: geo.size.height))
-        }
+        // La pantalla no se desplaza: el carrusel toma el espacio que sobra
+        // después del título, la disponibilidad y "Consultar a buddies", y su
+        // tarjeta se calcula de ese alto MEDIDO. Estimar el alto del resto
+        // dejaba el botón debajo de la tab bar en algunos móviles.
+        homeStack
+            .environment(\.exploreFitsScreen, true)
     }
 
     private var homeStack: some View {
@@ -730,6 +726,10 @@ struct InicioView: View {
                 }
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, isLoadingData || homeComposerHasHeaderRow ? Spacing.md : 0)
+                // El composer ocupa el alto libre: dentro, el carrusel es lo
+                // único elástico, así que el sobrante va a la foto y el botón
+                // se queda donde debe.
+                .frame(maxHeight: .infinity)
                 // Loader visible mientras se procesa la intención (flujo pioneer:
                 // crear trip + solicitud) — sin esto la pantalla parece congelada.
                 .overlay {
@@ -752,7 +752,6 @@ struct InicioView: View {
                 }
                 .animation(.easeInOut(duration: 0.15), value: isFindingBuddy)
 
-            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }

@@ -1144,8 +1144,15 @@ struct CategoryPickerView: View {
     /// El alto que publica la Home (lo que de verdad queda libre); si nadie lo
     /// publica —otras pantallas que usan este composer— vale el de siempre.
     @Environment(\.exploreCardPhotoHeightOverride) private var exploreCardPhotoOverride: CGFloat?
+    /// Con la Home sin scroll, el alto REAL de la fila del carrusel (lo que
+    /// sobra tras el título, la disponibilidad y el botón). Medido, no estimado:
+    /// cualquier cuenta a mano dejaba el botón debajo de la tab bar.
+    @Environment(\.exploreFitsScreen) private var exploreFitsScreen
+    @State private var exploreRowHeight: CGFloat? = nil
     private var exploreCardPhoto: CGFloat {
-        min(exploreCardPhotoHeight, exploreCardPhotoOverride ?? .greatestFiniteMagnitude)
+        let deseado = min(exploreCardPhotoHeight, exploreCardPhotoOverride ?? .greatestFiniteMagnitude)
+        guard exploreFitsScreen, let alto = exploreRowHeight else { return deseado }
+        return min(deseado, exploreCardPhotoThatFits(inRow: alto))
     }
     private var exploreCardWidth: CGFloat { exploreCardPhoto * 3 / 4 }
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
@@ -1329,9 +1336,20 @@ struct CategoryPickerView: View {
                 }
                 }
             }
-            // Coincide exactamente con el alto del contenido (card + el slack
-            // de arriba y abajo), para que no sobre ni falte espacio.
-            .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
+            // Con la Home sin scroll la fila toma el espacio sobrante y la
+            // tarjeta se calcula de ahí; en el resto de pantallas coincide
+            // exactamente con su contenido (card + el slack de arriba y abajo).
+            .frame(
+                height: exploreFitsScreen ? nil : exploreCardHeight + exploreVerticalSlack * 2,
+                alignment: .center,
+            )
+            .frame(maxHeight: exploreFitsScreen ? .infinity : nil)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { alto in
+                if exploreRowHeight != alto { exploreRowHeight = alto }
+            }
+            // Las cards leen el mismo alto resuelto por el entorno: la foto del
+            // fondo desenfocado y la de la ficha tienen que medir igual.
+            .environment(\.exploreCardPhotoHeightOverride, exploreCardPhoto)
             // initial: true corre en la misma pasada de update que el primer
             // layout, así que el ScrollView ya arranca posicionado acá y el
             // zIndex/dots coinciden con la geometría desde el frame uno.
@@ -1772,6 +1790,20 @@ private struct ExploreCardPhotoKey: EnvironmentKey {
     static let defaultValue: CGFloat? = nil
 }
 
+/// La Home la enciende: su pantalla no se desplaza, así que el carrusel toma
+/// el espacio que sobra y su tarjeta se calcula de ahí. Otras pantallas que
+/// usan este composer siguen con el alto fijo de siempre.
+private struct ExploreFitsScreenKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
+extension EnvironmentValues {
+    var exploreFitsScreen: Bool {
+        get { self[ExploreFitsScreenKey.self] }
+        set { self[ExploreFitsScreenKey.self] = newValue }
+    }
+}
+
 extension EnvironmentValues {
     var exploreCardPhotoHeightOverride: CGFloat? {
         get { self[ExploreCardPhotoKey.self] }
@@ -1779,15 +1811,10 @@ extension EnvironmentValues {
     }
 }
 
-/// Lo que cabe de foto en `disponible` puntos de alto, contando el resto del
-/// composer (título, disponibilidad y el botón de consultar).
-func exploreCardPhotoThatFits(in disponible: CGFloat) -> CGFloat {
-    let chromeDelComposer: CGFloat = 232   // título + subtítulo + disponibilidad + CTA + aires
-    let filaDisponible = max(0, disponible - chromeDelComposer)
-    // 0.22 es exploreScaleDelta (la central se dibuja un 22% más grande); acá
-    // va el literal porque esta función vive fuera de la vista que lo define.
-    let cardCabe = filaDisponible / 1.22
-    return max(150, cardCabe - 70)
+/// Lo que cabe de foto en una fila de `alto` puntos: se descuenta el aire
+/// vertical, el escalado de la card central (×1.22) y la banda de texto (70).
+func exploreCardPhotoThatFits(inRow alto: CGFloat) -> CGFloat {
+    max(150, (max(0, alto - 16) / 1.22) - 70)
 }
 
 private let exploreCardPhotoHeight: CGFloat = {
