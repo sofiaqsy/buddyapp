@@ -1062,7 +1062,7 @@ struct CategoryPickerView: View {
                                 style: .continuous
                             )
                             .fill(Color.border.opacity(0.35))
-                            .frame(height: exploreCardPhotoHeight)
+                            .frame(height: exploreCardPhoto)
                         }
                         .overlay(alignment: .bottom) {
                             // La banda de la ficha, con sus tres líneas en
@@ -1073,7 +1073,7 @@ struct CategoryPickerView: View {
                                 SkeletonBox(cornerRadius: 3).frame(width: exploreCardWidth * 0.52, height: 10)
                                 SkeletonBox(cornerRadius: 3).frame(width: exploreCardWidth * 0.64, height: 8)
                             }
-                            .frame(height: exploreCardHeight - exploreCardPhotoHeight)
+                            .frame(height: exploreCardHeight - exploreCardPhoto)
                         }
                         .overlay(
                             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
@@ -1141,11 +1141,17 @@ struct CategoryPickerView: View {
     /// su cuenta (+15%, +10%, +10%, +10%): la foto terminó en casi 1:2, una
     /// tira delgada y alargada que recortaba la imagen original. 3:4 muestra la
     /// foto como se tomó y sigue dejando asomar a las vecinas.
-    private let exploreCardWidth: CGFloat = exploreCardPhotoHeight * 3 / 4
+    /// El alto que publica la Home (lo que de verdad queda libre); si nadie lo
+    /// publica —otras pantallas que usan este composer— vale el de siempre.
+    @Environment(\.exploreCardPhotoHeightOverride) private var exploreCardPhotoOverride: CGFloat?
+    private var exploreCardPhoto: CGFloat {
+        min(exploreCardPhotoHeight, exploreCardPhotoOverride ?? .greatestFiniteMagnitude)
+    }
+    private var exploreCardWidth: CGFloat { exploreCardPhoto * 3 / 4 }
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
-    private let exploreCardHeight: CGFloat = exploreCardPhotoHeight + 70
+    private var exploreCardHeight: CGFloat { exploreCardPhoto + 70 }
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1757,6 +1763,33 @@ private let exploreCardBoost: CGFloat = 1.3 * 0.9 * 1.05
 /// "Consultar a buddies" quedaba fuera de la pantalla y no había forma de
 /// llegar a él. El techo deja a la tarjeta —ya escalada al centro (×1.22)— en
 /// el 62% del alto de la pantalla, contando su banda de texto de 70.
+/// Alto de foto QUE CABE en el espacio real de la pantalla. El Home ya no se
+/// desplaza: lo que no entra, no se alcanza. En vez de adivinar con un
+/// porcentaje del alto del dispositivo, la Home mide el espacio que le queda al
+/// composer y lo publica por el entorno; acá se descuenta el resto de la ficha
+/// (la banda de 70), el escalado de la central (×1.22) y el aire vertical.
+private struct ExploreCardPhotoKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    var exploreCardPhotoHeightOverride: CGFloat? {
+        get { self[ExploreCardPhotoKey.self] }
+        set { self[ExploreCardPhotoKey.self] = newValue }
+    }
+}
+
+/// Lo que cabe de foto en `disponible` puntos de alto, contando el resto del
+/// composer (título, disponibilidad y el botón de consultar).
+func exploreCardPhotoThatFits(in disponible: CGFloat) -> CGFloat {
+    let chromeDelComposer: CGFloat = 232   // título + subtítulo + disponibilidad + CTA + aires
+    let filaDisponible = max(0, disponible - chromeDelComposer)
+    // 0.22 es exploreScaleDelta (la central se dibuja un 22% más grande); acá
+    // va el literal porque esta función vive fuera de la vista que lo define.
+    let cardCabe = filaDisponible / 1.22
+    return max(150, cardCabe - 70)
+}
+
 private let exploreCardPhotoHeight: CGFloat = {
     let deseado = 207 * explorePhotoExtra * exploreSizeFactor * exploreCardBoost
     let techo = UIScreen.main.bounds.height * 0.62 / 1.22 - 70
@@ -1771,6 +1804,13 @@ private let exploreCardPhotoHeight: CGFloat = {
 private let exploreCardPaper: Color = .canvas
 
 private struct ExploreCarouselCard: View {
+    /// Mismo alto resuelto que usa el carrusel: la foto de la ficha y la del
+    /// fondo tienen que medir lo mismo o la tarjeta se descuadra.
+    @Environment(\.exploreCardPhotoHeightOverride) private var exploreCardPhotoOverride: CGFloat?
+    private var exploreCardPhoto: CGFloat {
+        min(exploreCardPhotoHeight, exploreCardPhotoOverride ?? .greatestFiniteMagnitude)
+    }
+
     let photo: ExplorePhoto
     /// Solo el lugar más cercano puede decir "Estás aquí". El encanto y
     /// Cafetería Rosal están a unos 40 m entre sí: con el radio aplicado a
@@ -1812,7 +1852,7 @@ private struct ExploreCarouselCard: View {
                 } placeholder: {
                     Rectangle().fill(Color.sandLight)
                 }
-                .frame(height: exploreCardPhotoHeight)
+                .frame(height: exploreCardPhoto)
             }
             .clipped()
             // El material del sistema en vez de blur + veladura a mano: hace el
@@ -1863,7 +1903,7 @@ private struct ExploreCarouselCard: View {
             }
             .scaleEffect(zoom, anchor: zoomAnchor)
             .frame(maxWidth: .infinity)
-            .frame(height: exploreCardPhotoHeight)
+            .frame(height: exploreCardPhoto)
             .clipped()
             .contentShape(Rectangle())
             // Simultáneo: el pellizco (dos dedos) no bloquea el deslizamiento

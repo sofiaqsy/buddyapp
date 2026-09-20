@@ -678,6 +678,19 @@ struct InicioView: View {
     /// rebote ni "hay más abajo" que no existe. Lo que se ve —lugares cerca y
     /// el botón de consultar— es todo lo que hay.
     private var scrollBody: some View {
+        // El alto que de verdad queda para el composer (ya sin barra de
+        // navegación ni tab bar) decide cuánto puede medir la foto del
+        // carrusel. Antes era un porcentaje del alto del dispositivo y se
+        // quedaba corto: "Consultar a buddies" caía fuera de una pantalla que
+        // ya no se desplaza.
+        GeometryReader { geo in
+            homeStack
+                .environment(\.exploreCardPhotoHeightOverride,
+                             exploreCardPhotoThatFits(in: geo.size.height))
+        }
+    }
+
+    private var homeStack: some View {
         VStack(alignment: .leading, spacing: 0) {
 
                 if loadDataFailed && !isLoadingData {
