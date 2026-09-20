@@ -1752,7 +1752,16 @@ private let exploreTopOffset: CGFloat = 8
 /// ×1.3 y luego −10%: la tarjeta completa queda 17% más grande que antes del
 /// cambio a 3:4. El ancho acompaña solo, porque sale de este alto.
 private let exploreCardBoost: CGFloat = 1.3 * 0.9 * 1.05
-private let exploreCardPhotoHeight: CGFloat = 207 * explorePhotoExtra * exploreSizeFactor * exploreCardBoost
+/// El alto final de la foto, con un TECHO por pantalla. Sin él, el ×1.3 y los
+/// sucesivos aumentos se comían el espacio del botón: con el Home ya sin scroll,
+/// "Consultar a buddies" quedaba fuera de la pantalla y no había forma de
+/// llegar a él. El techo deja a la tarjeta —ya escalada al centro (×1.22)— en
+/// el 62% del alto de la pantalla, contando su banda de texto de 70.
+private let exploreCardPhotoHeight: CGFloat = {
+    let deseado = 207 * explorePhotoExtra * exploreSizeFactor * exploreCardBoost
+    let techo = UIScreen.main.bounds.height * 0.62 / 1.22 - 70
+    return min(deseado, max(160, techo))
+}()
 
 /// El papel de la ficha. Va acá y no inline porque el degradado tiene que
 /// terminar EXACTAMENTE en este color: si se separan, aparece una costura entre
