@@ -1209,6 +1209,16 @@ struct CategoryPickerView: View {
         return -Double(abs(index - centerIndex))
     }
 
+    /// El alto que el layout OFRECE a la fila del carrusel (no el de su
+    /// contenido): de ahí sale el tamaño de la tarjeta cuando la pantalla no se
+    /// desplaza. Medir el contenido no servía — devolvía el alto deseado y por
+    /// eso nunca encogía y el botón quedaba debajo de la tab bar.
+    private var exploreRowProbe: some View {
+        Color.clear.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { alto in
+            if exploreFitsScreen, alto > 0, exploreRowHeight != alto { exploreRowHeight = alto }
+        }
+    }
+
     private var exploreCarousel: some View {
         // spacing: 0 con paddings explícitos. Con un spacing uniforme de 14 los
         // tres elementos quedaban equidistantes y el cerebro los leía como
@@ -1344,9 +1354,7 @@ struct CategoryPickerView: View {
                 alignment: .center,
             )
             .frame(maxHeight: exploreFitsScreen ? .infinity : nil)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { alto in
-                if exploreRowHeight != alto { exploreRowHeight = alto }
-            }
+            .background(exploreRowProbe)
             // Las cards leen el mismo alto resuelto por el entorno: la foto del
             // fondo desenfocado y la de la ficha tienen que medir igual.
             .environment(\.exploreCardPhotoHeightOverride, exploreCardPhoto)
