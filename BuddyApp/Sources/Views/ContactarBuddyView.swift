@@ -638,11 +638,6 @@ struct CategoryPickerView: View {
     /// hasta el touch-up (como se hizo antes) no evitaba ningún error de
     /// índice, solo dejaba el z-order desactualizado durante todo el drag.
     @State private var carouselCenterId: String? = nil
-    /// Centro de la ventana de páginas que existe ahora mismo. Los ids son
-    /// índices LÓGICOS (pueden ser negativos): la foto sale de aplicarles el
-    /// módulo, así que el feed no tiene principio ni final y los datos no se
-    /// duplican.
-    @State private var feedCentro: Int = 0
     /// Página en la que descansa el scroll. Es la recomendación ACTIVA: se
     /// actualiza cuando el scroll se asienta, no mientras el dedo arrastra.
     @State private var feedPosicion: Int? = 0
@@ -1229,11 +1224,18 @@ struct CategoryPickerView: View {
         return ((i % n) + n) % n
     }
 
-    /// Las páginas que existen: la activa y dos a cada lado. Se recentra al
-    /// asentarse el scroll, así que el usuario nunca llega al borde de la
-    /// ventana. Con una sola recomendación no hay ciclo que hacer.
+    /// Cuántas páginas hay a cada lado de la de arranque. El rango es FIJO:
+    /// recentrar una ventana chica movía el contenido bajo el dedo (el
+    /// ScrollView conserva el desplazamiento, no el id, así que al correr la
+    /// ventana la página activa saltaba a la vecina y volvía, cambiando el
+    /// lugar que se estaba mirando). Las páginas son perezosas y su id es un
+    /// entero, así que tener mil no cuesta nada: solo se construyen las que se
+    /// ven, y las fotos salen del módulo, sin duplicar datos.
+    private static let feedRadio = 500
+
+    /// Las páginas que existen. Con una sola recomendación no hay ciclo.
     private var feedVentana: [Int] {
-        explorePhotos.count <= 1 ? [0] : Array((feedCentro - 2)...(feedCentro + 2))
+        explorePhotos.count <= 1 ? [0] : Array(-Self.feedRadio...Self.feedRadio)
     }
 
     /// Al asentarse en una recomendación: se fija la activa, se recentra la
@@ -1242,6 +1244,7 @@ struct CategoryPickerView: View {
     private func feedAsentado(en pagina: Int) {
         guard !explorePhotos.isEmpty else { return }
         let foto = explorePhotos[feedIndexWrapped(pagina)]
+        dlog("🎞️ [feed] asentado pagina=\(pagina) → \(foto.place.name)")
         if carouselCenterId != foto.id {
             carouselCenterId = foto.id
             Haptic.select()
@@ -1250,10 +1253,6 @@ struct CategoryPickerView: View {
             explorePhotos[feedIndexWrapped(pagina + 1)].url,
             explorePhotos[feedIndexWrapped(pagina - 1)].url,
         ])
-        guard explorePhotos.count > 1, pagina != feedCentro else { return }
-        var sinAnimacion = Transaction()
-        sinAnimacion.disablesAnimations = true
-        withTransaction(sinAnimacion) { feedCentro = pagina }
     }
 
     private var exploreCarousel: some View {
@@ -1286,6 +1285,7 @@ struct CategoryPickerView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(feedVentana, id: \.self) { pagina in
                             let photo = explorePhotos[feedIndexWrapped(pagina)]
+                            let _ = dlog("🎞️ [feed] pinta pagina=\(pagina) → \(photo.place.name)")
                             ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
                                 .frame(width: cardAncho, height: cardAlto)
                                 // La tarjeta se centra dentro de su página; la
@@ -1319,7 +1319,8 @@ struct CategoryPickerView: View {
                 // scrollPosition se escribe cuando el scroll llega a su página
                 // destino: ese es el momento en que la recomendación pasa a ser
                 // la activa (no mientras el dedo arrastra).
-                .onChange(of: feedPosicion) { _, nueva in
+                .onChange(of: feedPosicion) { vieja, nueva in
+                    dlog("🎞️ [feed] scrollPosition \(vieja.map(String.init) ?? "nil") → \(nueva.map(String.init) ?? "nil")")
                     guard let nueva else { return }
                     feedAsentado(en: nueva)
                 }
@@ -1345,7 +1346,6 @@ struct CategoryPickerView: View {
                 // Un refresco del feed no puede mover la tarjeta bajo el dedo:
                 // si la activa sigue existiendo, se queda donde está.
                 if let actual = carouselCenterId, ids.contains(actual) { return }
-                feedCentro = 0
                 feedPosicion = 0
                 carouselCenterId = ids[0]
                 ImagePrefetcher.prefetch(explorePhotos.prefix(3).map(\.url))
