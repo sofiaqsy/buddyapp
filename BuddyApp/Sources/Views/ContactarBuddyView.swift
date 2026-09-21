@@ -1363,6 +1363,11 @@ struct CategoryPickerView: View {
                             // primer layout puede llegar antes que ella.
                             if let photo = feedFoto(en: pagina) {
                             ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
+                                // Identidad por FOTO: la del ForEach es la
+                                // página, y sin esto el estado interno de la
+                                // tarjeta (distancia, "Estás aquí", el pulso)
+                                // se heredaba al cambiar de lugar.
+                                .id(photo.id)
                                 .frame(width: cardAncho, height: cardAlto)
                                 // La tarjeta se centra dentro de su página; la
                                 // página es la que mide el visor.
@@ -2089,6 +2094,15 @@ private struct ExploreCarouselCard: View {
             .onAppear { recompute() }
             .onChange(of: locationService.stableLocation) { _, _ in recompute() }
             .onChange(of: isNearest) { _, _ in recompute() }
+            // La página es la identidad del ForEach (un entero), así que al
+            // rehacerse la secuencia la MISMA vista pasa a mostrar otro lugar y
+            // se quedaba con la distancia del anterior: un sitio a 3,5 km
+            // seguía diciendo "Estás aquí". Con el lugar cambia el cálculo.
+            .onChange(of: photo.id) { _, _ in
+                shownDistance = nil
+                isHere = false
+                recompute()
+            }
             .onChange(of: etiquetaDistancia) { viejo, nuevo in
                 // Solo cuando el valor cambia de verdad, no en la primera pintura.
                 guard viejo != nil, nuevo != nil, viejo != nuevo else { return }
