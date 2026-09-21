@@ -731,21 +731,12 @@ struct CategoryPickerView: View {
     /// categorías: al quedar sobre el carrusel, mandaba a elegir y lo único
     /// elegible a la vista eran las fotos.
     private var exploreSubtitleAttributed: AttributedString {
-        // El núcleo es QUIÉN recomienda; la ciudad queda como referencia
-        // secundaria al final.
-        var str = AttributedString("Recomendado por buddies")
+        // Sin la ciudad: ahora la dice el botón ("Consultar en Breña"), que es
+        // donde el destino importa —es lo que va a pasar al tocarlo— y no como
+        // una coletilla del subtítulo.
+        var str = AttributedString("Recomendado por buddies.")
         str.foregroundColor = UIColor(Color.inkMuted)
-        guard let city = destinationName else { return str + AttributedString(".") }
-
-        var sep = AttributedString(" · ")
-        sep.foregroundColor = UIColor(Color.inkMuted)
-        var cityStr = AttributedString(city)
-        cityStr.foregroundColor = UIColor(Color.inkMuted)
-        if onDestinationTap != nil {
-            cityStr.underlineStyle = .single
-            cityStr.link = URL(string: "buddy://destination")
-        }
-        return str + sep + cityStr
+        return str
     }
 
     /// La bisagra entre las fotos y el CTA: nombra la ciudad y la disponibilidad
@@ -986,9 +977,12 @@ struct CategoryPickerView: View {
                 .font(BT.footnoteBold)
                 .foregroundColor(Color.ink)
         }
+        // El botón nombra el DESTINO: dice a dónde va la consulta, que es lo
+        // que el subtítulo dejó de repetir. Sin destino resuelto, la frase de
+        // siempre.
         let title = searchingCategoryKey != nil
             ? "Buscando buddy…"
-            : "Consultar a buddies"
+            : (destinationName.map { "Consultar en \($0)" } ?? "Consultar a buddies")
         return Text(title).font(BT.footnoteBold).foregroundColor(Color.ink)
     }
 
