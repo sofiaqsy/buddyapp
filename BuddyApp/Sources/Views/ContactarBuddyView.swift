@@ -1847,11 +1847,12 @@ func exploreCardPhotoThatFits(inRow alto: CGFloat) -> CGFloat {
     max(60, (max(0, alto - 16) / 1.22) - 70)
 }
 
-private let exploreCardPhotoHeight: CGFloat = {
-    let deseado = 207 * explorePhotoExtra * exploreSizeFactor * exploreCardBoost
-    let techo = UIScreen.main.bounds.height * 0.62 / 1.22 - 70
-    return min(deseado, max(160, techo))
-}()
+/// El alto DESEADO de la foto. Es solo un tope superior: en la Home el alto
+/// real sale del espacio que el layout le deja a la fila (ver exploreCarousel).
+/// Ya no lleva ningún techo calculado sobre el alto del dispositivo — ese era
+/// un parche del bug de la barra de tabs, que ahora ocupa su espacio de verdad.
+private let exploreCardPhotoHeight: CGFloat =
+    207 * explorePhotoExtra * exploreSizeFactor * exploreCardBoost
 
 /// El papel de la ficha. Va acá y no inline porque el degradado tiene que
 /// terminar EXACTAMENTE en este color: si se separan, aparece una costura entre
