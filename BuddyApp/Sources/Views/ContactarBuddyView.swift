@@ -1167,7 +1167,7 @@ struct CategoryPickerView: View {
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
-    private var exploreCardHeight: CGFloat { exploreCardPhoto + 70 }
+    private var exploreCardHeight: CGFloat { exploreCardPhoto }
     /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
     /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
     /// menos, porque el efecto App Store vive justamente de ese contraste.
@@ -1296,11 +1296,13 @@ struct CategoryPickerView: View {
                 // La tarjeta se ajusta al VISOR, no a la pantalla: lo que sobra
                 // en la fila menos la banda de la ficha. Sin porcentajes de
                 // dispositivo ni compensaciones de la tab bar.
-                let fotoQueEntra = max(0, geo.size.height - 70)
+                // Sin banda de ficha, la tarjeta ES la foto: toma todo el
+                // visor y solo la frena el ancho disponible, porque la
+                // proporción 3:4 tiene que respetarse.
                 let photoAlto = exploreFitsScreen
-                    ? min(exploreCardPhoto, fotoQueEntra)
+                    ? min(geo.size.height, geo.size.width * 4 / 3)
                     : exploreCardPhoto
-                let cardAlto = photoAlto + 70
+                let cardAlto = photoAlto
                 let cardAncho = photoAlto * 3 / 4
                 // Una tarjeta por gesto. El paso es lo que sea más alto, la
                 // tarjeta o el visor, más el aire que las separa: así la que
@@ -1827,8 +1829,11 @@ private struct ExploreCarouselCard: View {
     /// Mismo alto resuelto que usa el carrusel: la foto de la ficha y la del
     /// fondo tienen que medir lo mismo o la tarjeta se descuadra.
     @Environment(\.exploreCardPhotoHeightOverride) private var exploreCardPhotoOverride: CGFloat?
+    /// El alto que publica quien coloca la tarjeta manda, sin techo: con la
+    /// ficha fuera, la foto ocupa TODO el visor, y ese alto es mayor que el
+    /// del diseño base. El tope de diseño solo aplica si nadie publica alto.
     private var exploreCardPhoto: CGFloat {
-        min(exploreCardPhotoHeight, exploreCardPhotoOverride ?? .greatestFiniteMagnitude)
+        exploreCardPhotoOverride ?? exploreCardPhotoHeight
     }
 
     let photo: ExplorePhoto
@@ -1912,10 +1917,10 @@ private struct ExploreCarouselCard: View {
     }
 
     var body: some View {
-        // Foto arriba, ficha abajo. Con el texto sobre la imagen hacía falta
-        // oscurecerla justo donde suele estar el lugar; con la ficha aparte la
-        // foto se ve entera y el texto no depende de lo que haya detrás.
-        VStack(spacing: 0) {
+        // La foto ES la tarjeta: los datos van encima, sobre un degradado, en
+        // vez de robarle una banda de 70pt. Un ZStack para que el degradado y
+        // el texto se apoyen en el borde inferior de la imagen.
+        ZStack(alignment: .bottomLeading) {
             CachedImage(urlString: photo.url) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
@@ -1985,48 +1990,36 @@ private struct ExploreCarouselCard: View {
                 pulsando = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { pulsando = false }
             }
-            // Una línea y no un degradado: la foto termina donde termina, y la
-            // ficha empieza donde empieza. Es la misma línea del borde de la
-            // card, así el corte se lee como parte del recuadro y no como un
-            // elemento nuevo.
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Color.border)
-                    .frame(height: 0.5)
-            }
 
-            // Dentro de la ficha la jerarquía la siguen haciendo el color y el
-            // aire —etiqueta tenue, nombre en ink, autor apagado—, sin más
-            // reglas que la que la separa de la foto.
-            // Los tres datos caben exactos en la banda de 70: 7 de aire arriba,
-            // 8 (categoría) + 3 + 20 (nombre) + 3 + 20 (autor) = 54, y 7 abajo.
-            // Antes sumaban 78 y además el bloque salía 15pt hacia la foto, así
-            // que los tres se leían encimados. Los Spacer centran lo que sobre
-            // cuando falta la categoría.
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
+            // Degradado propio y no material: tiene que oscurecer lo justo para
+            // que el texto se lea sobre cualquier foto y desaparecer antes de
+            // la mitad. Empieza transparente para no ensuciar la imagen.
+            LinearGradient(
+                colors: [Color.black.opacity(0), Color.black.opacity(0.62)],
+                startPoint: .center,
+                endPoint: .bottom,
+            )
+            .allowsHitTesting(false)
 
-                if let category = place.category, !category.isEmpty {
-                    Text(category.uppercased())
-                        .font(.system(size: 6.5, weight: .semibold))
-                        .tracking(0.6)
-                        .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .padding(.bottom, 3)
-                }
-
-                // Tamaños fijos y no tokens: a −30% ninguno cae en la escala del
-                // sistema, y mezclar footnoteBold con dos textos ya escalados
-                // rompería la proporción entre los tres.
+            // Dos líneas y no tres: el nombre manda, y categoría y quién
+            // recomienda comparten la segunda separadas por un punto medio.
+            // Alineado a la izquierda —como el resto de la app— para que no se
+            // lea como el pie de una publicación de red social.
+            VStack(alignment: .leading, spacing: 2) {
                 Text(place.name)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.ink)
-                    .multilineTextAlignment(.center)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
 
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(spacing: 5) {
+                    if let category = place.category, !category.isEmpty {
+                        Text(category.capitalized)
+                            .font(.system(size: 10.5))
+                        Text("·")
+                            .font(.system(size: 10.5))
+                    }
+
                     if let author = photo.authorName {
                         Group {
                             if let urlStr = photo.authorAvatarUrl, let url = URL(string: urlStr) {
@@ -2040,40 +2033,29 @@ private struct ExploreCarouselCard: View {
                                         .foregroundStyle(Color.ink))
                             }
                         }
-                        .frame(width: 15, height: 15)
+                        .frame(width: 14, height: 14)
                         .clipShape(Circle())
-                        // Un círculo no tiene línea base, así que en un HStack
-                        // por baseline se iría al fondo. Se le declara una a
-                        // 4pt de su borde inferior: ahí es donde el ojo lee que
-                        // el avatar y el texto están sentados en la misma línea.
-                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
                     }
 
-                    // El nombre se distingue solo por peso: en brand competía
-                    // de igual a igual con el del lugar.
                     if let author = authorFirstName {
                         Text("Recomendado por ")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(Color.inkMuted)
+                            .font(.system(size: 10.5))
                         + Text(author)
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundStyle(Color.inkMuted)
+                            .font(.system(size: 10.5, weight: .semibold))
                     } else {
                         Text("Recomendado por la comunidad")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(Color.inkMuted)
+                            .font(.system(size: 10.5))
                     }
                 }
+                // Blanco apagado: la segunda línea acompaña al nombre, no
+                // compite con él, y sigue legible sobre el degradado.
+                .foregroundStyle(.white.opacity(0.88))
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .padding(.top, 3)
-
-                Spacer(minLength: 0)
+                .minimumScaleFactor(0.75)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(plateBackground)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+            .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
