@@ -1362,13 +1362,12 @@ struct CategoryPickerView: View {
                                 // página es la que mide el visor.
                                 .frame(maxWidth: .infinity)
                                 .containerRelativeFrame(.vertical)
-                                // Apenas un guiño: la que entra crece los
-                                // últimos puntos y termina de aparecer. Nada de
-                                // rotaciones ni parallax.
+                                // Solo opacidad. El scaleEffect encogía la
+                                // tarjeta mientras entraba o salía, y con la
+                                // foto a sangre eso abría una franja de fondo
+                                // entre una y otra durante el gesto.
                                 .scrollTransition(.interactive) { content, fase in
-                                    content
-                                        .opacity(fase.isIdentity ? 1 : 0.85)
-                                        .scaleEffect(fase.isIdentity ? 1 : 0.97)
+                                    content.opacity(fase.isIdentity ? 1 : 0.9)
                                 }
                                 // Abrir el lugar es cosa de la recomendación
                                 // activa: las vecinas están fuera del visor.
