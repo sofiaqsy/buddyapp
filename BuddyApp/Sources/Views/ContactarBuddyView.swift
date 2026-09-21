@@ -1057,22 +1057,31 @@ struct CategoryPickerView: View {
     private var exploreSkeleton: some View {
         VStack(spacing: 0) {
             // La misma silueta que la tarjeta real: una foto a sangre que toma
-            // el alto libre, con el chip de distancia arriba a la izquierda y
-            // las dos líneas de la ficha abajo. Antes imitaba el carrusel
-            // horizontal —tres tarjetas con recuadro y banda—, así que al
-            // llegar los datos la pantalla cambiaba de forma entera.
+            // el alto libre, el chip de la distancia arriba a la izquierda y
+            // las dos líneas de la ficha abajo. Las piezas van en un tono más
+            // oscuro que el bloque: con el mismo color eran invisibles y el
+            // esqueleto se leía como una mancha vacía.
             Rectangle()
-                .fill(Color.groupedBg)
+                // Un tono medio y cálido, no el gris de las secciones: la
+                // tarjeta real es una FOTO, y un bloque casi del color del
+                // fondo se leía como un hueco en la pantalla.
+                .fill(Color.inkFaint.opacity(0.45))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .topLeading) {
-                    SkeletonBox(cornerRadius: 50)
-                        .frame(width: 96, height: 18)
+                    Capsule()
+                        .fill(.white.opacity(0.75))
+                        .frame(width: 104, height: 20)
                         .padding(10)
                 }
                 .overlay(alignment: .bottomLeading) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        SkeletonBox(cornerRadius: 3).frame(width: 150, height: 15)
-                        SkeletonBox(cornerRadius: 3).frame(width: 210, height: 11)
+                    // En blanco, como el texto real sobre la foto.
+                    VStack(alignment: .leading, spacing: 7) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(.white.opacity(0.85))
+                            .frame(width: 148, height: 16)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(.white.opacity(0.6))
+                            .frame(width: 206, height: 11)
                     }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
@@ -1085,8 +1094,11 @@ struct CategoryPickerView: View {
                 .padding(.top, 16)
                 .disabled(true)
                 .layoutPriority(1)
+                .redacted(reason: .placeholder)
         }
-        .redacted(reason: .placeholder)
+        // Solo el botón se redacta: el bloque de la foto ya es un esqueleto
+        // dibujado a mano y redactarlo apagaba sus piezas.
+        
     }
 
     // MARK: – Explora {ciudad} (carrusel de fotos reales)

@@ -54,6 +54,16 @@ struct InicioView: View {
     @State private var homeChatTarget: ChatStore.ConnectionItem? = nil
     @State private var showPublishSuccessToast = false
     @State private var isLoadingData = true
+    /// Con -forceSkeleton en los argumentos, el esqueleto se queda a la vista.
+    /// Sin esto dura unas decenas de milisegundos (los spots vienen de cache),
+    /// así que no había forma de revisarlo en el simulador.
+    private var mostrandoEsqueleto: Bool {
+        #if DEBUG
+        isLoadingData || ProcessInfo.processInfo.arguments.contains("-forceSkeleton")
+        #else
+        isLoadingData
+        #endif
+    }
     @State private var loadDataFailed = false
     @State private var loadDataTask: Task<Void, Never>? = nil
     @State private var refreshStateTask: Task<Void, Never>? = nil
@@ -713,7 +723,7 @@ struct InicioView: View {
                 }
 
                 Group {
-                    if isLoadingData {
+                    if mostrandoEsqueleto {
                         // Real components, statically redacted — not a hand-built fake
                         // screen. (Tried .shimmer() on top of the white card surfaces —
                         // its .plusLighter blend mode blew the whole thing out to solid
@@ -735,7 +745,7 @@ struct InicioView: View {
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, isLoadingData || homeComposerHasHeaderRow ? Spacing.md : 0)
+                .padding(.top, mostrandoEsqueleto || homeComposerHasHeaderRow ? Spacing.md : 0)
                 // El composer ocupa el alto libre: dentro, el carrusel es lo
                 // único elástico, así que el sobrante va a la foto y el botón
                 // se queda donde debe.
