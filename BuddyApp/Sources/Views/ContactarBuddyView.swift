@@ -630,6 +630,10 @@ struct CategoryPickerView: View {
     /// Va ANTES de onRequest para que este último siga siendo el parámetro
     /// final y los call sites conserven la trailing closure.
     var onStartConversation: (() -> Void)? = nil
+    /// Sube cada vez que el usuario vuelve a tocar el tab Inicio: es la señal
+    /// de "muéstrame otra cosa". Rehace el orden y salta a la primera
+    /// recomendación de la tanda nueva.
+    var reshuffleToken: Int = 0
     let onRequest: (String, String?) async -> Void
 
     @State private var selected: BuddyCategory? = nil
@@ -1052,67 +1056,35 @@ struct CategoryPickerView: View {
     /// gris genérica — la silueta ya dice "acá van a aparecer fotos".
     private var exploreSkeleton: some View {
         VStack(spacing: 0) {
-            // Las tres cards van en un overlay sobre un área de ancho completo.
-            // Antes el HStack medía 3 cards fijas + espacios, MÁS que la
-            // pantalla: .frame(maxWidth:) no lo impedía, la columna entera del
-            // Home crecía, se centraba y todo quedaba corrido a la izquierda
-            // ("nsulta con un buddy", "UNIDAD VIVA") hasta que llegaban los
-            // datos. Un overlay no aporta tamaño: el peek lateral se recorta.
-            Color.clear
-                .frame(maxWidth: .infinity)
-                .frame(height: exploreCardHeight + exploreVerticalSlack * 2)
-                .overlay {
-            HStack(spacing: exploreCardSpacing) {
-                ForEach(0..<3, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                        .fill(Color.groupedBg)
-                        .frame(width: exploreCardWidth, height: exploreCardHeight)
-                        // Zona de foto con el alto real de la card (crece con
-                        // exploreCardPhotoHeight): así la silueta se lee como
-                        // foto + ficha y no como un bloque liso más grande.
-                        .overlay(alignment: .top) {
-                            UnevenRoundedRectangle(
-                                topLeadingRadius: Radius.md, bottomLeadingRadius: 0,
-                                bottomTrailingRadius: 0, topTrailingRadius: Radius.md,
-                                style: .continuous
-                            )
-                            .fill(Color.border.opacity(0.35))
-                            .frame(height: exploreCardPhoto)
-                        }
-                        .overlay(alignment: .bottom) {
-                            // La banda de la ficha, con sus tres líneas en
-                            // proporción al ancho: con medidas fijas se veían
-                            // diminutas en la card agrandada.
-                            VStack(spacing: 6) {
-                                SkeletonBox(cornerRadius: 2).frame(width: exploreCardWidth * 0.22, height: 6)
-                                SkeletonBox(cornerRadius: 3).frame(width: exploreCardWidth * 0.52, height: 10)
-                                SkeletonBox(cornerRadius: 3).frame(width: exploreCardWidth * 0.64, height: 8)
-                            }
-                            .frame(height: exploreCardHeight - exploreCardPhoto)
-                        }
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                                .strokeBorder(Color.border, lineWidth: 0.5)
-                        )
-                        // La del medio agrandada como la centrada real, para que
-                        // el peek lateral sea el mismo antes y después.
-                        .scaleEffect(index == 1 ? 1 + exploreScaleDelta : 1)
+            // La misma silueta que la tarjeta real: una foto a sangre que toma
+            // el alto libre, con el chip de distancia arriba a la izquierda y
+            // las dos líneas de la ficha abajo. Antes imitaba el carrusel
+            // horizontal —tres tarjetas con recuadro y banda—, así que al
+            // llegar los datos la pantalla cambiaba de forma entera.
+            Rectangle()
+                .fill(Color.groupedBg)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topLeading) {
+                    SkeletonBox(cornerRadius: 50)
+                        .frame(width: 96, height: 18)
+                        .padding(10)
                 }
-            }
-            .fixedSize()
+                .overlay(alignment: .bottomLeading) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        SkeletonBox(cornerRadius: 3).frame(width: 150, height: 15)
+                        SkeletonBox(cornerRadius: 3).frame(width: 210, height: 11)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
                 }
                 .clipped()
-
-            HStack(spacing: 6) {
-                Circle().fill(Color.border).frame(width: 6, height: 6)
-                SkeletonBox(cornerRadius: 3).frame(width: 180, height: 9)
-            }
-            .padding(.top, 12)
+                .layoutPriority(0)
 
             consultCTA
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, 14)
+                .padding(.top, 16)
                 .disabled(true)
+                .layoutPriority(1)
         }
         .redacted(reason: .placeholder)
     }
@@ -1166,7 +1138,11 @@ struct CategoryPickerView: View {
     /// página activa conserva SU foto (el desfase absorbe el cambio), así que
     /// el contexto puede refrescarse sin que la tarjeta salte ni el feed
     /// vuelva a empezar por la primera foto.
-    private func reconstruirFeed() {
+    /// - Parameter manteniendoVisible: al refrescarse solo el contexto (el
+    ///   usuario se movió) la tarjeta a la vista NO puede cambiar; cuando el
+    ///   usuario pide otra tanda tocando el tab, sí: ahí se salta a la primera
+    ///   del orden nuevo, que por la memoria de vistas no es la de recién.
+    private func reconstruirFeed(manteniendoVisible: Bool = true) {
         let nueva = FeedRanking.secuencia(
             porLugar: fotosPorLugar,
             id: { $0.id },
@@ -1178,7 +1154,7 @@ struct CategoryPickerView: View {
             carouselCenterId = nil
             return
         }
-        let actual = carouselCenterId
+        let actual = manteniendoVisible ? carouselCenterId : nil
         feedSecuencia = nueva
         if let actual, let destino = nueva.firstIndex(where: { $0.id == actual }) {
             // page + desfase ≡ destino (mod n)
@@ -1186,8 +1162,13 @@ struct CategoryPickerView: View {
             let pagina = feedPosicion ?? 0
             feedDesfase = ((destino - pagina) % n + n) % n
         } else {
-            feedDesfase = 0
-            carouselCenterId = nueva[feedIndexWrapped((feedPosicion ?? 0) + feedDesfase)].id
+            // La página no se mueve (moverla sería un scroll a la vista); lo
+            // que se corre es el desfase, de modo que esta página pase a ser
+            // la primera del orden nuevo.
+            let n = nueva.count
+            let pagina = feedPosicion ?? 0
+            feedDesfase = ((-pagina) % n + n) % n
+            carouselCenterId = nueva[feedIndexWrapped(pagina + feedDesfase)].id
         }
         // La tarjeta que queda a la vista también cuenta como vista: si no, la
         // primera del feed (que nadie "asienta", ya está ahí) sería la única
@@ -1415,6 +1396,16 @@ struct CategoryPickerView: View {
             // cambia esta firma y el feed ni se entera.
             .onChange(of: feedContexto, initial: true) { _, _ in
                 reconstruirFeed()
+                ImagePrefetcher.prefetch(explorePhotos.prefix(3).map(\.url))
+            }
+            // Volver a tocar el tab Inicio: otra tanda, empezando por lo más
+            // cerca que no se acaba de ver.
+            .onChange(of: reshuffleToken) { _, _ in
+                guard !explorePhotos.isEmpty else { return }
+                Haptic.light()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    reconstruirFeed(manteniendoVisible: false)
+                }
                 ImagePrefetcher.prefetch(explorePhotos.prefix(3).map(\.url))
             }
 

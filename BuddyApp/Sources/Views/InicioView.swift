@@ -69,6 +69,9 @@ struct InicioView: View {
     @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
     @State private var recentHelpLoadedAt: Date? = nil    // throttle de refetch
+    /// Sube con cada re-tap del tab Inicio: el composer lo lee para rehacer el
+    /// orden de las recomendaciones (ver reshuffleToken).
+    @State private var reshuffleToken = 0
     @State private var lastLoadDataAt: Date? = nil
     @State private var lastRefreshTripStateAt: Date? = nil // throttle scenePhase refresh (30s)
     @State private var lastCommunityContextLocation: CLLocation? = nil // gate GPS → resolve
@@ -669,6 +672,7 @@ struct InicioView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
                     guard note.object as? Int == AppTab.inicio.rawValue else { return }
                     if !navPath.isEmpty { navPath = NavigationPath() }
+                    reshuffleToken += 1
                     Task { await loadData(force: true, reason: "tab") }
                 }
         }
@@ -846,7 +850,8 @@ struct InicioView: View {
                     onOpenBuddyChat: openAssignedBuddyChat,
                     onOpenPlace: { navPath.append($0) },
                     isLoading: isFindingBuddy,
-                    onStartConversation: startConversationFromHome
+                    onStartConversation: startConversationFromHome,
+                    reshuffleToken: reshuffleToken
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
                 .padding(.horizontal, -Spacing.edge)
                 .opacity(isFindingBuddy ? 0.5 : 1)
@@ -877,7 +882,8 @@ struct InicioView: View {
                     onOpenBuddyChat: openAssignedBuddyChat,
                     onOpenPlace: { navPath.append($0) },
                     isLoading: isFindingBuddy,
-                    onStartConversation: startConversationFromHome
+                    onStartConversation: startConversationFromHome,
+                    reshuffleToken: reshuffleToken
                 ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
                 .padding(.horizontal, -Spacing.edge)
                 .opacity(isFindingBuddy ? 0.5 : 1)
