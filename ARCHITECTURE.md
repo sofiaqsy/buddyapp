@@ -36,6 +36,43 @@ App launch
 - `APIClient.sharedRefresh` calls `expireSession()` when every refresh path fails.
 - `AuthState.sessionNeedsReauth` presents `IdentitySheet(purpose: .reauth)` from `ContentView`. A successful sign-in calls `hydrate`, which clears `needsReauth`.
 
+## Home feed: three layers, and one hard constraint
+
+The Home feed is decided in `FeedRanking.secuencia` and only *displayed* by the
+vertical pager. The pager never decides what comes next; the ranking layer never
+knows about scrolling. Keep that split.
+
+```
+LAYER 1 — LOCAL CONTEXT     the closest 3 distinct places, one photo each,
+                            in distance order.            HARD CONSTRAINT
+        ↓
+LAYER 2 — LOCAL EXPLORATION other nearby places and photos:
+                            diversity, recency, recently shown.
+        ↓
+LAYER 3 — DISCOVERY         farther places, remaining photos.
+```
+
+Layer 1 answers "what is around me?" before the feed becomes "what else can I
+discover?". It is a product rule, not a scoring preference: no weighted score
+may let a farther place open the feed.
+
+Future signals — popularity, freshness, "recommended by someone you know",
+personalization, seasonality — may reorder **inside layers 2 and 3**. None of
+them may touch layer 1, and none may drop a photo: every photo stays reachable
+exactly once per cycle.
+
+The formal contract (invariants I1–I5, including the two cases where I5 is
+mathematically impossible to satisfy) is written at the top of
+`BuddyApp/Sources/Services/FeedRanking.swift`. `Tools/main.swift` pins it with
+deterministic cases and runs without Xcode or a simulator:
+
+```
+swiftc -O BuddyApp/Sources/Services/FeedRanking.swift Tools/main.swift -o /tmp/feedtests && /tmp/feedtests
+```
+
+Run it before changing anything in the feed. If a change needs an invariant to
+move, change the spec first, deliberately — not as a side effect.
+
 ## Release test (must pass before release candidate)
 
 1. Existing user: sign in, check trips, profile and photos, kill the app, reopen. Everything must still be there.
