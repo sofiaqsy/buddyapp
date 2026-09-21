@@ -1337,14 +1337,12 @@ struct CategoryPickerView: View {
                 // La tarjeta se ajusta al VISOR, no a la pantalla: lo que sobra
                 // en la fila menos la banda de la ficha. Sin porcentajes de
                 // dispositivo ni compensaciones de la tab bar.
-                // Sin banda de ficha, la tarjeta ES la foto: toma todo el
-                // visor y solo la frena el ancho disponible, porque la
-                // proporción 3:4 tiene que respetarse.
-                let photoAlto = exploreFitsScreen
-                    ? min(geo.size.height, geo.size.width * 4 / 3)
-                    : exploreCardPhoto
+                // Sin banda de ficha y sin recuadro, la tarjeta ES la foto y
+                // ocupa el visor entero, de borde a borde. La proporción la
+                // resuelve el recorte de la imagen (scaledToFill), no el marco.
+                let photoAlto = exploreFitsScreen ? geo.size.height : exploreCardPhoto
                 let cardAlto = photoAlto
-                let cardAncho = photoAlto * 3 / 4
+                let cardAncho = exploreFitsScreen ? geo.size.width : photoAlto * 3 / 4
                 // Una tarjeta por gesto. El paso es lo que sea más alto, la
                 // tarjeta o el visor, más el aire que las separa: así la que
                 // entra y la que sale descansan SIEMPRE fuera del visor y no
@@ -1398,6 +1396,7 @@ struct CategoryPickerView: View {
                     feedAsentado(en: nueva)
                 }
                 .environment(\.exploreCardPhotoHeightOverride, photoAlto)
+                .environment(\.exploreCardWidthOverride, cardAncho)
             }
             // Con la Home quieta la fila toma lo que sobra; en el resto de
             // pantallas mide exactamente una tarjeta.
@@ -1851,6 +1850,19 @@ private struct ExploreCardPhotoKey: EnvironmentKey {
     static let defaultValue: CGFloat? = nil
 }
 
+/// El ancho que publica quien coloca la tarjeta. En la Home es el visor
+/// entero; en el resto de pantallas nadie lo publica y manda el 3:4.
+private struct ExploreCardWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    var exploreCardWidthOverride: CGFloat? {
+        get { self[ExploreCardWidthKey.self] }
+        set { self[ExploreCardWidthKey.self] = newValue }
+    }
+}
+
 /// La Home la enciende: su pantalla no se desplaza, así que el carrusel toma
 /// el espacio que sobra y su tarjeta se calcula de ahí. Otras pantallas que
 /// usan este composer siguen con el alto fijo de siempre.
@@ -1904,6 +1916,10 @@ private struct ExploreCarouselCard: View {
     /// del diseño base. El tope de diseño solo aplica si nadie publica alto.
     private var exploreCardPhoto: CGFloat {
         exploreCardPhotoOverride ?? exploreCardPhotoHeight
+    }
+    @Environment(\.exploreCardWidthOverride) private var exploreCardAnchoOverride: CGFloat?
+    private var exploreCardAncho: CGFloat {
+        exploreCardAnchoOverride ?? exploreCardPhoto * 3 / 4
     }
 
     let photo: ExplorePhoto
@@ -2004,7 +2020,7 @@ private struct ExploreCarouselCard: View {
             // vertical, la pasada de tamaño ideal propone "sin ancho": ahí
             // .infinity se resolvía al ancho intrínseco de la foto —enorme— y
             // la imagen se dibujaba fuera de la tarjeta, a pantalla completa.
-            .frame(width: exploreCardPhoto * 3 / 4, height: exploreCardPhoto)
+            .frame(width: exploreCardAncho, height: exploreCardPhoto)
             .clipped()
             .contentShape(Rectangle())
             // Simultáneo: el pellizco (dos dedos) no bloquea el deslizamiento
@@ -2130,15 +2146,9 @@ private struct ExploreCarouselCard: View {
             .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        // Borde en vez de sombra: con la ficha del color de la página, la sombra
-        // era lo único que insinuaba el recipiente y lo hacía por debajo, como
-        // un objeto levantado. Una línea de 0.5 en border lo cierra sin peso —
-        // se ve dónde termina la card sin que parezca apoyada encima.
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                .strokeBorder(Color.border, lineWidth: 0.5)
-        )
+        // Sin esquinas redondeadas ni borde: la foto llega a los bordes y es
+        // ella la que delimita la tarjeta.
+        .clipped()
     }
 }
 
