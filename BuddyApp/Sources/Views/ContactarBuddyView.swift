@@ -638,6 +638,15 @@ struct CategoryPickerView: View {
     /// hasta el touch-up (como se hizo antes) no evitaba ningún error de
     /// índice, solo dejaba el z-order desactualizado durante todo el drag.
     @State private var carouselCenterId: String? = nil
+    /// Índice lógico del feed vertical. Puede crecer o bajar sin límite: lo
+    /// que se dibuja sale de feedIndexWrapped, así que no hay principio ni
+    /// final visible y tampoco un array duplicado.
+    @State private var feedIndex: Int = 0
+    /// Desplazamiento en curso del dedo (y el tramo animado al soltar).
+    @State private var feedDragY: CGFloat = 0
+    /// Mientras una tarjeta termina de entrar, el gesto no acepta otra: sin
+    /// esto dos golpes seguidos dejan el feed a medio camino.
+    @State private var feedAnimando = false
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -1209,6 +1218,73 @@ struct CategoryPickerView: View {
         return -Double(abs(index - centerIndex))
     }
 
+    /// Índice real dentro de explorePhotos para un índice lógico cualquiera.
+    /// El módulo de Swift puede dar negativo, de ahí la vuelta extra.
+    private func feedIndexWrapped(_ i: Int) -> Int {
+        let n = explorePhotos.count
+        guard n > 0 else { return 0 }
+        return ((i % n) + n) % n
+    }
+
+    /// Qué tarjetas se dibujan: la centrada y sus dos vecinas. Con una sola
+    /// recomendación no hay vecinas que traer —ni ciclo que hacer—, y con dos
+    /// la de arriba y la de abajo son la misma, que es justo lo que un feed
+    /// cíclico de dos elementos tiene que mostrar.
+    private var feedSlots: [Int] {
+        explorePhotos.count <= 1 ? [0] : [-1, 0, 1]
+    }
+
+    /// Paginado vertical: un gesto, una recomendación. El arrastre sigue al
+    /// dedo; al soltar, o cruza el umbral y avanza exactamente una, o vuelve a
+    /// su sitio. Nunca queda a medio camino.
+    private func feedGesto(paso: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { valor in
+                guard !feedAnimando, !zoomState.isZooming else { return }
+                // Arrastre dominante horizontal: no es de este feed. La
+                // navegación es solo vertical.
+                guard abs(valor.translation.height) > abs(valor.translation.width) else { return }
+                if explorePhotos.count <= 1 {
+                    // Sin ciclo posible, el arrastre solo "pesa" y vuelve.
+                    feedDragY = valor.translation.height * 0.25
+                } else {
+                    feedDragY = valor.translation.height
+                }
+            }
+            .onEnded { valor in
+                guard !feedAnimando, !zoomState.isZooming else { return }
+                let recorrido = valor.predictedEndTranslation.height
+                // Un quinto de tarjeta o un gesto rápido alcanzan: el umbral
+                // sale del paso, no de un número suelto.
+                let umbral = paso / 5
+                let direccion = explorePhotos.count > 1 && abs(recorrido) > umbral
+                    ? (recorrido < 0 ? 1 : -1)
+                    : 0
+                guard direccion != 0 else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { feedDragY = 0 }
+                    return
+                }
+                feedAnimando = true
+                Haptic.medium()
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    feedDragY = -CGFloat(direccion) * paso
+                }
+                // Al terminar el viaje, la tarjeta que entró pasa a ser la
+                // centrada y el desplazamiento vuelve a cero SIN animación: el
+                // dibujo es idéntico, así que el cambio no se ve.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(360))
+                    var sinAnimacion = Transaction()
+                    sinAnimacion.disablesAnimations = true
+                    withTransaction(sinAnimacion) {
+                        feedIndex += direccion
+                        feedDragY = 0
+                    }
+                    feedAnimando = false
+                }
+            }
+    }
+
     private var exploreCarousel: some View {
         // spacing: 0 con paddings explícitos. Con un spacing uniforme de 14 los
         // tres elementos quedaban equidistantes y el cerebro los leía como
@@ -1217,198 +1293,73 @@ struct CategoryPickerView: View {
         // donde el CTA es el final del recorrido, no un vecino.
         VStack(spacing: 0) {
             GeometryReader { geo in
-                // Las medidas de la tarjeta salen del alto QUE ESTA FILA
-                // RECIBE, en la misma pasada de layout. Sin estado, sin
-                // sondas y sin porcentajes del dispositivo: la fila es el
-                // único elemento elástico del composer (el resto declara
-                // layoutPriority), así que este alto ya es "lo que sobra"
-                // después del título, la disponibilidad y el botón.
-                let _ = dlog("📐 [layout] fila carrusel: ofrecida=\(Int(geo.size.height)) fitsScreen=\(exploreFitsScreen) deseada=\(Int(exploreCardPhoto + 70))")
-                // La tarjeta NO se encoge para caber. Mide siempre lo mismo en
-                // todos los teléfonos; lo que cambia con la pantalla es cuánto
-                // de ella entra en la fila, que es un visor con scroll propio.
-                let photoAlto = exploreCardPhoto
+                // La tarjeta se ajusta al VISOR, no a la pantalla: lo que sobra
+                // en la fila menos la banda de la ficha. Sin porcentajes de
+                // dispositivo ni compensaciones de la tab bar.
+                let fotoQueEntra = max(0, geo.size.height - 70)
+                let photoAlto = exploreFitsScreen
+                    ? min(exploreCardPhoto, fotoQueEntra)
+                    : exploreCardPhoto
                 let cardAlto = photoAlto + 70
                 let cardAncho = photoAlto * 3 / 4
-                let slack = cardAlto * exploreScaleDelta / 2 + 8
-                // El padding horizontal de abajo depende de geo.size.width, que
-                // en la PRIMERA pasada del GeometryReader es 0 → el padding se
-                // calcula negativo y el ScrollView nace con un layout inválido.
-                // Ahí es donde defaultScrollAnchor/scrollPosition deciden el
-                // offset inicial; cuando el ancho real llega el padding se
-                // corrige pero el offset ya quedó fijo y nadie lo recalcula,
-                // dejando el scroll pegado al inicio con la card 0 en el medio
-                // (el estado, en cambio, decía centro=1 — de ahí el solape).
-                // Construir el ScrollView recién con ancho real hace que su
-                // primer layout ya sea el definitivo.
-                if geo.size.width > 0 {
-                    // ScrollViewReader porque escribir el binding de
-                    // scrollPosition NO desplaza el scroll: al tocar una card
-                    // lateral el estado cambiaba (el zIndex la traía adelante)
-                    // pero la card no crecía, porque el scaleEffect depende de
-                    // la posición real y esa no se movía. scrollTo(_:anchor:)
-                    // es la API que efectivamente scrollea; scrollPosition
-                    // queda solo como LECTURA de dónde está el scroll.
-                    ScrollViewReader { proxy in
-                    // Dos ejes en UN scroll: el horizontal es el carrusel de
-                    // siempre y el vertical solo existe cuando la tarjeta no
-                    // entra entera en la fila — entonces se desplaza DENTRO de
-                    // la fila en vez de achicarse. Anidar un ScrollView
-                    // vertical alrededor no sirve: en la pasada de tamaño ideal
-                    // la foto pierde su ancho y la tarjeta se dibuja a pantalla
-                    // completa.
-                    ScrollView(exploreFitsScreen ? [.horizontal, .vertical] : [.horizontal], showsIndicators: false) {
-                    HStack(spacing: exploreCardSpacing) {
-                        ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
-                            ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
-                                .frame(width: cardAncho, height: cardAlto)
-                                // visualEffect es el único lector de geometría acá a
-                                // propósito: es render-only y no dispara re-render de
-                                // @State, a diferencia de un GeometryReader+PreferenceKey
-                                // (que sí lo hace, y en pleno drag rompía el gesto — ver
-                                // nota en exploreZIndex).
-                                .visualEffect { content, proxy in
-                                    let cardMidX = proxy.frame(in: .named("explore")).midX
-                                    let viewportCenter = geo.size.width / 2
-                                    let distance = abs(cardMidX - viewportCenter)
-                                    // Normalizado por el PASO real (ancho + separación)
-                                    // y no por un 160 fijo: con las cards más grandes
-                                    // el 160 se agotaba antes de que llegara la vecina,
-                                    // así que la card se quedaba plana un tramo y el
-                                    // cambio salía de golpe al final.
-                                    let step = cardAncho + exploreCardSpacing
-                                    let normalized = min(distance / step, 1)
-                                    // Curva suave (smoothstep) en vez de recta: entra y
-                                    // sale despacio, que es lo que hace que el paso de
-                                    // una foto a otra no se sienta mecánico.
-                                    let eased = normalized * normalized * (3 - 2 * normalized)
-                                    let scale = 1.0 + (1 - eased) * exploreScaleDelta
-                                    return content.scaleEffect(scale)
-                                }
-                                .zIndex(exploreZIndex(for: photo, index: index))
-                                // Tocar una card lateral la trae al centro, para
-                                // no obligar a arrastrar de a una. El binding de
-                                // scrollPosition es bidireccional: escribirlo
-                                // hace scroll al item. Solo actúa sobre las que
-                                // NO están centradas, así el tap sobre la del
-                                // medio queda libre para su acción propia.
-                                .onTapGesture {
-                                    // La card centrada ya no necesita centrarse:
-                                    // su tap es el que abre el lugar en el mapa.
-                                    guard photo.id != carouselCenterId else {
-                                        Haptic.medium()
-                                        onOpenPlace?(photo.place)
-                                        return
-                                    }
-                                    // Ambas cosas en la MISMA transacción. Con la
-                                    // escritura de estado afuera, el re-render
-                                    // que dispara cancelaba la animación del
-                                    // scroll recién arrancada: los logs de
-                                    // posición mostraban midX saltando 371→201
-                                    // en un frame, sin valores intermedios,
-                                    // mientras que arrastrando con el dedo daba
-                                    // decenas. Por eso cambiar la curva de
-                                    // animación no hacía ninguna diferencia.
-                                    //
-                                    // carouselCenterId se escribe acá porque
-                                    // scrollTo mueve el scroll pero NO actualiza
-                                    // el binding de scrollPosition; sin esto el
-                                    // zIndex seguía adelantando la card anterior.
-                                    withAnimation(.spring(response: 0.55, dampingFraction: 0.78)) {
-                                        proxy.scrollTo(photo.id, anchor: .center)
-                                        carouselCenterId = photo.id
-                                    }
-                                }
-                        }
+                // Una tarjeta por gesto. El paso es lo que sea más alto, la
+                // tarjeta o el visor, más el aire que las separa: así la que
+                // entra y la que sale descansan SIEMPRE fuera del visor y no
+                // asoma ningún borde arriba ni abajo en pantallas grandes.
+                let paso = max(cardAlto, geo.size.height) + exploreCardSpacing
+
+                ZStack {
+                    ForEach(feedSlots, id: \.self) { slot in
+                        let photo = explorePhotos[feedIndexWrapped(feedIndex + slot)]
+                        ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
+                            .frame(width: cardAncho, height: cardAlto)
+                            .offset(y: CGFloat(slot) * paso + feedDragY)
+                            // Solo la centrada abre el lugar: las vecinas están
+                            // a medio entrar y un toque ahí sería un accidente.
+                            .onTapGesture {
+                                guard slot == 0 else { return }
+                                Haptic.medium()
+                                onOpenPlace?(photo.place)
+                            }
+                            .allowsHitTesting(slot == 0)
                     }
-                    // scrollTargetLayout debe quedar SIN envolver. Antes tenía
-                    // dos .padding() aplicados después, que lo metían dentro de
-                    // otros contenedores: el ScrollView dejaba de ver este
-                    // layout como su contenido directo de targets. Leer seguía
-                    // andando (reporta los ids del ForEach) pero resolver "a
-                    // qué offset corresponde este id" no, y por eso NINGUNA
-                    // API programática scrolleaba — ni scrollTo ni escribir
-                    // scrollPosition — mientras el arrastre con el dedo sí.
-                    // El inset lateral ahora va por contentMargins, que no
-                    // envuelve nada.
-                    .scrollTargetLayout()
                 }
-                .scrollDisabled(zoomState.isZooming)
-                .contentMargins(.horizontal, (geo.size.width - cardAncho) / 2, for: .scrollContent)
-                .contentMargins(.vertical, slack, for: .scrollContent)
-                // Las dos fotos de cada tarjeta (la de la ficha y la del fondo
-                // desenfocado) tienen que medir lo mismo que la tarjeta.
+                .frame(width: geo.size.width, height: geo.size.height)
+                // El gesto vive en toda la fila (no solo sobre la tarjeta) para
+                // que un arrastre que empieza al costado también pagine.
+                .contentShape(Rectangle())
+                .gesture(feedGesto(paso: paso))
                 .environment(\.exploreCardPhotoHeightOverride, photoAlto)
-                .coordinateSpace(name: "explore")
-                // limitBehavior: .never deja que la velocidad del swipe
-                // decida (permite avanzar más de una card en un flick fuerte
-                // en vez de restringir siempre a una), lo que hace el snap
-                // menos "pegajoso" para gestos cortos.
-                .scrollTargetBehavior(.viewAligned(limitBehavior: .never))
-                // anchor: .center es obligatorio acá. Sin él, scrollPosition
-                // reporta el item alineado por su borde LEADING, no el
-                // centrado — o sea el vecino de la izquierda del que se ve en
-                // el medio. Eso desfasaba en uno el zIndex (poniendo adelante
-                // justo a la card de la izquierda), los dots y el CTA.
-                // defaultScrollAnchor(.center) no cubre esto: solo fija dónde
-                // arranca el scroll, no cómo se resuelve este binding.
-                .scrollPosition(id: $carouselCenterId, anchor: .center)
-                // Sin rebote cuando el contenido ya entra: en pantallas
-                // grandes la fila se siente tan fija como el resto de la Home.
-                .scrollBounceBehavior(.basedOnSize)
-                // Sin defaultScrollAnchor a propósito: el offset 0 ya deja la
-                // card 0 centrada gracias al padding simétrico, así que no hay
-                // nada que forzar. Cualquier anchor acá solo podría discrepar
-                // con el centro inicial que fija el onChange de abajo.
-                }
-                }
             }
-            // Con la Home sin scroll la fila toma el espacio sobrante y la
-            // tarjeta se calcula de ahí; en el resto de pantallas coincide
-            // exactamente con su contenido (card + el slack de arriba y abajo).
-            // Sin scroll, la fila es lo único que se comprime: toma lo que
-            // sobra y su mínimo es el de una tarjeta chica. Con scroll (otras
-            // pantallas) mantiene el alto exacto de su contenido.
-            .frame(
-                height: exploreFitsScreen ? nil : exploreCardHeight + exploreVerticalSlack * 2,
-                alignment: .center,
-            )
+            // Con la Home quieta la fila toma lo que sobra; en el resto de
+            // pantallas mide exactamente una tarjeta.
+            .frame(height: exploreFitsScreen ? nil : exploreCardHeight, alignment: .center)
             .frame(maxHeight: exploreFitsScreen ? .infinity : nil)
-            // Nada de la fila se dibuja fuera de ella: con texto grande, las
-            // tarjetas se salían por abajo y tapaban el texto y el botón.
+            // La tarjeta que entra y la que sale nacen y mueren fuera del visor:
+            // nada se dibuja sobre el título ni sobre el botón.
             .clipped()
             .layoutPriority(0)
-            // Las cards leen el mismo alto resuelto por el entorno: la foto del
-            // fondo desenfocado y la de la ficha tienen que medir igual.
             .environment(\.exploreCardPhotoHeightOverride, exploreCardPhoto)
-            // initial: true corre en la misma pasada de update que el primer
-            // layout, así que el ScrollView ya arranca posicionado acá y el
-            // zIndex/dots coinciden con la geometría desde el frame uno.
-            // Antes esto era un .task con sleep(100ms) que ADIVINABA que la
-            // centrada era la [1]: llegaba después del primer layout, no
-            // siempre arrastraba el scroll, y dejaba una ventana en la que el
-            // estado decía "centro = 1" mientras el scroll seguía al inicio —
-            // por eso la segunda foto se dibujaba encima al cargar.
-            // Fijar el id explícitamente también hace innecesario
-            // defaultScrollAnchor(.center): dos mecanismos definiendo la
-            // posición inicial solo pueden discrepar.
+            // Quién está al frente, para el resto de la pantalla (el CTA lee el
+            // lugar centrado). initial: true lo deja resuelto desde el primer
+            // layout, sin una ventana en la que nadie es el centro.
             .onChange(of: explorePhotos.map(\.id), initial: true) { _, ids in
                 guard !ids.isEmpty else {
                     carouselCenterId = nil
                     return
                 }
-                // Solo (re)centrar si el id actual ya no existe en la tanda
-                // nueva — si no, un refresh del feed movería el carrusel bajo
-                // el dedo del usuario.
-                guard carouselCenterId == nil || !ids.contains(carouselCenterId!) else { return }
-                // La PRIMERA, no la del medio. Con padding simétrico
-                // (width - cardWidth)/2, en offset 0 el centro de la card 0
-                // cae justo en el centro del viewport (121 + 80 = 201 = 402/2),
-                // así que ese es el estado natural de reposo del scroll.
-                // Insistir en centrar la del medio obligaba a mover el scroll
-                // con mecanismos que no se aplicaban a tiempo, y mientras tanto
-                // el zIndex adelantaba una card que no era la centrada.
-                carouselCenterId = ids[0]
+                // Un refresco del feed no puede mover la tarjeta bajo el dedo:
+                // solo se recentra si la que estaba ya no existe.
+                if let actual = carouselCenterId, let i = ids.firstIndex(of: actual) {
+                    feedIndex = i
+                } else {
+                    feedIndex = 0
+                    carouselCenterId = ids[0]
+                }
+            }
+            .onChange(of: feedIndex) { _, nuevo in
+                guard !explorePhotos.isEmpty else { return }
+                carouselCenterId = explorePhotos[feedIndexWrapped(nuevo)].id
             }
 
             // Sin dots: contaban un total fijo, y el carrusel crece a medida que
