@@ -836,7 +836,11 @@ struct CategoryPickerView: View {
                 }
             }
             .padding(.horizontal, Spacing.edge)
-            .padding(.top, Spacing.md)
+            // Con el carrusel (la Home) el logo de la barra queda justo encima:
+            // los 16 de siempre sumados al aire propio de la barra abrían un
+            // hueco que separaba el logo del título en vez de agruparlos. En el
+            // resto de pantallas el bloque sigue con su respiro habitual.
+            .padding(.top, showsExploreCarousel ? Spacing.xs : Spacing.md)
             .padding(.bottom, Spacing.lg / 2)
             .layoutPriority(1)
 
