@@ -2341,24 +2341,33 @@ struct PlaceGuideMapSheet: View {
     let lat: Double?
     let lng: Double?
 
-    init(destinationId: String?, focusPlaceId: String? = nil, name: String, lat: Double? = nil, lng: Double? = nil) {
+    /// La X sobre el contenido es SOLO para cuando esto se abre como hoja. Los
+    /// tres sitios que lo usan hoy lo empujan en el NavigationStack, donde el
+    /// sistema ya pone "Back", así que por defecto no se dibuja.
+    ///
+    /// Se decide por parámetro y no por el entorno: \.isPresented también es
+    /// true en una vista EMPUJADA, así que no distingue los dos casos —ese
+    /// intento dejó la X exactamente donde estaba.
+    let muestraCerrar: Bool
+
+    init(destinationId: String?, focusPlaceId: String? = nil, name: String, lat: Double? = nil, lng: Double? = nil, muestraCerrar: Bool = false) {
         self.destinationId = destinationId
         self.focusPlaceId  = focusPlaceId
         self.name          = name
         self.lat           = lat
         self.lng           = lng
+        self.muestraCerrar = muestraCerrar
     }
 
-    init(place: APIPlaceCard) {
+    init(place: APIPlaceCard, muestraCerrar: Bool = false) {
         self.init(destinationId: place.destinationId, focusPlaceId: place.id,
-                  name: place.name, lat: place.lat, lng: place.lng)
+                  name: place.name, lat: place.lat, lng: place.lng,
+                  muestraCerrar: muestraCerrar)
     }
 
     @StateObject private var routeStore = RouteStore()
     @State private var loadState: MapLoadState = .loading
     @Environment(\.dismiss) private var dismiss
-    /// true solo si esta vista llegó como hoja (o cover), no empujada.
-    @Environment(\.isPresented) private var estaPresentado
 
     var body: some View {
         Group {
@@ -2392,14 +2401,8 @@ struct PlaceGuideMapSheet: View {
         }
     }
 
-    /// La X es de cuando esto se abría COMO HOJA. Hoy los tres sitios que lo
-    /// usan lo empujan en el NavigationStack, donde el sistema ya pone "Back":
-    /// la X aparecía flotando el segundo que dura la carga y desaparecía sola
-    /// al llegar el mapa (TripDetailView trae su propio chevron). Se dibuja
-    /// solo si de verdad hay una presentación que cerrar, así que el día que
-    /// vuelva a abrirse como hoja sigue estando.
     @ViewBuilder private var closeButton: some View {
-        if estaPresentado {
+        if muestraCerrar {
         Button { dismiss() } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 14, weight: .bold))
