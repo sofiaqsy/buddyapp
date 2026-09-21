@@ -2012,6 +2012,16 @@ private struct ExploreCarouselCard: View {
         return d < 2000 ? etiqueta : "Distancia \(etiqueta)"
     }
 
+    /// Lo que VoiceOver lee: lo mismo que se ve, en el orden en que se mira.
+    private var etiquetaAccesible: String {
+        var partes = [place.name]
+        if let category = place.category, !category.isEmpty { partes.append(category.capitalized) }
+        if let author = authorFirstName { partes.append("Recomendado por \(author)") }
+        else { partes.append("Recomendado por la comunidad") }
+        if let d = etiquetaDistancia { partes.append(d) }
+        return partes.joined(separator: ", ")
+    }
+
     private func recompute() {
         let nueva = DistanceResolver.distance(from: locationService.stableLocation, to: place)
             ?? place.distanceMeters.map(Double.init)
@@ -2106,7 +2116,7 @@ private struct ExploreCarouselCard: View {
             .onChange(of: etiquetaDistancia) { viejo, nuevo in
                 // Solo cuando el valor cambia de verdad, no en la primera pintura.
                 guard viejo != nil, nuevo != nil, viejo != nuevo else { return }
-                print("📏 [distancia] \(place.name): \(viejo ?? "-") → \(nuevo ?? "-")")
+                dlog("📏 [distancia] \(place.name): \(viejo ?? "-") → \(nuevo ?? "-")")
                 pulsando = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { pulsando = false }
             }
@@ -2181,6 +2191,12 @@ private struct ExploreCarouselCard: View {
         // Sin esquinas redondeadas ni borde: la foto llega a los bordes y es
         // ella la que delimita la tarjeta.
         .clipped()
+        // Para VoiceOver la tarjeta es UNA cosa: el nombre, qué tipo de lugar
+        // es, quién lo recomienda y a qué distancia. Sin esto se leía como una
+        // imagen sin descripción y tres textos sueltos sobre ella.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(etiquetaAccesible)
+        .accessibilityHint("Toca para ver el lugar. Desliza hacia arriba para la siguiente recomendación.")
     }
 }
 
