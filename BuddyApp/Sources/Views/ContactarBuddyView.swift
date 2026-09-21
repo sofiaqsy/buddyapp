@@ -133,6 +133,7 @@ struct ContactarBuddyView: View {
                 case .composing, .searching:
                     PendingConversationView(
                         destinationName: resolvedDestinationName,
+                        buddyCount: buddyCount,
                         items: pendingItems,
                         chosenCategory: pendingCategoryKey,
                         onPickCategory: { key in Task { await handleRequest(category: key, description: nil) } },
@@ -1424,27 +1425,10 @@ struct CategoryPickerView: View {
             // el usuario sigue arrastrando y aparecen más se contradice solo.
             // El peek lateral ya avisa que hay más, y sin depender de cuántos.
 
-            // El puente: encadena lo que se ve (lugares) con quién lo conoce y
-            // con la acción. Antes vivía arriba del carrusel, donde era un dato
-            // suelto que no explicaba nada de las fotos.
-            if activeBuddyName == nil {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(noBuddies ? Color.sand : Color.onlineGreen)
-                        .frame(width: 6, height: 6)
-                    Text(exploreAvailabilityText)
-                        .font(BT.footnote)
-                        .foregroundStyle(Color.ink)
-                }
-                // Centrada bajo la tarjeta del medio: se lee como el estado de la
-                // comunidad, no como una nota al pie alineada a la izquierda.
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 12)
-                .redacted(reason: isSkeleton ? .placeholder : [])
-                // Prioridad 1: se dimensiona ANTES que la fila del carrusel,
-                // que es prioridad 0 y absorbe lo que quede.
-                .layoutPriority(1)
-            }
+            // La disponibilidad ya no vive acá. En el Home era un dato suelto
+            // entre las fotos y el botón; donde de verdad importa es al abrir
+            // la consulta, que es cuando el usuario quiere saber si hay alguien
+            // al otro lado (ver PendingConversationView).
 
             // Sin acción todavía — se conecta cuando el flujo de "consultar
             // sobre este lugar" quede definido. Dice la CIUDAD del contexto, no
@@ -1589,6 +1573,9 @@ struct CategoryCardBubble: View {
 /// la conversación, que es donde ocurren las cosas.
 private struct PendingConversationView: View {
     let destinationName: String?
+    /// Cuántos buddies cubren la zona. Se dice acá, al abrir la consulta, que
+    /// es cuando el usuario quiere saber si hay alguien al otro lado.
+    var buddyCount: Int = 0
     let items: [ChatItem]
     /// nil mientras el usuario todavía no eligió tema — entonces el composer se
     /// reemplaza por las categorías.
@@ -1611,6 +1598,7 @@ private struct PendingConversationView: View {
             // rol de cada uno. Acá anticipa lo que va a pasar, que es lo que el
             // usuario necesita saber en este punto.
             banner
+            disponibilidad
 
             if chosenCategory == nil {
                 // El selector va al CENTRO del chat, no anclado abajo. Como
@@ -1628,6 +1616,33 @@ private struct PendingConversationView: View {
             statusBar
         }
         .background(Color.canvas)
+    }
+
+    /// El mismo dato que antes estaba en el Home, con el mismo punto de color:
+    /// verde si hay alguien que cubra la zona, arena si todavía se está
+    /// buscando. "Ayudan en esta zona" y no "cerca de ti": el conteo es por
+    /// COBERTURA del punto, no por distancia al buddy.
+    private var textoDisponibilidad: String {
+        guard buddyCount > 0 else { return "Buscando buddies que ayuden en esta zona" }
+        return buddyCount == 1
+            ? "1 buddy ayuda en esta zona"
+            : "\(buddyCount) buddies ayudan en esta zona"
+    }
+
+    private var disponibilidad: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(buddyCount > 0 ? Color.onlineGreen : Color.sand)
+                .frame(width: 6, height: 6)
+            Text(textoDisponibilidad)
+                .font(BT.footnote)
+                .foregroundStyle(Color.ink)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Spacing.edge)
+        .padding(.vertical, 10)
+        .background(Color.canvas)
+        .overlay(alignment: .bottom) { Divider().opacity(0.5) }
     }
 
     private var banner: some View {
