@@ -652,6 +652,7 @@ struct CategoryPickerView: View {
     /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
     /// cuando el orden cambia debajo.
     @State private var feedDesfase: Int = 0
+    @State private var feedVentana: [Int] = [0]
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -1168,6 +1169,8 @@ struct CategoryPickerView: View {
         }
         let actual = manteniendoVisible ? carouselCenterId : nil
         feedSecuencia = nueva
+        let ventana = nueva.count <= 1 ? Self.ventanaUnica : Self.ventanaCompleta
+        if feedVentana.count != ventana.count { feedVentana = ventana }
         if let actual, let destino = nueva.firstIndex(where: { $0.id == actual }) {
             // page + desfase ≡ destino (mod n)
             let n = nueva.count
@@ -1285,18 +1288,35 @@ struct CategoryPickerView: View {
     /// lugar que se estaba mirando). Las páginas son perezosas y su id es un
     /// entero, así que tener mil no cuesta nada: solo se construyen las que se
     /// ven, y las fotos salen del módulo, sin duplicar datos.
-    private static let feedRadio = 120
+    /// Al arrancar, el layout recorre las páginas desde el borde de la ventana
+    /// hasta la activa, así que el radio se paga en el primer frame. 60 son
+    /// varias vueltas enteras al catálogo en cada sentido y cuesta la mitad
+    /// que 120.
+    private static let feedRadio = 60
 
-    /// Las páginas que existen. Con una sola recomendación no hay ciclo.
-    private var feedVentana: [Int] {
-        explorePhotos.count <= 1 ? [0] : Array(-Self.feedRadio...Self.feedRadio)
-    }
+    /// Las páginas que existen. Es ESTADO y no una propiedad calculada: como
+    /// propiedad se construía un array de 241 enteros en CADA pasada de body
+    /// —incluidas todas las del gesto— y el ForEach volvía a compararlos. Solo
+    /// cambia cuando pasa a haber una sola recomendación, o más de una.
+    private static let ventanaCompleta: [Int] = Array(-feedRadio...feedRadio)
+    private static let ventanaUnica: [Int] = [0]
 
     /// La foto que le toca a una página lógica, o nil si todavía no hay
     /// secuencia (el primer layout puede adelantarse al ranking).
     private func feedFoto(en pagina: Int) -> ExplorePhoto? {
         guard !explorePhotos.isEmpty else { return nil }
         return explorePhotos[feedIndexWrapped(pagina + feedDesfase)]
+    }
+
+    /// Las fotos de al lado de la activa, ARRIBA y ABAJO. Solo se precargaba
+    /// hacia adelante, así que el primer gesto hacia abajo tenía que leer del
+    /// disco con el dedo en la pantalla y se sentía lento.
+    private func precargarVecinas() {
+        guard !explorePhotos.isEmpty else { return }
+        let pagina = feedPosicion ?? 0
+        ImagePrefetcher.prefetch([0, 1, -1, 2, -2].map {
+            explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)].url
+        })
     }
 
     /// Al asentarse en una recomendación: se fija la activa, se recentra la
@@ -1313,10 +1333,9 @@ struct CategoryPickerView: View {
         // Solo lo que el usuario vio DE VERDAD (página asentada) cuenta como
         // visto; cruzar el visor no basta.
         FeedMemoria.shared.registrar(fotoId: foto.id)
-        ImagePrefetcher.prefetch([
-            explorePhotos[feedIndexWrapped(pagina + feedDesfase + 1)].url,
-            explorePhotos[feedIndexWrapped(pagina + feedDesfase - 1)].url,
-        ])
+        ImagePrefetcher.prefetch([1, -1, 2, -2].map {
+            explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)].url
+        })
     }
 
     private var exploreCarousel: some View {
@@ -1408,7 +1427,7 @@ struct CategoryPickerView: View {
             // cambia esta firma y el feed ni se entera.
             .onChange(of: feedContexto, initial: true) { _, _ in
                 reconstruirFeed()
-                ImagePrefetcher.prefetch(explorePhotos.prefix(3).map(\.url))
+                precargarVecinas()
             }
             // Volver a tocar el tab Inicio: otra tanda, empezando por lo más
             // cerca que no se acaba de ver.
@@ -1418,7 +1437,7 @@ struct CategoryPickerView: View {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     reconstruirFeed(manteniendoVisible: false)
                 }
-                ImagePrefetcher.prefetch(explorePhotos.prefix(3).map(\.url))
+                precargarVecinas()
             }
 
             // Sin dots: contaban un total fijo, y el carrusel crece a medida que
