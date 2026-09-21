@@ -1224,9 +1224,10 @@ struct CategoryPickerView: View {
                 // layoutPriority), así que este alto ya es "lo que sobra"
                 // después del título, la disponibilidad y el botón.
                 let _ = dlog("📐 [layout] fila carrusel: ofrecida=\(Int(geo.size.height)) fitsScreen=\(exploreFitsScreen) deseada=\(Int(exploreCardPhoto + 70))")
-                let photoAlto = exploreFitsScreen
-                    ? min(exploreCardPhoto, exploreCardPhotoThatFits(inRow: geo.size.height))
-                    : exploreCardPhoto
+                // La tarjeta NO se encoge para caber. Mide siempre lo mismo en
+                // todos los teléfonos; lo que cambia con la pantalla es cuánto
+                // de ella entra en la fila, que es un visor con scroll propio.
+                let photoAlto = exploreCardPhoto
                 let cardAlto = photoAlto + 70
                 let cardAncho = photoAlto * 3 / 4
                 let slack = cardAlto * exploreScaleDelta / 2 + 8
@@ -1249,7 +1250,14 @@ struct CategoryPickerView: View {
                     // es la API que efectivamente scrollea; scrollPosition
                     // queda solo como LECTURA de dónde está el scroll.
                     ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    // Dos ejes en UN scroll: el horizontal es el carrusel de
+                    // siempre y el vertical solo existe cuando la tarjeta no
+                    // entra entera en la fila — entonces se desplaza DENTRO de
+                    // la fila en vez de achicarse. Anidar un ScrollView
+                    // vertical alrededor no sirve: en la pasada de tamaño ideal
+                    // la foto pierde su ancho y la tarjeta se dibuja a pantalla
+                    // completa.
+                    ScrollView(exploreFitsScreen ? [.horizontal, .vertical] : [.horizontal], showsIndicators: false) {
                     HStack(spacing: exploreCardSpacing) {
                         ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
                             ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
@@ -1345,6 +1353,9 @@ struct CategoryPickerView: View {
                 // defaultScrollAnchor(.center) no cubre esto: solo fija dónde
                 // arranca el scroll, no cómo se resuelve este binding.
                 .scrollPosition(id: $carouselCenterId, anchor: .center)
+                // Sin rebote cuando el contenido ya entra: en pantallas
+                // grandes la fila se siente tan fija como el resto de la Home.
+                .scrollBounceBehavior(.basedOnSize)
                 // Sin defaultScrollAnchor a propósito: el offset 0 ya deja la
                 // card 0 centrada gracias al padding simétrico, así que no hay
                 // nada que forzar. Cualquier anchor acá solo podría discrepar
@@ -1960,8 +1971,12 @@ private struct ExploreCarouselCard: View {
                 Rectangle().fill(Color.sandLight)
             }
             .scaleEffect(zoom, anchor: zoomAnchor)
-            .frame(maxWidth: .infinity)
-            .frame(height: exploreCardPhoto)
+            // Ancho EXPLÍCITO (la misma proporción 3:4 que usa el carrusel) y
+            // no maxWidth: .infinity. Cuando el scroll del carrusel tiene eje
+            // vertical, la pasada de tamaño ideal propone "sin ancho": ahí
+            // .infinity se resolvía al ancho intrínseco de la foto —enorme— y
+            // la imagen se dibujaba fuera de la tarjeta, a pantalla completa.
+            .frame(width: exploreCardPhoto * 3 / 4, height: exploreCardPhoto)
             .clipped()
             .contentShape(Rectangle())
             // Simultáneo: el pellizco (dos dedos) no bloquea el deslizamiento
