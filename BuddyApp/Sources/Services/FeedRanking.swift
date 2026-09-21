@@ -27,17 +27,56 @@ enum FeedRanking {
         lugar: (Foto) -> String,
         recientes: Set<String>,
     ) -> [Foto] {
-        let rondas = porLugar.map(\.count).max() ?? 0
-        var salida: [Foto] = []
+        let conFotos = porLugar.filter { !$0.isEmpty }
+        guard !conFotos.isEmpty else { return [] }
+
+        // CAPA PROTEGIDA: las primeras páginas son los lugares MÁS CERCANOS
+        // disponibles, uno cada uno, en orden de cercanía. Es una regla de
+        // producto, no una preferencia de puntaje: el arranque del feed tiene
+        // que decir "esto es lo que hay alrededor tuyo", y ningún otro
+        // criterio —ni la variedad ni lo que ya se vio— puede colar antes un
+        // lugar más lejano. "Más cercano disponible" no significa "cerca": si
+        // los tres primeros están a 3, 4 y 5 km, siguen siendo los tres
+        // primeros, pero el feed no afirma que estén cerca.
+        let protegidas = conFotos.prefix(protegidos).map { $0[0] }
+
+        // El resto: todas las fotos menos las ya usadas, repartidas por rondas
+        // (la ronda k lleva la k-ésima foto de cada lugar, en orden de
+        // cercanía). Así ningún sitio acapara por tener muchas fotos y no se
+        // descarta ninguna. Acá sí pesa lo ya visto, como empujón.
+        let usadas = Set(protegidas.map(id))
+        let rondas = conFotos.map(\.count).max() ?? 0
+        var cola: [Foto] = []
         for k in 0..<rondas {
-            let ronda = porLugar.compactMap { $0.count > k ? $0[k] : nil }
+            // Las rondas van por el índice ORIGINAL de la foto dentro de su
+            // lugar, no por su posición tras sacar las protegidas. Si no, la
+            // PRIMERA foto de un lugar que aún no salió (D1) quedaba detrás de
+            // la SEGUNDA de uno que ya salió (A2), y un sitio igual de cerca
+            // aparecía recién en la séptima página.
+            let ronda = conFotos.compactMap { fotos -> Foto? in
+                guard fotos.count > k, !usadas.contains(id(fotos[k])) else { return nil }
+                return fotos[k]
+            }
             // Partición estable: lo no visto conserva su orden de cercanía y lo
             // visto lo sigue, también en orden de cercanía.
-            salida += ronda.filter { !recientes.contains(id($0)) }
-            salida += ronda.filter { recientes.contains(id($0)) }
+            cola += ronda.filter { !recientes.contains(id($0)) }
+            cola += ronda.filter { recientes.contains(id($0)) }
         }
-        return separandoLugaresIguales(salida, lugar: lugar)
+
+        // La reparación de vecinos iguales no puede tocar la capa protegida:
+        // solo reordena de ahí en adelante (y la costura con la protegida).
+        return Array(protegidas) + separandoLugaresIguales(
+            cola,
+            lugar: lugar,
+            anterior: protegidas.last.map(lugar),
+            primeraDelCiclo: protegidas.first.map(lugar),
+        )
     }
+
+    /// Cuántas páginas protege la capa de cercanía. Tres porque es lo que se
+    /// alcanza a ver en los primeros gestos: con menos lugares disponibles se
+    /// protegen los que haya.
+    private static let protegidos = 3
 
     /// Arregla el único punto donde las rondas pueden dejar dos fotos del mismo
     /// lugar juntas: la costura entre el final de una ronda y el principio de
@@ -48,24 +87,34 @@ enum FeedRanking {
     private static func separandoLugaresIguales<Foto>(
         _ fotos: [Foto],
         lugar: (Foto) -> String,
+        anterior: String? = nil,
+        primeraDelCiclo: String? = nil,
     ) -> [Foto] {
         guard fotos.count > 2 else { return fotos }
         var salida = fotos
+        // La costura con la capa protegida cuenta como un vecino más: el
+        // último lugar protegido no puede repetirse en la primera de la cola.
+        if let anterior, lugar(salida[0]) == anterior,
+           let j = (1..<salida.count).first(where: { lugar(salida[$0]) != anterior }) {
+            let movida = salida.remove(at: j)
+            salida.insert(movida, at: 0)
+        }
         for i in 1..<salida.count where lugar(salida[i]) == lugar(salida[i - 1]) {
-            // El primero que venga después y sea de otro lugar (y que tampoco
-            // choque con el que quedaría detrás) se adelanta a esta posición.
+            // El primero que venga después y sea de otro lugar se adelanta a
+            // esta posición.
             guard let j = (i + 1..<salida.count).first(where: {
                 lugar(salida[$0]) != lugar(salida[i - 1])
             }) else { continue }
             let movida = salida.remove(at: j)
             salida.insert(movida, at: i)
         }
-        // Costura del ciclo: si la última y la primera son del mismo lugar, la
-        // última se cambia por la anterior de otro lugar.
-        if let ultima = salida.last, let primera = salida.first,
-           lugar(ultima) == lugar(primera), salida.count > 2,
+        // Costura del ciclo: la última se compara con la PRIMERA de todo el
+        // feed, que con capa protegida no es la primera de esta cola.
+        let primera = primeraDelCiclo ?? salida.first.map(lugar)
+        if let ultima = salida.last, let primera,
+           lugar(ultima) == primera, salida.count > 2,
            let j = salida.indices.reversed().dropFirst().first(where: {
-               lugar(salida[$0]) != lugar(primera)
+               lugar(salida[$0]) != primera
            }) {
             salida.swapAt(j, salida.count - 1)
         }
