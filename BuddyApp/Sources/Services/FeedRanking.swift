@@ -9,6 +9,71 @@ import Foundation
 // más lejano y stableOrder los reafina en cubos de 10 m). Lo que falta acá es
 // repartir las FOTOS: aplanar lugar por lugar ponía las tres fotos de "El
 // encanto" en las tres primeras páginas, y el feed parecía un solo sitio.
+//
+//
+// ESPECIFICACIÓN
+//
+// Esto es el contrato de secuencia(porLugar:id:lugar:recientes:). Está escrito
+// como invariantes y no como pasos porque lo que no puede romperse es el
+// RESULTADO: cualquier señal que se agregue después (popularidad, novedad,
+// "lo recomendó alguien que conocés", personalización) tiene que operar
+// DENTRO de estas reglas, nunca compitiendo contra ellas.
+//
+//   Dados
+//     P            lugares distintos, YA ordenados por distancia (P[0] es el
+//                  más cercano disponible)
+//     fotos(p)     las fotos de p, en su orden de origen (la visita más
+//                  reciente primero)
+//     recientes    ids de fotos que el usuario acaba de ver
+//     K            min(3, |P|)
+//
+//   I1 — PREFIJO PROTEGIDO
+//        Para i < K: feed[i] ∈ fotos(P[i]) y, en concreto, es fotos(P[i])[0].
+//        O sea: las primeras K páginas son los K lugares más cercanos
+//        disponibles, uno cada uno y en orden de distancia.
+//
+//   I2 — LUGARES DISTINTOS AL ARRANQUE
+//        Los lugares de feed[0..<K] son distintos entre sí. (Se deduce de I1,
+//        pero se enuncia porque es LA razón de producto: el arranque dice
+//        "esto es lo que hay alrededor tuyo", no "mirá este sitio".)
+//
+//   I3 — recientes NO TOCA EL PREFIJO
+//        La memoria de lo ya visto no puede reordenar feed[0..<K]. Solo
+//        empuja, dentro de su ronda, a partir de la posición K.
+//
+//   I4 — COBERTURA EXACTA
+//        feed es una permutación de todas las fotos: cada una aparece
+//        EXACTAMENTE UNA VEZ antes de que el ciclo vuelva a empezar. Ninguna
+//        se descarta y ninguna se repite. (El feed es cíclico por índice
+//        lógico: la repetición ocurre al dar la vuelta, no dentro de ella.)
+//
+//   I5 — SIN VECINOS DEL MISMO LUGAR, MIENTRAS SE PUEDA
+//        Para i > 0, lugar(feed[i]) ≠ lugar(feed[i-1]); y por la costura del
+//        ciclo, lugar(feed.last) ≠ lugar(feed.first).
+//        Con dos excepciones, y las dos son imposibilidades, no permisos:
+//          a) al final del feed, cuando ya solo queda un lugar con fotos
+//             pendientes: no hay con qué alternar;
+//          b) en la costura, cuando el lugar de la última foto es también el
+//             de la primera y ninguna otra puede pasar al final sin romper
+//             I5 donde estaba (pasa cuando el lugar más cercano es además el
+//             que más fotos tiene: su cola es el final del feed). El prefijo
+//             protegido no cuenta como arreglo posible: I1 manda sobre I5.
+//
+//   "MÁS CERCANO DISPONIBLE" ≠ "CERCA"
+//        I1 ordena por distancia relativa. Si los tres primeros están a 3, 4 y
+//        5 km siguen siendo los tres primeros; el feed no afirma en ningún
+//        lado que estén cerca. Esa afirmación la hace la tarjeta, que dice la
+//        distancia o el tiempo caminando reales.
+//
+//   FUERA DEL CONTRATO (puede cambiar sin romper nada)
+//        El orden exacto de i >= K. Hoy es por rondas —la ronda k lleva la
+//        k-ésima foto de cada lugar— con el empujón de `recientes` y la
+//        separación de I5. Por esa separación, las fotos de un mismo lugar
+//        pueden salir desordenadas entre sí al final del feed (D3 → D5 → D4).
+//        Es cosmético y está aceptado: estabilizarlo es una mejora futura.
+//
+//   Las pruebas de Tools/main.swift fijan estas invariantes con casos
+//   deterministas, sin Xcode ni simulador.
 enum FeedRanking {
 
     /// Reparte por RONDAS: la ronda k lleva la k-ésima foto de cada lugar, en
@@ -78,47 +143,54 @@ enum FeedRanking {
     /// protegen los que haya.
     private static let protegidos = 3
 
-    /// Arregla el único punto donde las rondas pueden dejar dos fotos del mismo
-    /// lugar juntas: la costura entre el final de una ronda y el principio de
-    /// la siguiente (ambas empiezan por el lugar más cercano). Es una
-    /// reparación LOCAL —se adelanta la siguiente foto de otro lugar— así que
-    /// el orden por cercanía se conserva salvo por ese salto mínimo. El feed es
-    /// cíclico, de modo que la última también se compara con la primera.
+    /// Separa vecinos del mismo lugar (I5) SIN tocar la capa protegida: recorre
+    /// la cola una sola vez y, en cada paso, toma la primera foto pendiente
+    /// cuyo lugar no sea el que acaba de salir; si todas son de ese lugar
+    /// —porque ya no queda otro con fotos—, toma la primera igual. Conserva el
+    /// orden relativo salvo por esos adelantos mínimos.
+    ///
+    /// Antes esto era un bucle que recorría índices mientras removía e
+    /// insertaba en el mismo array: los índices se corrían y algunos pares
+    /// quedaban sin separar (se veía como D3 → D5 pegados con A3 todavía
+    /// disponible para separarlos).
     private static func separandoLugaresIguales<Foto>(
         _ fotos: [Foto],
         lugar: (Foto) -> String,
         anterior: String? = nil,
         primeraDelCiclo: String? = nil,
     ) -> [Foto] {
-        guard fotos.count > 2 else { return fotos }
-        var salida = fotos
-        // La costura con la capa protegida cuenta como un vecino más: el
-        // último lugar protegido no puede repetirse en la primera de la cola.
-        if let anterior, lugar(salida[0]) == anterior,
-           let j = (1..<salida.count).first(where: { lugar(salida[$0]) != anterior }) {
-            let movida = salida.remove(at: j)
-            salida.insert(movida, at: 0)
+        guard fotos.count > 1 else { return fotos }
+        var pendientes = fotos
+        var salida: [Foto] = []
+        salida.reserveCapacity(fotos.count)
+        var ultimo = anterior
+
+        while !pendientes.isEmpty {
+            let i = pendientes.firstIndex { lugar($0) != ultimo } ?? 0
+            let elegida = pendientes.remove(at: i)
+            ultimo = lugar(elegida)
+            salida.append(elegida)
         }
-        for i in 1..<salida.count where lugar(salida[i]) == lugar(salida[i - 1]) {
-            // El primero que venga después y sea de otro lugar se adelanta a
-            // esta posición.
-            guard let j = (i + 1..<salida.count).first(where: {
-                lugar(salida[$0]) != lugar(salida[i - 1])
-            }) else { continue }
-            let movida = salida.remove(at: j)
-            salida.insert(movida, at: i)
-        }
+
         // Costura del ciclo: la última se compara con la PRIMERA de todo el
         // feed, que con capa protegida no es la primera de esta cola.
-        let primera = primeraDelCiclo ?? salida.first.map(lugar)
-        if let ultima = salida.last, let primera,
+        if let ultima = salida.last, let primera = primeraDelCiclo ?? salida.first.map(lugar),
            lugar(ultima) == primera, salida.count > 2,
            let j = salida.indices.reversed().dropFirst().first(where: {
-               lugar(salida[$0]) != primera
+               lugar(salida[$0]) != primera && (j0(salida, $0, lugar) )
            }) {
             salida.swapAt(j, salida.count - 1)
         }
         return salida
+    }
+
+    /// El intercambio de la costura no puede crear un vecino igual en el sitio
+    /// de donde sale la foto.
+    private static func j0<Foto>(_ s: [Foto], _ j: Int, _ lugar: (Foto) -> String) -> Bool {
+        let anterior = j > 0 ? lugar(s[j - 1]) : nil
+        let siguiente = j + 1 < s.count ? lugar(s[j + 1]) : nil
+        let entrante = lugar(s[s.count - 1])
+        return entrante != anterior && entrante != siguiente
     }
 }
 
