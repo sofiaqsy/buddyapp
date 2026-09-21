@@ -638,15 +638,14 @@ struct CategoryPickerView: View {
     /// hasta el touch-up (como se hizo antes) no evitaba ningún error de
     /// índice, solo dejaba el z-order desactualizado durante todo el drag.
     @State private var carouselCenterId: String? = nil
-    /// Índice lógico del feed vertical. Puede crecer o bajar sin límite: lo
-    /// que se dibuja sale de feedIndexWrapped, así que no hay principio ni
-    /// final visible y tampoco un array duplicado.
-    @State private var feedIndex: Int = 0
-    /// Desplazamiento en curso del dedo (y el tramo animado al soltar).
-    @State private var feedDragY: CGFloat = 0
-    /// Mientras una tarjeta termina de entrar, el gesto no acepta otra: sin
-    /// esto dos golpes seguidos dejan el feed a medio camino.
-    @State private var feedAnimando = false
+    /// Centro de la ventana de páginas que existe ahora mismo. Los ids son
+    /// índices LÓGICOS (pueden ser negativos): la foto sale de aplicarles el
+    /// módulo, así que el feed no tiene principio ni final y los datos no se
+    /// duplican.
+    @State private var feedCentro: Int = 0
+    /// Página en la que descansa el scroll. Es la recomendación ACTIVA: se
+    /// actualiza cuando el scroll se asienta, no mientras el dedo arrastra.
+    @State private var feedPosicion: Int? = 0
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -1230,63 +1229,31 @@ struct CategoryPickerView: View {
         return ((i % n) + n) % n
     }
 
-    /// Qué tarjetas se dibujan: la centrada y sus dos vecinas. Con una sola
-    /// recomendación no hay vecinas que traer —ni ciclo que hacer—, y con dos
-    /// la de arriba y la de abajo son la misma, que es justo lo que un feed
-    /// cíclico de dos elementos tiene que mostrar.
-    private var feedSlots: [Int] {
-        explorePhotos.count <= 1 ? [0] : [-1, 0, 1]
+    /// Las páginas que existen: la activa y dos a cada lado. Se recentra al
+    /// asentarse el scroll, así que el usuario nunca llega al borde de la
+    /// ventana. Con una sola recomendación no hay ciclo que hacer.
+    private var feedVentana: [Int] {
+        explorePhotos.count <= 1 ? [0] : Array((feedCentro - 2)...(feedCentro + 2))
     }
 
-    /// Paginado vertical: un gesto, una recomendación. El arrastre sigue al
-    /// dedo; al soltar, o cruza el umbral y avanza exactamente una, o vuelve a
-    /// su sitio. Nunca queda a medio camino.
-    private func feedGesto(paso: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { valor in
-                guard !feedAnimando, !zoomState.isZooming else { return }
-                // Arrastre dominante horizontal: no es de este feed. La
-                // navegación es solo vertical.
-                guard abs(valor.translation.height) > abs(valor.translation.width) else { return }
-                if explorePhotos.count <= 1 {
-                    // Sin ciclo posible, el arrastre solo "pesa" y vuelve.
-                    feedDragY = valor.translation.height * 0.25
-                } else {
-                    feedDragY = valor.translation.height
-                }
-            }
-            .onEnded { valor in
-                guard !feedAnimando, !zoomState.isZooming else { return }
-                let recorrido = valor.predictedEndTranslation.height
-                // Un quinto de tarjeta o un gesto rápido alcanzan: el umbral
-                // sale del paso, no de un número suelto.
-                let umbral = paso / 5
-                let direccion = explorePhotos.count > 1 && abs(recorrido) > umbral
-                    ? (recorrido < 0 ? 1 : -1)
-                    : 0
-                guard direccion != 0 else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { feedDragY = 0 }
-                    return
-                }
-                feedAnimando = true
-                Haptic.medium()
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    feedDragY = -CGFloat(direccion) * paso
-                }
-                // Al terminar el viaje, la tarjeta que entró pasa a ser la
-                // centrada y el desplazamiento vuelve a cero SIN animación: el
-                // dibujo es idéntico, así que el cambio no se ve.
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(360))
-                    var sinAnimacion = Transaction()
-                    sinAnimacion.disablesAnimations = true
-                    withTransaction(sinAnimacion) {
-                        feedIndex += direccion
-                        feedDragY = 0
-                    }
-                    feedAnimando = false
-                }
-            }
+    /// Al asentarse en una recomendación: se fija la activa, se recentra la
+    /// ventana (invisible: el scroll sigue anclado a este mismo id) y se piden
+    /// las fotos vecinas para que la siguiente ya esté lista.
+    private func feedAsentado(en pagina: Int) {
+        guard !explorePhotos.isEmpty else { return }
+        let foto = explorePhotos[feedIndexWrapped(pagina)]
+        if carouselCenterId != foto.id {
+            carouselCenterId = foto.id
+            Haptic.select()
+        }
+        ImagePrefetcher.prefetch([
+            explorePhotos[feedIndexWrapped(pagina + 1)].url,
+            explorePhotos[feedIndexWrapped(pagina - 1)].url,
+        ])
+        guard explorePhotos.count > 1, pagina != feedCentro else { return }
+        var sinAnimacion = Transaction()
+        sinAnimacion.disablesAnimations = true
+        withTransaction(sinAnimacion) { feedCentro = pagina }
     }
 
     private var exploreCarousel: some View {
@@ -1312,29 +1279,50 @@ struct CategoryPickerView: View {
                 // tarjeta o el visor, más el aire que las separa: así la que
                 // entra y la que sale descansan SIEMPRE fuera del visor y no
                 // asoma ningún borde arriba ni abajo en pantallas grandes.
-                let paso = max(cardAlto, geo.size.height) + exploreCardSpacing
-
-                ZStack {
-                    ForEach(feedSlots, id: \.self) { slot in
-                        let photo = explorePhotos[feedIndexWrapped(feedIndex + slot)]
-                        ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
-                            .frame(width: cardAncho, height: cardAlto)
-                            .offset(y: CGFloat(slot) * paso + feedDragY)
-                            // Solo la centrada abre el lugar: las vecinas están
-                            // a medio entrar y un toque ahí sería un accidente.
-                            .onTapGesture {
-                                guard slot == 0 else { return }
-                                Haptic.medium()
-                                onOpenPlace?(photo.place)
-                            }
-                            .allowsHitTesting(slot == 0)
+                // Paginado NATIVO: cada página mide el visor entero
+                // (containerRelativeFrame), así que .paging asienta siempre en
+                // un borde de página y un gesto avanza exactamente una.
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(feedVentana, id: \.self) { pagina in
+                            let photo = explorePhotos[feedIndexWrapped(pagina)]
+                            ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
+                                .frame(width: cardAncho, height: cardAlto)
+                                // La tarjeta se centra dentro de su página; la
+                                // página es la que mide el visor.
+                                .frame(maxWidth: .infinity)
+                                .containerRelativeFrame(.vertical)
+                                // Apenas un guiño: la que entra crece los
+                                // últimos puntos y termina de aparecer. Nada de
+                                // rotaciones ni parallax.
+                                .scrollTransition(.interactive) { content, fase in
+                                    content
+                                        .opacity(fase.isIdentity ? 1 : 0.85)
+                                        .scaleEffect(fase.isIdentity ? 1 : 0.97)
+                                }
+                                // Abrir el lugar es cosa de la recomendación
+                                // activa: las vecinas están fuera del visor.
+                                .onTapGesture {
+                                    guard pagina == feedPosicion else { return }
+                                    Haptic.medium()
+                                    onOpenPlace?(photo.place)
+                                }
+                        }
                     }
+                    .scrollTargetLayout()
                 }
-                .frame(width: geo.size.width, height: geo.size.height)
-                // El gesto vive en toda la fila (no solo sobre la tarjeta) para
-                // que un arrastre que empieza al costado también pagine.
-                .contentShape(Rectangle())
-                .gesture(feedGesto(paso: paso))
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $feedPosicion)
+                // Con el pellizco activo el scroll no compite por el gesto, y
+                // con una sola recomendación no hay a dónde ir.
+                .scrollDisabled(zoomState.isZooming || explorePhotos.count <= 1)
+                // scrollPosition se escribe cuando el scroll llega a su página
+                // destino: ese es el momento en que la recomendación pasa a ser
+                // la activa (no mientras el dedo arrastra).
+                .onChange(of: feedPosicion) { _, nueva in
+                    guard let nueva else { return }
+                    feedAsentado(en: nueva)
+                }
                 .environment(\.exploreCardPhotoHeightOverride, photoAlto)
             }
             // Con la Home quieta la fila toma lo que sobra; en el resto de
@@ -1355,17 +1343,12 @@ struct CategoryPickerView: View {
                     return
                 }
                 // Un refresco del feed no puede mover la tarjeta bajo el dedo:
-                // solo se recentra si la que estaba ya no existe.
-                if let actual = carouselCenterId, let i = ids.firstIndex(of: actual) {
-                    feedIndex = i
-                } else {
-                    feedIndex = 0
-                    carouselCenterId = ids[0]
-                }
-            }
-            .onChange(of: feedIndex) { _, nuevo in
-                guard !explorePhotos.isEmpty else { return }
-                carouselCenterId = explorePhotos[feedIndexWrapped(nuevo)].id
+                // si la activa sigue existiendo, se queda donde está.
+                if let actual = carouselCenterId, ids.contains(actual) { return }
+                feedCentro = 0
+                feedPosicion = 0
+                carouselCenterId = ids[0]
+                ImagePrefetcher.prefetch(explorePhotos.prefix(3).map(\.url))
             }
 
             // Sin dots: contaban un total fijo, y el carrusel crece a medida que
