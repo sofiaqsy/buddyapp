@@ -716,9 +716,9 @@ struct CategoryPickerView: View {
     /// categorías: al quedar sobre el carrusel, mandaba a elegir y lo único
     /// elegible a la vista eran las fotos.
     private var exploreSubtitleAttributed: AttributedString {
-        // El núcleo es la CERCANÍA, no el destino: la ciudad queda como
-        // referencia secundaria al final.
-        var str = AttributedString("Lugares cerca de ti que recomiendan los buddies")
+        // El núcleo es QUIÉN recomienda; la ciudad queda como referencia
+        // secundaria al final.
+        var str = AttributedString("Recomendado por buddies")
         str.foregroundColor = UIColor(Color.inkMuted)
         guard let city = destinationName else { return str + AttributedString(".") }
 
