@@ -2071,14 +2071,14 @@ private struct ExploreCarouselCard: View {
                 if let etiqueta = etiquetaDistancia {
                     // Solo texto, sin icono: la etiqueta ya dice lo que es.
                     Text(etiqueta)
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                         // Los dígitos ruedan en vez de reemplazarse de golpe.
                         .contentTransition(.numericText())
                         .animation(.snappy(duration: 0.25), value: etiqueta)
                     .foregroundStyle(isHere ? Color.white : Color.ink)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background {
                         if isHere {
                             Capsule().fill(Color.brand)
@@ -2127,9 +2127,9 @@ private struct ExploreCarouselCard: View {
                 HStack(spacing: 5) {
                     if let category = place.category, !category.isEmpty {
                         Text(category.capitalized)
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 12.5))
                         Text("·")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 12.5))
                     }
 
                     if let author = photo.authorName {
@@ -2145,18 +2145,18 @@ private struct ExploreCarouselCard: View {
                                         .foregroundStyle(Color.ink))
                             }
                         }
-                        .frame(width: 14, height: 14)
+                        .frame(width: 16, height: 16)
                         .clipShape(Circle())
                     }
 
                     if let author = authorFirstName {
                         Text("Recomendado por ")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 12.5))
                         + Text(author)
-                            .font(.system(size: 10.5, weight: .semibold))
+                            .font(.system(size: 12.5, weight: .semibold))
                     } else {
                         Text("Recomendado por la comunidad")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 12.5))
                     }
                 }
                 // Blanco apagado: la segunda línea acompaña al nombre, no
