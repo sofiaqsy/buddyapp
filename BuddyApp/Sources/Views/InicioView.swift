@@ -2357,6 +2357,8 @@ struct PlaceGuideMapSheet: View {
     @StateObject private var routeStore = RouteStore()
     @State private var loadState: MapLoadState = .loading
     @Environment(\.dismiss) private var dismiss
+    /// true solo si esta vista llegó como hoja (o cover), no empujada.
+    @Environment(\.isPresented) private var estaPresentado
 
     var body: some View {
         Group {
@@ -2390,7 +2392,14 @@ struct PlaceGuideMapSheet: View {
         }
     }
 
-    private var closeButton: some View {
+    /// La X es de cuando esto se abría COMO HOJA. Hoy los tres sitios que lo
+    /// usan lo empujan en el NavigationStack, donde el sistema ya pone "Back":
+    /// la X aparecía flotando el segundo que dura la carga y desaparecía sola
+    /// al llegar el mapa (TripDetailView trae su propio chevron). Se dibuja
+    /// solo si de verdad hay una presentación que cerrar, así que el día que
+    /// vuelva a abrirse como hoja sigue estando.
+    @ViewBuilder private var closeButton: some View {
+        if estaPresentado {
         Button { dismiss() } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 14, weight: .bold))
@@ -2400,6 +2409,7 @@ struct PlaceGuideMapSheet: View {
         }
         .padding(.leading, Spacing.edge)
         .padding(.top, Spacing.md)
+        }
     }
 
     private func fallbackMessage(_ text: String, icon: String) -> some View {
