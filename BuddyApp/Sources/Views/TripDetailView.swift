@@ -186,10 +186,12 @@ struct TripDetailView: View {
 
     private let sheetHeight: CGFloat = 265
     private let contentHeight: CGFloat = 160
-    /// El mapa hace full-bleed (ignoresSafeArea), así que el panel queda anclado al
-    /// fondo absoluto y la tab bar flotante lo tapa. Subimos el contenido esta cantidad
-    /// (tab bar + home indicator) y extendemos el glass por debajo, detrás de la tab bar.
-    private let bottomClearance: CGFloat = 38
+    /// Antes la tab bar FLOTABA sobre el contenido, así que el panel se
+    /// extendía por debajo de ella para que no asomara el mapa. Desde que la
+    /// barra ocupa su propio espacio en el layout (ver RootView), el panel ya
+    /// termina justo encima: ese colchón solo dejaba una franja vacía debajo
+    /// de las fotos.
+    private let bottomClearance: CGFloat = 0
 
     var body: some View {
         GeometryReader { geo in
@@ -563,9 +565,18 @@ struct TripDetailView: View {
         }
         // Glass más alto: el contenido (top-aligned) sube sobre la tab bar y el
         // glass sobrante queda detrás de ella → panel flush, sin hueco de mapa.
-        // Alto SIEMPRE el mismo (sheetHeight+bottomClearance) — el detalle del
-        // lugar se acomoda dentro de este espacio, no lo agranda.
-        .frame(width: geo.size.width, height: sheetHeight + bottomClearance, alignment: .top)
+        //
+        // Con la lista de lugares el alto es fijo (las tarjetas siempre miden
+        // lo mismo). Con el detalle de un lugar es un TOPE: el panel mide lo
+        // que ocupa su contenido y no más, así una pestaña con una sola fila
+        // de fotos no deja una franja vacía debajo. Si el contenido pasa del
+        // tope, el scroll de adentro se encarga.
+        .frame(
+            width: geo.size.width,
+            height: selectedPlace == nil ? sheetHeight + bottomClearance : nil,
+            alignment: .top,
+        )
+        .frame(maxHeight: selectedPlace == nil ? nil : sheetHeight + bottomClearance, alignment: .top)
         .glassPanel()
         .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
     }
@@ -1022,6 +1033,8 @@ struct PlaceGuideDetailSheet: View {
     @State private var buddies: [APIPlaceBuddy] = []
     @State private var isLoadingBuddies = true
     @State private var showFullGallery = false
+    /// Alto real del contenido de la pestaña abierta (ver el ScrollView).
+    @State private var altoContenido: CGFloat = 0
 
     /// Una foto en la fila, sabiendo de quién es y qué página ocupa. La fila
     /// necesita las tres cosas juntas: la URL para pintarla, el dueño para
@@ -1102,12 +1115,22 @@ struct PlaceGuideDetailSheet: View {
                 .padding(.top, 14)
 
             ScrollView {
-                switch tab {
-                case .fotos:   fotosTab
-                case .info:    infoTab
-                case .buddies: buddiesTab
+                Group {
+                    switch tab {
+                    case .fotos:   fotosTab
+                    case .info:    infoTab
+                    case .buddies: buddiesTab
+                    }
                 }
+                // Lo que mide el contenido de la pestaña. Con una sola fila de
+                // fotos, el panel se quedaba con el alto de la lista de
+                // lugares y abajo sobraba una franja vacía.
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { altoContenido = $0 }
             }
+            // maxHeight y no height: el scroll pide lo que ocupa su contenido,
+            // pero si no entra (la pestaña Info con texto largo) se deja
+            // comprimir por el tope del panel y desplaza por dentro.
+            .frame(maxHeight: altoContenido > 0 ? altoContenido : nil)
         }
         .padding(.top, 10)
         .task {
