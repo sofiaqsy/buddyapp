@@ -72,9 +72,23 @@ struct InicioView: View {
     @ObservedObject private var spotsStore = SpotsStore.shared
     /// Foto del carrusel en zoom: mientras dura, el Home no scrollea.
     @ObservedObject private var carouselZoom = CarouselZoomState.shared
-    private var exploreCards: [APIPlaceCard] { spotsStore.spots }
+    /// Los lugares que el Home muestra. En Debug se pueden recortar por
+    /// argumento para probar los casos de borde sin depender de los datos:
+    ///   -feedCases 0   → sin recomendaciones
+    ///   -feedCases 1   → un solo lugar (con todas sus fotos)
+    ///   -feedCases N   → los N primeros lugares
+    /// Sin el argumento, y siempre en Release, es la lista tal cual.
+    private var exploreCards: [APIPlaceCard] {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-feedCases"), i + 1 < args.count,
+           let n = Int(args[i + 1]) {
+            return Array(spotsStore.spots.prefix(n))
+        }
+        #endif
+        return spotsStore.spots
+    }
     @State private var recentHelp: [APIRecentHelp] = []   // comunidad viva (destino activo)
-    @State private var communityPulse: [APIPulseItem] = [] // pulso global (fallback sin actividad local)
     @State private var recentHelpByDest: [String: [APIRecentHelp]] = [:]  // por cada trip vivo
     @State private var isLoadingRecentHelp = false        // anti re-entrada
     @State private var recentHelpDestId: String? = nil    // último destino cargado
@@ -110,7 +124,6 @@ struct InicioView: View {
     /// actualizaba y el carrusel se quedaba en la lista de la esquina anterior.
     private static let locationRefreshMeters: CLLocationDistance = 150
 
-    @State private var communityPulseLoadedAt: Date? = nil
     @State private var pendingNavToDetail = false
     @State private var hasLoaded = false
     @State private var showActivateNextTripAlert = false
@@ -1554,191 +1567,6 @@ struct InicioView: View {
                     recentHelpByDest[id] = r
                 }
             }
-        }
-    }
-
-    // MARK: – Comunidad viva (prueba social encima de HISTORIAS DE VIAJEROS)
-    // Con actividad local: "Keyla ayudó a un viajero · hace 2h".
-    // Sin ella, el pulso global de la red: "Un viajero está en Villa Rica",
-    // "Villa Rica · un buddy ayudó a un viajero · hace 2h",
-    // "Villa Rica · 3 buddies listos para ayudar". Máx. 10 filas.
-    /// Lista vertical de 3 filas, no un scroller horizontal. Razones, en orden
-    /// de peso:
-    ///
-    /// 1. Desplazarse en horizontal es un gesto de EXPLORACIÓN — promete ítems
-    ///    que se recorren y se eligen. Estas filas no son tocables ni llevan a
-    ///    ningún lado: prometía un destino inexistente. Apilar en vertical es
-    ///    gesto de LECTURA, que es lo que corresponde a una señal ambiente.
-    /// 2. Con el carrusel de lugares justo encima había dos zonas de scroll
-    ///    horizontal contiguas; un arrastre cerca del límite no dejaba claro
-    ///    cuál se movía.
-    /// 3. A 150pt por ítem entraban 2,4 filas en pantalla gastando ~100pt de
-    ///    alto. Tres filas apiladas ocupan ~96pt y entregan tres mensajes
-    ///    completos.
-    ///
-    /// Tres y no diez porque esto es una SEÑAL, y las señales saturan: al
-    /// tercer evento el usuario ya concluyó "hay gente ayudando". Las siete
-    /// restantes solo agregan carga y convierten la sección en un feed.
-    private var communityLiveSection: some View {
-        // 16 entre el header y las filas, 10 entre filas: con ambos a 12 las
-        // distancias eran iguales y el header se leía como un cuarto ítem de la
-        // lista. Separar la estructura del contenido agrupa las filas entre sí.
-        VStack(alignment: .leading, spacing: 16) {
-            // Mismo tratamiento que "HISTORIAS DE VIAJEROS": son secciones
-            // hermanas y deben pesar igual. El 75% que tenía antes venía de
-            // cuando el punto verde acompañaba al título — sin el punto, la
-            // línea quedaba atenuada y corta, y se leía como una nota al pie.
-            Text("COMUNIDAD VIVA")
-                .font(BT.eyebrow).tracking(1.5)
-                .foregroundStyle(Color.ink)
-
-            VStack(spacing: 10) {
-                ForEach(communityPulse.filter { $0.type == "helped" }.prefix(3)) { item in
-                    communityRow(item)
-                }
-            }
-        }
-        .padding(.horizontal, Spacing.edge)
-        .sheet(item: $pulseProfileTarget) { target in
-            TravelerProfileView(travelerId: target.id,
-                                previewName: target.name,
-                                previewAvatarUrl: target.avatarUrl)
-        }
-    }
-
-    /// Dos líneas: la acción arriba, el contexto abajo. Cada fila responde las
-    /// tres preguntas sin una palabra de más — quién (nombre), en qué
-    /// (categoría) y dónde/cuándo (línea 2).
-    ///
-    /// Avatar 24pt (era 56, luego 28). Se queda porque Buddy vende personas
-    /// reales y una cara comunica eso en 100ms — ningún texto lo hace igual de
-    /// rápido, aunque a este tamaño no se distingan los rasgos. Solo baja lo
-    /// suficiente para no encabezar la fila.
-    @ViewBuilder
-    private func communityRow(_ item: APIPulseItem) -> some View {
-        let name = item.buddyName?.components(separatedBy: " ").first?.capitalized ?? "Un buddy"
-        // La fila nombra a una persona: tocarla abre su perfil. Solo cuando el
-        // pulso trae su id — sin id no hay perfil que abrir y la fila se queda
-        // como estaba, una señal que se lee y no se toca.
-        let target = item.buddyId.map {
-            PulseProfileTarget(id: $0, name: item.buddyName, avatarUrl: item.buddyAvatarUrl)
-        }
-        // .top y no centrado: el avatar se alinea con la línea 1, que es la que
-        // ancla la fila, igual que en Mail y Mensajes.
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(Color.sandLight)
-                .frame(width: 24, height: 24)
-                .overlay {
-                    if let urlStr = item.buddyAvatarUrl, let url = URL(string: urlStr) {
-                        AsyncImage(url: url) { img in
-                            img.resizable().scaledToFill()
-                        } placeholder: { Color.sandLight }
-                        .frame(width: 24, height: 24)
-                        .clipShape(Circle())
-                    } else {
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.sand)
-                    }
-                }
-
-            VStack(alignment: .leading, spacing: 4) {
-                // El apoyo se queda con la línea entera y a un solo tamaño. Antes
-                // compartía renglón con la hora, que le robaba ancho y la obligaba
-                // a una línea; y la acción iba un escalón por debajo del nombre,
-                // así que lo que la fila viene a contar se leía más chico que
-                // quién lo hizo. Medium y no semibold en el nombre: el ojo tiene
-                // que encontrar el sujeto rápido, pero la negrita plena es la
-                // firma visual de una red social y convertía el hecho en un post.
-                (Text(name).font(BT.footnote.weight(.medium)).foregroundStyle(Color.ink)
-                 + Text(" \(pulseAction(item))").font(BT.footnote).foregroundStyle(Color.ink))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                // Los dos metadatos comparten renglón en los extremos opuestos.
-                // Así la fila cierra tocando ambos bordes —lo que equilibra una
-                // fila de Mail o Mensajes— sin que eso le cueste ancho a la
-                // frase, y la ciudad deja de encabezar su línea: al repetirse en
-                // las tres filas, arrancarlas todas igual las hacía ver plantilla.
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(pulseTimeAgo(item))
-                        .font(BT.caption2)
-                        .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 8)
-
-                    Text(item.city)
-                        .font(BT.caption2)
-                        .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                }
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard let target else { return }
-            Haptic.light()
-            pulseProfileTarget = target
-        }
-    }
-
-    /// Verbo + complemento corto, SIEMPRE la misma forma. El paralelismo importa
-    /// más que la precisión: tres filas con la misma estructura gramatical se
-    /// procesan como un conjunto de un vistazo, mientras que tres formas
-    /// distintas obligan a re-parsear cada línea.
-    ///
-    /// Además cortas: "resolvió una consulta sobre transporte" era lenguaje de
-    /// mesa de ayuda —sonaba a ticket cerrado, no a alguien ayudando— y con
-    /// lineLimit(1) se truncaba justo la acción, que es lo que carga el mensaje,
-    /// en cuanto el usuario subía el Dynamic Type.
-    ///
-    /// `general` y los casos sin categoría caen en formas genéricas: nunca se
-    /// inventa un detalle que el dato no tiene.
-    private func pulseAction(_ item: APIPulseItem) -> String {
-        switch item.category {
-        case "transport":         return "ayudó con transporte"
-        case "food", "food_recs": return "recomendó dónde comer"
-        case "accommodation":     return "ayudó con alojamiento"
-        case "activities":        return "recomendó qué hacer"
-        case "shopping":          return "ayudó con compras"
-        case "translation":       return "tradujo para un viajero"
-        case "emergency":         return "asistió una urgencia"
-        case "recommendations":   return "dio recomendaciones"
-        case "airport_pickup":    return "recibió en el aeropuerto"
-        case "city_tour":         return "acompañó por la ciudad"
-        default:                  return "ayudó a un viajero"
-        }
-    }
-
-    /// Con "hace" porque acá va inline tras la ciudad, no en una columna de
-    /// timestamps donde el prefijo sobraría. "ayer" en vez de "hace 1 d".
-    private func pulseTimeAgo(_ item: APIPulseItem) -> String {
-        guard let d = item.at else { return "hace poco" }
-        let s = max(0, Date().timeIntervalSince(d))
-        if s < 90     { return "hace un momento" }
-        if s < 3600   { return "hace \(Int(s / 60)) min" }
-        if s < 86400  { return "hace \(Int(s / 3600)) h" }
-        if s < 172800 { return "ayer" }
-        return "hace \(Int(s / 86400)) d"
-    }
-
-    /// Comunidad viva ahora siempre muestra el pulso global (últimas ayudas
-    /// en cualquier lugar), sin restringir al destino activo del usuario.
-    private func loadCommunityPulseIfNeeded() async {
-        // El pulso global cambia lento — no refetchar en < 60 s.
-        if let at = communityPulseLoadedAt, Date().timeIntervalSince(at) < 60, !communityPulse.isEmpty {
-            dlog("🌐 [loadCommunityPulseIfNeeded] throttled — usando cache de \(communityPulse.count) item(s)")
-            return
-        }
-        do {
-            let pulse = try await APIClient.shared.fetchCommunityPulse()
-            dlog("🌐 [loadCommunityPulseIfNeeded] ✅ \(pulse.count) item(s): \(pulse.map { "\($0.type)@\($0.city)" })")
-            await MainActor.run { communityPulse = pulse; communityPulseLoadedAt = Date() }
-        } catch {
-            print("❌ [loadCommunityPulseIfNeeded] ERROR: \(error)")
         }
     }
 

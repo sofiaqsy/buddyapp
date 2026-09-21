@@ -652,7 +652,12 @@ struct CategoryPickerView: View {
     /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
     /// cuando el orden cambia debajo.
     @State private var feedDesfase: Int = 0
-    @State private var feedVentana: [Int] = [0]
+    /// Nace COMPLETA: si empezara con una sola página, el ScrollView se
+    /// dispondría con esa única página y al aparecer las otras 120 conservaría
+    /// el desplazamiento —no el id—, quedando pegado al borde de arriba, desde
+    /// donde ya no se puede retroceder. Solo se encoge si de verdad hay una
+    /// sola recomendación.
+    @State private var feedVentana: [Int] = ExploreCarouselCard.ventanaInicial
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -1162,9 +1167,20 @@ struct CategoryPickerView: View {
             return
         }
         let actual = manteniendoVisible ? carouselCenterId : nil
+        // Si el feed venía VACÍO, sus páginas no median nada y el scroll se
+        // quedó descansando en el borde de arriba de la ventana; desde ahí ya
+        // no se puede retroceder. Hay que volver a anclarlo.
+        let veniaVacio = feedSecuencia.isEmpty
         feedSecuencia = nueva
         let ventana = nueva.count <= 1 ? Self.ventanaUnica : Self.ventanaCompleta
-        if feedVentana.count != ventana.count { feedVentana = ventana }
+        if veniaVacio || feedVentana.count != ventana.count {
+            // Lo mismo al cambiar el TAMAÑO de la ventana (de una sola página
+            // a todas, o al revés): el ScrollView conserva su desplazamiento y
+            // no el id. En ambos casos se vuelve a anclar en la página 0, y el
+            // desfase se encarga de que la foto siga siendo la misma.
+            feedVentana = ventana
+            feedPosicion = 0
+        }
         if let actual, let destino = nueva.firstIndex(where: { $0.id == actual }) {
             // page + desfase ≡ destino (mod n)
             let n = nueva.count
@@ -1217,54 +1233,9 @@ struct CategoryPickerView: View {
     // La banda se recorta en lugar de bajar el texto — el aire sobrante estaba
     // al pie, no entre las líneas.
     private var exploreCardHeight: CGFloat { exploreCardPhoto }
-    /// 0.22 y no 0.32: con 0.32 el contraste era tan alto que la card central
-    /// se leía como "opción seleccionada" en vez de como profundidad. Tampoco
-    /// menos, porque el efecto App Store vive justamente de ese contraste.
-    /// Bajarlo además destapa ~9pt más de las vecinas: la card central escalada
-    /// mide 195pt en vez de 211, así que invade menos el espacio de al lado.
-    private let exploreScaleDelta: CGFloat = 0.22
-    /// Espacio entre cards — junto con exploreCardWidth define el "paso" que
-    /// viewAligned necesita cruzar para saltar a la siguiente. Más chico que
-    /// antes (20) para que un swipe corto, como uno que arranca cerca del
-    /// borde de la pantalla con poco recorrido disponible, alcance a cruzar
-    /// el umbral en vez de rebotar de vuelta a la misma tarjeta.
-    private let exploreCardSpacing: CGFloat = 10
-
-    /// Aire vertical DENTRO del contenido del ScrollView. scaleEffect no altera
-    /// el layout, así que el HStack sigue midiendo exploreCardHeight: el
-    /// ScrollView dimensiona su contenido a esa altura, lo apoya arriba de su
-    /// frame, y la card centrada —que renderiza un 32% más alta— se sale por
-    /// arriba del borde y queda recortada ahí. Se lee como zoom topado contra
-    /// un contenedor, no como una card más grande. Este padding va en el
-    /// HStack (no en el frame externo) para que el contenido en sí ya reserve
-    /// el alto que la card escalada necesita.
-    private var exploreVerticalSlack: CGFloat {
-        exploreCardHeight * exploreScaleDelta / 2 + 8
-    }
-
     private var centeredExplorePlace: APIPlaceCard? {
         explorePhotos.first { $0.id == carouselCenterId }?.place
             ?? explorePhotos.first?.place
-    }
-
-    /// Cuanto más cerca del centro, más adelante se dibuja. Atado a
-    /// carouselCenterId EN VIVO — los logs de settle probaron que
-    /// settledCenterId siempre termina confirmando exactamente el mismo
-    /// índice que carouselCenterId ya tenía, así que congelar zIndex hasta
-    /// el touch-up no evitaba ningún error de índice: solo dejaba el
-    /// z-order desactualizado durante TODO el arrastre (la card que crece
-    /// por scaleEffect en vivo se queda detrás de la vieja centrada, que
-    /// se encoge pero mantiene el zIndex más alto hasta soltar — eso era
-    /// "la imagen de la izquierda queda encima"). carouselCenterId es una
-    /// sola variable de estado que cambia por gesto discreto de scroll, no
-    /// el patrón de escritura por-frame de GeometryReader+PreferenceKey
-    /// que causó el rebote original — usarlo acá no reintroduce ese bug.
-    private func exploreZIndex(for photo: ExplorePhoto, index: Int) -> Double {
-        // El fallback es 0 para coincidir con dónde descansa el scroll en
-        // offset 0 (ver nota del centro inicial), así los frames previos a que
-        // carouselCenterId se fije ya dibujan el orden correcto.
-        let centerIndex = explorePhotos.firstIndex { $0.id == carouselCenterId } ?? 0
-        return -Double(abs(index - centerIndex))
     }
 
     /// Índice real dentro de explorePhotos para un índice lógico cualquiera.
@@ -1292,7 +1263,7 @@ struct CategoryPickerView: View {
     /// propiedad se construía un array de 241 enteros en CADA pasada de body
     /// —incluidas todas las del gesto— y el ForEach volvía a compararlos. Solo
     /// cambia cuando pasa a haber una sola recomendación, o más de una.
-    private static let ventanaCompleta: [Int] = Array(-feedRadio...feedRadio)
+    private static let ventanaCompleta: [Int] = ExploreCarouselCard.ventanaInicial
     private static let ventanaUnica: [Int] = [0]
 
     /// La foto que le toca a una página lógica, o nil si todavía no hay
@@ -1300,6 +1271,16 @@ struct CategoryPickerView: View {
     private func feedFoto(en pagina: Int) -> ExplorePhoto? {
         guard !explorePhotos.isEmpty else { return nil }
         return explorePhotos[feedIndexWrapped(pagina + feedDesfase)]
+    }
+
+    /// Mueve el feed una recomendación, sin gesto. Lo usan las acciones de
+    /// accesibilidad: escribir scrollPosition SÍ desplaza el scroll, así que
+    /// el paginado nativo se encarga del resto (incluido el ciclo).
+    private func feedSalto(_ direccion: Int) {
+        guard explorePhotos.count > 1 else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            feedPosicion = (feedPosicion ?? 0) + direccion
+        }
     }
 
     /// Las fotos de al lado de la activa, ARRIBA y ABAJO. Solo se precargaba
@@ -1327,6 +1308,21 @@ struct CategoryPickerView: View {
         // Solo lo que el usuario vio DE VERDAD (página asentada) cuenta como
         // visto; cruzar el visor no basta.
         FeedMemoria.shared.registrar(fotoId: foto.id)
+        // Red de seguridad del borde: si el scroll llega cerca del final de la
+        // ventana (puede pasar si el feed se dibujó antes de tener contenido y
+        // quedó anclado ahí), se salta a la página equivalente cerca del
+        // centro. Es la MISMA foto —los índices son módulo n—, así que el
+        // salto no se ve, y desde el centro vuelve a haber recorrido en los
+        // dos sentidos.
+        if abs(pagina) > Self.feedRadio - 5, explorePhotos.count > 1 {
+            let n = explorePhotos.count
+            let equivalente = ((pagina % n) + n) % n
+            dlog("🎞️ [feed] borde de la ventana en \(pagina) → recentro en \(equivalente)")
+            var sinAnimacion = Transaction()
+            sinAnimacion.disablesAnimations = true
+            withTransaction(sinAnimacion) { feedPosicion = equivalente }
+        }
+
         ImagePrefetcher.prefetch([1, -1, 2, -2].map {
             explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)].url
         })
@@ -1353,6 +1349,12 @@ struct CategoryPickerView: View {
                 // tarjeta o el visor, más el aire que las separa: así la que
                 // entra y la que sale descansan SIEMPRE fuera del visor y no
                 // asoma ningún borde arriba ni abajo en pantallas grandes.
+                // El ScrollView se crea RECIÉN con la secuencia lista. Si nace
+                // vacío, sus páginas miden cero, el ancla inicial no se puede
+                // aplicar y el scroll queda descansando en el borde de arriba
+                // de la ventana: desde ahí no se puede retroceder y el feed
+                // deja de ser cíclico.
+                if !explorePhotos.isEmpty {
                 // Paginado NATIVO: cada página mide el visor entero
                 // (containerRelativeFrame), así que .paging asienta siempre en
                 // un borde de página y un gesto avanza exactamente una.
@@ -1368,11 +1370,26 @@ struct CategoryPickerView: View {
                                 // tarjeta (distancia, "Estás aquí", el pulso)
                                 // se heredaba al cambiar de lugar.
                                 .id(photo.id)
+                                // Con VoiceOver el deslizamiento vertical es
+                                // del sistema, así que cambiar de
+                                // recomendación se ofrece por el rotor.
+                                .accessibilityAction(named: "Siguiente recomendación") {
+                                    feedSalto(1)
+                                }
+                                .accessibilityAction(named: "Recomendación anterior") {
+                                    feedSalto(-1)
+                                }
                                 .frame(width: cardAncho, height: cardAlto)
                                 // La tarjeta se centra dentro de su página; la
-                                // página es la que mide el visor.
+                                // página mide el visor con un alto EXPLÍCITO y
+                                // no con containerRelativeFrame: en una pila
+                                // perezosa, las páginas que todavía no se
+                                // construyeron no tienen alto resuelto, el
+                                // scroll calcula mal sus posiciones y un solo
+                                // gesto podía saltar decenas de páginas. Con
+                                // todas iguales y sabidas, un gesto es una.
                                 .frame(maxWidth: .infinity)
-                                .containerRelativeFrame(.vertical)
+                                .frame(height: geo.size.height)
                                 // Solo opacidad. El scaleEffect encogía la
                                 // tarjeta mientras entraba o salía, y con la
                                 // foto a sangre eso abría una franja de fondo
@@ -1393,7 +1410,20 @@ struct CategoryPickerView: View {
                     .scrollTargetLayout()
                 }
                 .scrollTargetBehavior(.paging)
+                // La ventana es simétrica (-N…N), así que su CENTRO es la
+                // página 0: el feed arranca ahí sin depender de que escribir
+                // el binding mueva el scroll. Escribirlo no sirve cuando las
+                // páginas todavía no tienen alto —el feed nace vacío— y el
+                // scroll se quedaba en el borde de arriba, sin vuelta atrás.
+                .defaultScrollAnchor(.center)
                 .scrollPosition(id: $feedPosicion)
+                // Identidad atada al TAMAÑO de la ventana: si pasa de una sola
+                // página a todas (el feed tenía una recomendación y llegaron
+                // más), el ScrollView se rehace y vuelve a aplicar su ancla en
+                // vez de conservar un desplazamiento que ya no significa lo
+                // mismo. En el uso normal la ventana no cambia, así que esto
+                // no se dispara mientras el usuario navega.
+                .id(feedVentana.count)
                 // Con el pellizco activo el scroll no compite por el gesto, y
                 // con una sola recomendación no hay a dónde ir.
                 .scrollDisabled(zoomState.isZooming || explorePhotos.count <= 1)
@@ -1407,6 +1437,7 @@ struct CategoryPickerView: View {
                 }
                 .environment(\.exploreCardPhotoHeightOverride, photoAlto)
                 .environment(\.exploreCardWidthOverride, cardAncho)
+                }
             }
             // Con la Home quieta la fila toma lo que sobra; en el resto de
             // pantallas mide exactamente una tarjeta.
@@ -1904,15 +1935,6 @@ extension EnvironmentValues {
     }
 }
 
-/// Lo que cabe de foto en una fila de `alto` puntos: se descuenta el aire
-/// vertical, el escalado de la card central (×1.22) y la banda de texto (70).
-func exploreCardPhotoThatFits(inRow alto: CGFloat) -> CGFloat {
-    // El piso es bajo a propósito: con texto en tamaño accesibilidad el título
-    // ocupa media pantalla y la fila se queda con muy poco. Antes el piso era
-    // 150 y las tarjetas se dibujaban ENCIMA de la disponibilidad y del botón.
-    max(60, (max(0, alto - 16) / 1.22) - 70)
-}
-
 /// El alto DESEADO de la foto. Es solo un tope superior: en la Home el alto
 /// real sale del espacio que el layout le deja a la fila (ver exploreCarousel).
 /// Ya no lleva ningún techo calculado sobre el alto del dispositivo — ese era
@@ -1928,6 +1950,11 @@ private let exploreCardPhotoHeight: CGFloat =
 private let exploreCardPaper: Color = .canvas
 
 private struct ExploreCarouselCard: View {
+    /// Las páginas del feed vertical: la activa y 60 a cada lado. Vive acá
+    /// porque el valor inicial de un @State no puede leer un miembro estático
+    /// del propio tipo que lo declara.
+    static let ventanaInicial: [Int] = Array(-60...60)
+
     /// Mismo alto resuelto que usa el carrusel: la foto de la ficha y la del
     /// fondo tienen que medir lo mismo o la tarjeta se descuadra.
     @Environment(\.exploreCardPhotoHeightOverride) private var exploreCardPhotoOverride: CGFloat?
@@ -1966,35 +1993,6 @@ private struct ExploreCarouselCard: View {
     private var zoom: CGFloat = 1
     @State private var zoomAnchor: UnitPoint = .center
     private var place: APIPlaceCard { photo.place }
-
-    /// Fondo de la ficha: el mismo pie de la foto, repetido y visto a través del
-    /// vidrio del sistema. Es la foto y no una interpretación de ella, así que
-    /// no puede salir un tono que la imagen no tenga —el problema que sí tenía
-    /// el color extraído—. Y como vive en la banda y no sobre la imagen, no le
-    /// quita ni un pixel de visibilidad a la foto de arriba.
-    @ViewBuilder private var plateBackground: some View {
-        Color.clear
-            .overlay(alignment: .bottom) {
-                // Alineado al pie y con el alto de la foto: lo que se ve acá es
-                // literalmente la franja inferior de la imagen de arriba, o sea
-                // la continuación y no un recorte cualquiera.
-                CachedImage(urlString: photo.url) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    Rectangle().fill(Color.sandLight)
-                }
-                .frame(height: exploreCardPhoto)
-            }
-            .clipped()
-            // El material del sistema en vez de blur + veladura a mano: hace el
-            // desenfoque y además aporta vibrancia, o sea levanta el contraste
-            // de lo que va encima en lugar de solo taparlo. Es exactamente el
-            // caso para el que existe —una superficie translúcida CON algo real
-            // detrás—, que es lo que no teníamos cuando la ficha era un color.
-            // Radio 0: las esquinas ya las redondea el clip de la card.
-            .overlay { Color.clear.glassRounded(0) }
-            .allowsHitTesting(false)
-    }
 
     /// Quien recomienda el lugar, no cuánta gente lo conoce: la recomendación
     /// de una persona concreta pesa más como prueba social que un conteo, y
@@ -2196,7 +2194,10 @@ private struct ExploreCarouselCard: View {
         // imagen sin descripción y tres textos sueltos sobre ella.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(etiquetaAccesible)
-        .accessibilityHint("Toca para ver el lugar. Desliza hacia arriba para la siguiente recomendación.")
+        // Sin "desliza hacia arriba": con VoiceOver activo ese gesto es de la
+        // propia navegación del sistema, así que la instrucción confundiría.
+        // Pasar de recomendación se ofrece como ACCIÓN del rotor.
+        .accessibilityHint("Toca para ver el lugar en el mapa.")
     }
 }
 
