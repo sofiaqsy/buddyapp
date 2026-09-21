@@ -641,6 +641,12 @@ struct CategoryPickerView: View {
     /// Página en la que descansa el scroll. Es la recomendación ACTIVA: se
     /// actualiza cuando el scroll se asienta, no mientras el dedo arrastra.
     @State private var feedPosicion: Int? = 0
+    /// La secuencia rankeada que el paginador recorre.
+    @State private var feedSecuencia: [ExplorePhoto] = []
+    /// Cuánto hay que correr la página para leer la secuencia. Lo mueve solo
+    /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
+    /// cuando el orden cambia debajo.
+    @State private var feedDesfase: Int = 0
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -1117,8 +1123,10 @@ struct CategoryPickerView: View {
     // atención. El botón de abajo todavía no dispara ninguna acción.
     /// Fotos sueltas, no agrupadas por lugar — si "El Encanto" tiene 3 fotos,
     /// el carrusel muestra 3 tarjetas, no 1 tarjeta con 3 fotos adentro.
-    private var explorePhotos: [ExplorePhoto] {
-        placeCards.flatMap { place -> [ExplorePhoto] in
+    /// Las fotos de CADA lugar, en el orden que llega del backend (la visita
+    /// más nueva primero). Es la materia prima del ranking, no lo que se ve.
+    private var fotosPorLugar: [[ExplorePhoto]] {
+        placeCards.map { place -> [ExplorePhoto] in
             // coverPhotos manda: es la única fuente que sabe de quién es CADA
             // foto. Con coverUrls todas se firmaban con coverAuthorName, el
             // autor de la última — Cafetería Rosal salía "Angie" en las dos
@@ -1135,6 +1143,58 @@ struct CategoryPickerView: View {
                              authorName: place.coverAuthorName, authorAvatarUrl: place.coverAuthorAvatarUrl)
             }
         }
+    }
+
+    /// Lo que el feed muestra, ya rankeado (ver FeedRanking). Es ESTADO y no
+    /// una propiedad calculada a propósito: se rehace solo cuando cambia el
+    /// contexto —otro conjunto de lugares o un orden de cercanía distinto—, no
+    /// en cada repintado ni con cada fix del GPS.
+    private var explorePhotos: [ExplorePhoto] { feedSecuencia }
+
+    /// Firma del contexto: qué lugares hay, en qué orden y con cuántas fotos.
+    /// Cambia cuando el usuario se movió lo bastante como para que el orden de
+    /// cercanía cambie (los cubos de 10 m de stableOrder ya filtran el ruido
+    /// del GPS) o cuando aparece o desaparece un lugar. Un fix que no cambia
+    /// nada de esto deja el feed intacto.
+    private var feedContexto: String {
+        placeCards.map { "\($0.id):\(($0.coverPhotos?.count ?? $0.coverUrls?.count ?? 1))" }
+            .joined(separator: "|")
+    }
+
+    /// Rehace la secuencia y la deja calzada con lo que se está viendo: la
+    /// página activa conserva SU foto (el desfase absorbe el cambio), así que
+    /// el contexto puede refrescarse sin que la tarjeta salte ni el feed
+    /// vuelva a empezar por la primera foto.
+    private func reconstruirFeed() {
+        let nueva = FeedRanking.secuencia(
+            porLugar: fotosPorLugar,
+            id: { $0.id },
+            lugar: { $0.place.id },
+            recientes: FeedMemoria.shared.recientes,
+        )
+        guard !nueva.isEmpty else {
+            feedSecuencia = []
+            carouselCenterId = nil
+            return
+        }
+        let actual = carouselCenterId
+        feedSecuencia = nueva
+        if let actual, let destino = nueva.firstIndex(where: { $0.id == actual }) {
+            // page + desfase ≡ destino (mod n)
+            let n = nueva.count
+            let pagina = feedPosicion ?? 0
+            feedDesfase = ((destino - pagina) % n + n) % n
+        } else {
+            feedDesfase = 0
+            carouselCenterId = nueva[feedIndexWrapped((feedPosicion ?? 0) + feedDesfase)].id
+        }
+        // La tarjeta que queda a la vista también cuenta como vista: si no, la
+        // primera del feed (que nadie "asienta", ya está ahí) sería la única
+        // que podría repetirse de una al rehacer el orden.
+        if let visible = feedFoto(en: feedPosicion ?? 0) {
+            FeedMemoria.shared.registrar(fotoId: visible.id)
+        }
+        dlog("🎞️ [feed] secuencia rehecha (\(nueva.count) fotos, \(FeedMemoria.shared.recientes.count) recientes): \(nueva.prefix(5).map { "\($0.place.name)#\($0.id.suffix(1))" }.joined(separator: " → "))")
     }
 
     /// Tamaño BASE fijo de cada card — el escalado nunca lo toca. Si el layout
@@ -1238,20 +1298,30 @@ struct CategoryPickerView: View {
         explorePhotos.count <= 1 ? [0] : Array(-Self.feedRadio...Self.feedRadio)
     }
 
+    /// La foto que le toca a una página lógica, o nil si todavía no hay
+    /// secuencia (el primer layout puede adelantarse al ranking).
+    private func feedFoto(en pagina: Int) -> ExplorePhoto? {
+        guard !explorePhotos.isEmpty else { return nil }
+        return explorePhotos[feedIndexWrapped(pagina + feedDesfase)]
+    }
+
     /// Al asentarse en una recomendación: se fija la activa, se recentra la
     /// ventana (invisible: el scroll sigue anclado a este mismo id) y se piden
     /// las fotos vecinas para que la siguiente ya esté lista.
     private func feedAsentado(en pagina: Int) {
         guard !explorePhotos.isEmpty else { return }
-        let foto = explorePhotos[feedIndexWrapped(pagina)]
+        guard let foto = feedFoto(en: pagina) else { return }
         dlog("🎞️ [feed] asentado pagina=\(pagina) → \(foto.place.name)")
         if carouselCenterId != foto.id {
             carouselCenterId = foto.id
             Haptic.select()
         }
+        // Solo lo que el usuario vio DE VERDAD (página asentada) cuenta como
+        // visto; cruzar el visor no basta.
+        FeedMemoria.shared.registrar(fotoId: foto.id)
         ImagePrefetcher.prefetch([
-            explorePhotos[feedIndexWrapped(pagina + 1)].url,
-            explorePhotos[feedIndexWrapped(pagina - 1)].url,
+            explorePhotos[feedIndexWrapped(pagina + feedDesfase + 1)].url,
+            explorePhotos[feedIndexWrapped(pagina + feedDesfase - 1)].url,
         ])
     }
 
@@ -1284,7 +1354,9 @@ struct CategoryPickerView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(feedVentana, id: \.self) { pagina in
-                            let photo = explorePhotos[feedIndexWrapped(pagina)]
+                            // La secuencia se arma en onChange, así que el
+                            // primer layout puede llegar antes que ella.
+                            if let photo = feedFoto(en: pagina) {
                             ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
                                 .frame(width: cardAncho, height: cardAlto)
                                 // La tarjeta se centra dentro de su página; la
@@ -1306,6 +1378,7 @@ struct CategoryPickerView: View {
                                     Haptic.medium()
                                     onOpenPlace?(photo.place)
                                 }
+                            }
                         }
                     }
                     .scrollTargetLayout()
@@ -1337,16 +1410,12 @@ struct CategoryPickerView: View {
             // Quién está al frente, para el resto de la pantalla (el CTA lee el
             // lugar centrado). initial: true lo deja resuelto desde el primer
             // layout, sin una ventana en la que nadie es el centro.
-            .onChange(of: explorePhotos.map(\.id), initial: true) { _, ids in
-                guard !ids.isEmpty else {
-                    carouselCenterId = nil
-                    return
-                }
-                // Un refresco del feed no puede mover la tarjeta bajo el dedo:
-                // si la activa sigue existiendo, se queda donde está.
-                if let actual = carouselCenterId, ids.contains(actual) { return }
-                feedPosicion = 0
-                carouselCenterId = ids[0]
+            // El contexto —qué lugares hay y en qué orden de cercanía— es lo
+            // que dispara el re-ranking. No cada fix del GPS: con el ruido
+            // filtrado en cubos de 10 m, un fix que no cambia el orden tampoco
+            // cambia esta firma y el feed ni se entera.
+            .onChange(of: feedContexto, initial: true) { _, _ in
+                reconstruirFeed()
                 ImagePrefetcher.prefetch(explorePhotos.prefix(3).map(\.url))
             }
 
