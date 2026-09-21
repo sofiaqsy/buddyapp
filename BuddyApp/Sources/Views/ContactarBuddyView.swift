@@ -1231,7 +1231,7 @@ struct CategoryPickerView: View {
     /// lugar que se estaba mirando). Las páginas son perezosas y su id es un
     /// entero, así que tener mil no cuesta nada: solo se construyen las que se
     /// ven, y las fotos salen del módulo, sin duplicar datos.
-    private static let feedRadio = 500
+    private static let feedRadio = 120
 
     /// Las páginas que existen. Con una sola recomendación no hay ciclo.
     private var feedVentana: [Int] {
@@ -1285,7 +1285,6 @@ struct CategoryPickerView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(feedVentana, id: \.self) { pagina in
                             let photo = explorePhotos[feedIndexWrapped(pagina)]
-                            let _ = dlog("🎞️ [feed] pinta pagina=\(pagina) → \(photo.place.name)")
                             ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
                                 .frame(width: cardAncho, height: cardAlto)
                                 // La tarjeta se centra dentro de su página; la
