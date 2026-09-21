@@ -737,9 +737,14 @@ struct InicioView: View {
                         // título vive DENTRO del picker— así que al llegar los
                         // datos desaparecía y todo subía 18pt. El picker ya trae
                         // su propio esqueleto con la silueta del carrusel.
+                        // Sin skeletonPulse: su .animation(repeatForever) no
+                        // se limitaba a la opacidad — cualquier cambio de
+                        // tamaño del subárbol mientras carga entraba en la
+                        // misma animación de ida y vuelta, y el bloque de la
+                        // foto se encogía y crecía desde una esquina. Un
+                        // esqueleto quieto también se lee mejor.
                         CategoryPickerView(isSkeleton: true, hidesCategoryGrid: true) { _, _ in }
                             .padding(.horizontal, -Spacing.edge)
-                            .skeletonPulse()
                     } else {
                         homeComposer
                     }
