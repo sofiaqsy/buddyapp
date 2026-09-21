@@ -75,6 +75,26 @@ enum DistanceResolver {
         return "\(Int((d / 1000).rounded())) km"
     }
 
+    /// Lo que la tarjeta MUESTRA. La distancia sigue siendo la señal para
+    /// ORDENAR el feed; acá solo se presenta, y cerca se presenta como tiempo
+    /// caminando, que es lo que el viajero se pregunta de verdad ("¿puedo ir
+    /// andando?").
+    ///
+    /// Tramos gruesos y con "~" a propósito: la distancia es en línea recta y
+    /// un río, una avenida o una cuesta pueden alargar el camino real, así que
+    /// decir "14 min" fingiría una precisión que el cálculo no tiene. Pasados
+    /// los 2 km deja de ser una caminata y vuelven los kilómetros: mezclar
+    /// "en auto" en el mismo feed cambiaría el sentido de la tarjeta.
+    static func walkLabel(_ d: Double) -> String {
+        switch d {
+        case ..<300:    return "A ~5 min caminando"
+        case ..<700:    return "A ~10 min caminando"
+        case ..<1200:   return "A ~15 min caminando"
+        case ..<2000:   return "A ~20–25 min caminando"
+        default:        return label(d)
+        }
+    }
+
     /// Orden por cercanía que no baila con el ruido: agrupa en tramos de 10 m y,
     /// dentro del mismo tramo, conserva el orden que ya había.
     static func stableOrder(_ cards: [APIPlaceCard], from loc: CLLocation) -> [APIPlaceCard] {

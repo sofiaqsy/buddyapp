@@ -2005,9 +2005,12 @@ private struct ExploreCarouselCard: View {
     /// la card solo guarda lo que está mostrando.
     private var etiquetaDistancia: String? {
         guard let d = shownDistance else { return nil }
-        // Con la cifra sola ("7266 km") el chip no decía de qué hablaba. El
-        // "Estás aquí" se explica solo, así que ese no lleva prefijo.
-        return isHere ? "Estás aquí" : "Distancia \(DistanceResolver.label(d))"
+        // Cerca, el tiempo caminando; lejos, los kilómetros (ver walkLabel).
+        // El prefijo "Distancia" solo tiene sentido cuando lo que se muestra
+        // ES una distancia: "Distancia A ~5 min caminando" no se puede leer.
+        if isHere { return "Estás aquí" }
+        let etiqueta = DistanceResolver.walkLabel(d)
+        return d < 2000 ? etiqueta : "Distancia \(etiqueta)"
     }
 
     private func recompute() {
