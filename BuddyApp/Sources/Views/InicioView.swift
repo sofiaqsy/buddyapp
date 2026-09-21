@@ -684,10 +684,16 @@ struct InicioView: View {
         // dejaba el botón debajo de la tab bar en algunos móviles.
         homeStack
             .environment(\.exploreFitsScreen, true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { alto in
+                dlog("📐 [layout] Home disponible=\(Int(alto))")
+            }
     }
 
     private var homeStack: some View {
         VStack(alignment: .leading, spacing: 0) {
+            Color.clear.frame(height: 0)
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in }
+
 
                 if loadDataFailed && !isLoadingData {
                     Button {

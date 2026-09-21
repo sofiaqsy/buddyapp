@@ -829,6 +829,7 @@ struct CategoryPickerView: View {
             .padding(.horizontal, Spacing.edge)
             .padding(.top, Spacing.md)
             .padding(.bottom, Spacing.lg / 2)
+            .layoutPriority(1)
 
             if isSkeleton && hidesCategoryGrid {
                 // El esqueleto imita el carrusel y no el CTA suelto: mientras
@@ -1148,11 +1149,10 @@ struct CategoryPickerView: View {
     /// sobra tras el título, la disponibilidad y el botón). Medido, no estimado:
     /// cualquier cuenta a mano dejaba el botón debajo de la tab bar.
     @Environment(\.exploreFitsScreen) private var exploreFitsScreen
-    @State private var exploreRowHeight: CGFloat? = nil
+    /// El alto deseado; el real sale de la geometría de la fila (ver
+    /// exploreCarousel) cuando la pantalla no se desplaza.
     private var exploreCardPhoto: CGFloat {
-        let deseado = min(exploreCardPhotoHeight, exploreCardPhotoOverride ?? .greatestFiniteMagnitude)
-        guard exploreFitsScreen, let alto = exploreRowHeight else { return deseado }
-        return min(deseado, exploreCardPhotoThatFits(inRow: alto))
+        min(exploreCardPhotoHeight, exploreCardPhotoOverride ?? .greatestFiniteMagnitude)
     }
     private var exploreCardWidth: CGFloat { exploreCardPhoto * 3 / 4 }
     // 78 y no 95: al subir el texto 15pt, esos 15 quedaron abajo como hueco.
@@ -1209,16 +1209,6 @@ struct CategoryPickerView: View {
         return -Double(abs(index - centerIndex))
     }
 
-    /// El alto que el layout OFRECE a la fila del carrusel (no el de su
-    /// contenido): de ahí sale el tamaño de la tarjeta cuando la pantalla no se
-    /// desplaza. Medir el contenido no servía — devolvía el alto deseado y por
-    /// eso nunca encogía y el botón quedaba debajo de la tab bar.
-    private var exploreRowProbe: some View {
-        Color.clear.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { alto in
-            if exploreFitsScreen, alto > 0, exploreRowHeight != alto { exploreRowHeight = alto }
-        }
-    }
-
     private var exploreCarousel: some View {
         // spacing: 0 con paddings explícitos. Con un spacing uniforme de 14 los
         // tres elementos quedaban equidistantes y el cerebro los leía como
@@ -1227,6 +1217,19 @@ struct CategoryPickerView: View {
         // donde el CTA es el final del recorrido, no un vecino.
         VStack(spacing: 0) {
             GeometryReader { geo in
+                // Las medidas de la tarjeta salen del alto QUE ESTA FILA
+                // RECIBE, en la misma pasada de layout. Sin estado, sin
+                // sondas y sin porcentajes del dispositivo: la fila es el
+                // único elemento elástico del composer (el resto declara
+                // layoutPriority), así que este alto ya es "lo que sobra"
+                // después del título, la disponibilidad y el botón.
+                let _ = dlog("📐 [layout] fila carrusel: ofrecida=\(Int(geo.size.height)) fitsScreen=\(exploreFitsScreen) deseada=\(Int(exploreCardPhoto + 70))")
+                let photoAlto = exploreFitsScreen
+                    ? min(exploreCardPhoto, exploreCardPhotoThatFits(inRow: geo.size.height))
+                    : exploreCardPhoto
+                let cardAlto = photoAlto + 70
+                let cardAncho = photoAlto * 3 / 4
+                let slack = cardAlto * exploreScaleDelta / 2 + 8
                 // El padding horizontal de abajo depende de geo.size.width, que
                 // en la PRIMERA pasada del GeometryReader es 0 → el padding se
                 // calcula negativo y el ScrollView nace con un layout inválido.
@@ -1250,7 +1253,7 @@ struct CategoryPickerView: View {
                     HStack(spacing: exploreCardSpacing) {
                         ForEach(Array(explorePhotos.enumerated()), id: \.element.id) { index, photo in
                             ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
-                                .frame(width: exploreCardWidth, height: exploreCardHeight)
+                                .frame(width: cardAncho, height: cardAlto)
                                 // visualEffect es el único lector de geometría acá a
                                 // propósito: es render-only y no dispara re-render de
                                 // @State, a diferencia de un GeometryReader+PreferenceKey
@@ -1265,7 +1268,7 @@ struct CategoryPickerView: View {
                                     // el 160 se agotaba antes de que llegara la vecina,
                                     // así que la card se quedaba plana un tramo y el
                                     // cambio salía de golpe al final.
-                                    let step = exploreCardWidth + exploreCardSpacing
+                                    let step = cardAncho + exploreCardSpacing
                                     let normalized = min(distance / step, 1)
                                     // Curva suave (smoothstep) en vez de recta: entra y
                                     // sale despacio, que es lo que hace que el paso de
@@ -1323,8 +1326,11 @@ struct CategoryPickerView: View {
                     .scrollTargetLayout()
                 }
                 .scrollDisabled(zoomState.isZooming)
-                .contentMargins(.horizontal, (geo.size.width - exploreCardWidth) / 2, for: .scrollContent)
-                .contentMargins(.vertical, exploreVerticalSlack, for: .scrollContent)
+                .contentMargins(.horizontal, (geo.size.width - cardAncho) / 2, for: .scrollContent)
+                .contentMargins(.vertical, slack, for: .scrollContent)
+                // Las dos fotos de cada tarjeta (la de la ficha y la del fondo
+                // desenfocado) tienen que medir lo mismo que la tarjeta.
+                .environment(\.exploreCardPhotoHeightOverride, photoAlto)
                 .coordinateSpace(name: "explore")
                 // limitBehavior: .never deja que la velocidad del swipe
                 // decida (permite avanzar más de una card en un flick fuerte
@@ -1349,12 +1355,18 @@ struct CategoryPickerView: View {
             // Con la Home sin scroll la fila toma el espacio sobrante y la
             // tarjeta se calcula de ahí; en el resto de pantallas coincide
             // exactamente con su contenido (card + el slack de arriba y abajo).
+            // Sin scroll, la fila es lo único que se comprime: toma lo que
+            // sobra y su mínimo es el de una tarjeta chica. Con scroll (otras
+            // pantallas) mantiene el alto exacto de su contenido.
             .frame(
                 height: exploreFitsScreen ? nil : exploreCardHeight + exploreVerticalSlack * 2,
                 alignment: .center,
             )
             .frame(maxHeight: exploreFitsScreen ? .infinity : nil)
-            .background(exploreRowProbe)
+            // Nada de la fila se dibuja fuera de ella: con texto grande, las
+            // tarjetas se salían por abajo y tapaban el texto y el botón.
+            .clipped()
+            .layoutPriority(0)
             // Las cards leen el mismo alto resuelto por el entorno: la foto del
             // fondo desenfocado y la de la ficha tienen que medir igual.
             .environment(\.exploreCardPhotoHeightOverride, exploreCardPhoto)
@@ -1410,6 +1422,9 @@ struct CategoryPickerView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 12)
                 .redacted(reason: isSkeleton ? .placeholder : [])
+                // Prioridad 1: se dimensiona ANTES que la fila del carrusel,
+                // que es prioridad 0 y absorbe lo que quede.
+                .layoutPriority(1)
             }
 
             // Sin acción todavía — se conecta cuando el flujo de "consultar
@@ -1421,6 +1436,10 @@ struct CategoryPickerView: View {
             consultCTA
             .padding(.horizontal, Spacing.edge)
             .padding(.top, 16)
+            // El botón es la acción de la pantalla: reclama su alto antes que
+            // nada. Sin esto, una fila de fotos con alto intrínseco grande lo
+            // empujaba fuera de la pantalla (debajo de la tab bar).
+            .layoutPriority(1)
         }
     }
 }
@@ -1822,7 +1841,10 @@ extension EnvironmentValues {
 /// Lo que cabe de foto en una fila de `alto` puntos: se descuenta el aire
 /// vertical, el escalado de la card central (×1.22) y la banda de texto (70).
 func exploreCardPhotoThatFits(inRow alto: CGFloat) -> CGFloat {
-    max(150, (max(0, alto - 16) / 1.22) - 70)
+    // El piso es bajo a propósito: con texto en tamaño accesibilidad el título
+    // ocupa media pantalla y la fila se queda con muy poco. Antes el piso era
+    // 150 y las tarjetas se dibujaban ENCIMA de la disponibilidad y del botón.
+    max(60, (max(0, alto - 16) / 1.22) - 70)
 }
 
 private let exploreCardPhotoHeight: CGFloat = {

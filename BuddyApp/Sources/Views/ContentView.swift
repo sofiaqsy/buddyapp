@@ -43,7 +43,15 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        // La barra de tabs es HERMANA del contenido, no una capa encima. Antes
+        // era un ZStack: el contenido ocupaba toda la pantalla y la barra se
+        // dibujaba sobre él, con un safeAreaInset fijo de 70 que intentaba
+        // compensar. La barra mide más que eso (suma el inset del indicador de
+        // inicio), así que tapaba el final de cada pantalla; con scroll se
+        // disimulaba y en una Home estática dejaba "Consultar a buddies"
+        // debajo. En un VStack la barra OCUPA su espacio y el contenido recibe
+        // exactamente lo que queda: sin números, lo reparte el layout.
+        VStack(spacing: 0) {
             // Tab content — keep all views alive to preserve scroll/nav state
             TabView(selection: $router.selectedTab) {
                 InicioView().tag(AppTab.inicio)
@@ -51,11 +59,13 @@ struct RootView: View {
                 ConexionesView().environmentObject(chatStore).tag(AppTab.conexiones)
                 YoView().environmentObject(authState).environmentObject(routeStore).tag(AppTab.yo)
             }
-            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 70) }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Custom Liquid Glass tab bar
             GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread)
         }
+        // Solo el borde inferior: la barra dibuja su propio fondo sobre la zona
+        // del indicador de inicio (ya lleva ese inset en su padding).
         .ignoresSafeArea(edges: .bottom)
         // Sesión de cuenta verificada expirada (p. ej. tras reinstalar): pedir
         // login con la misma cuenta en vez de seguir como guest nuevo.
