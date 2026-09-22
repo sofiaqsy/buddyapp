@@ -970,7 +970,14 @@ struct CategoryPickerView: View {
             .padding(.horizontal, Spacing.edge)
             }
 
-            Spacer().frame(height: Spacing.md)
+            // Solo fuera del carrusel del Home: ahí este aire fijo le
+            // robaba alto a la foto (que ya lo reparte sola con maxHeight
+            // infinito) y dejaba una franja muerta debajo del botón, pegada
+            // a la tab bar — la foto y el botón quedaban más arriba de lo
+            // que debían, lejos del pulgar.
+            if !showsExploreCarousel {
+                Spacer().frame(height: Spacing.md)
+            }
         }
         .onAppear {
             if let key = preselectedCategory, selected == nil {
