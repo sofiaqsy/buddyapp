@@ -29,6 +29,16 @@ final class MatchingStore: ObservableObject {
 
     private init() {}
 
+    /// El snapshot YA en memoria, solo si todavía está dentro de la ventana
+    /// de frescura (los mismos 3s de siempre — no es un TTL nuevo). nil si no
+    /// hay cache o venció: quien llama debe ir a la red, igual que hoy.
+    /// Para quien puede pintar YA con algo levemente viejo (abrir una
+    /// pantalla) y de todos modos va a confirmar contra el servidor.
+    var freshSnapshot: [APIMatch]? {
+        guard let at = lastFetchedAt, Date().timeIntervalSince(at) < freshness else { return nil }
+        return matches
+    }
+
     /// Para pantallas que MUESTRAN matches. Reutiliza el snapshot si es reciente.
     func load(trigger: String) async throws -> [APIMatch] {
         if let at = lastFetchedAt {

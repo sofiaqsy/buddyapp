@@ -264,6 +264,38 @@ struct ContactarBuddyView: View {
         }
     }
 
+    /// El match ACTIVO de este viajero dentro de una lista, si hay. 'pending'
+    /// = buddy recién asignado (el backend crea el match así). Función pura
+    /// (sin efectos) para poder usarla tanto en la lectura inicial como en la
+    /// reconciliación de segundo plano, sin duplicar el criterio.
+    private func matchActivo(en matches: [APIMatch], userId: String) -> APIMatch? {
+        let activeStatuses = ["pending", "accepted", "active"]
+        return matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId })
+    }
+
+    /// Confirma contra el servidor el snapshot de cache con el que la
+    /// pantalla YA se pintó. La red manda: si aparece un match activo que el
+    /// snapshot no tenía, la pantalla salta al chat sola. Es lo único que
+    /// puede cambiar acá — las otras ramas (retomar búsqueda, tema directo,
+    /// selector) dependen de /my-request, que siempre va a la red y nunca
+    /// lee de este cache, así que ya están confirmadas.
+    private func reconciliarMatchesEnSegundoPlano(userId: String, tCheckStatus: Date) {
+        Task {
+            guard let frescos = try? await MatchingStore.shared.refresh(trigger: "contactar:checkStatus/reconciliar") else { return }
+            dlog("⏱️ [tiempo] checkStatus: matches reconciliados en \(Cronometro.ms(desde: tCheckStatus))ms (\(frescos.count))")
+            // Ya se resolvió por otro camino (o la pantalla se cerró) — no
+            // pisar un estado más nuevo con uno más viejo, y no duplicar la
+            // transición si ya estaba en .matched.
+            guard phase != .matched else { return }
+            guard let active = matchActivo(en: frescos, userId: userId) else { return }
+            dlog("🔄 [checkStatus] reconciliación: match activo apareció id=\(active.id) → saltando al chat")
+            match = active
+            let cat = initialRequest?.category
+            chosenCategory = (cat == nil || cat == "general") ? nil : cat
+            phase = .matched
+        }
+    }
+
     private func checkStatus() async {
         phase = .loading
         // Cronometro y no un Date() propio: así se puede restar contra el
@@ -288,24 +320,34 @@ struct ContactarBuddyView: View {
         }
         guard let userId = effectiveUserId else { phase = .error("Sin sesión."); return }
         do {
-            // Los dos van en paralelo: my-request no depende del resultado de
-            // matches, solo del código los ejecutaba uno después del otro. Si
-            // ya hay match (se vuelve abajo sin usar myRequestTask), Swift
-            // cancela esa tarea sola al salir del scope — no se desperdicia.
-            async let matchesTask = MatchingStore.shared.refresh(trigger: "contactar:checkStatus")
+            // my-request no depende del resultado de matches, así que va en
+            // paralelo (async let) sin importar de dónde salgan los matches.
+            // Si ya hay match (se vuelve abajo sin usarla), Swift cancela esa
+            // tarea sola al salir del scope — no se desperdicia.
             async let myRequestTask = APIClient.shared.fetchMyRequest()
 
-            let matches = try await matchesTask
-            dlog("⏱️ [tiempo] checkStatus: matches listos en \(Cronometro.ms(desde: tCheckStatus))ms (\(matches.count))")
+            // MatchingStore.refresh() SIEMPRE va a la red a propósito (es la
+            // vía de quien está esperando un buddy activamente, ver el
+            // comentario en MatchingStore). Pero esta es la PRIMERA lectura,
+            // antes de que exista ninguna espera: si el snapshot en memoria
+            // sigue fresco (misma ventana de 3s, nada nuevo), pintar con eso
+            // ahorra los 400ms–1.2s que /matching/matches puede tardar, y la
+            // red se consulta de todos modos detrás (reconciliarMatchesEnSegundoPlano)
+            // para no quedarse con algo viejo.
+            let matches: [APIMatch]
+            if let cache = MatchingStore.shared.freshSnapshot {
+                matches = cache
+                dlog("⏱️ [tiempo] checkStatus: matches de CACHE en \(Cronometro.ms(desde: tCheckStatus))ms (\(matches.count))")
+                reconciliarMatchesEnSegundoPlano(userId: userId, tCheckStatus: tCheckStatus)
+            } else {
+                matches = try await MatchingStore.shared.refresh(trigger: "contactar:checkStatus")
+                dlog("⏱️ [tiempo] checkStatus: matches de RED en \(Cronometro.ms(desde: tCheckStatus))ms (\(matches.count))")
+            }
             dlog("🔎 [checkStatus] userId=\(userId) — \(matches.count) match(es) recibidos")
             for m in matches {
                 print("   • match id=\(m.id) status=\(m.status ?? "nil") travelerId=\(m.travelerId) buddyId=\(m.buddyId ?? "nil")")
             }
-            // 'pending' = buddy recién asignado (el backend crea el match así).
-            // Si ya hay un buddy vinculado, abrimos ESE chat en vez de permitir
-            // pedir otro buddy.
-            let activeStatuses = ["pending", "accepted", "active"]
-            if let active = matches.first(where: { activeStatuses.contains($0.status ?? "") && $0.travelerId == userId }) {
+            if let active = matchActivo(en: matches, userId: userId) {
                 print("✅ [checkStatus] match activo encontrado id=\(active.id) status=\(active.status ?? "nil") → abriendo chat")
                 match = active
                 let cat = initialRequest?.category
@@ -314,7 +356,7 @@ struct ContactarBuddyView: View {
                 dlog("⏱️ [tiempo] checkStatus completo en \(Cronometro.ms(desde: tCheckStatus))ms → matched")
                 return
             }
-            print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
+            print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) → buscando solicitudes abiertas")
             // La encuesta pendiente la presenta RootView globalmente (en cualquier
             // tab y en tiempo real), así que aquí no hace falta detectarla.
             // La solicitud PROPIA sale de /my-request. Antes se buscaba en
