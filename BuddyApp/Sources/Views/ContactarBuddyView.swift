@@ -390,6 +390,14 @@ struct ContactarBuddyView: View {
         if initialRequest != nil {
             onCancelled?()
             dismiss()
+        } else if phase == .composing || phase == .searching {
+            // Cancelar desde la conversación vuelve a ESA misma pantalla, con
+            // el tema sin elegir. Antes saltaba al selector viejo, que tiene
+            // otro diseño y otros textos.
+            pendingCategoryKey = nil
+            chosenCategory = nil
+            isExpandingSearch = false
+            withAnimation(.easeOut(duration: 0.25)) { phase = .composing }
         } else {
             phase = .selectCategory
         }
@@ -1604,6 +1612,7 @@ private struct PendingConversationView: View {
     /// "¿cancelar qué, exactamente?" — ¿ya no quiero ayuda, me equivoqué,
     /// vuelvo al Home? Desde el menú la intención es inequívoca.
     var onCancelRequest: (() -> Void)? = nil
+    @State private var confirmandoCancelar = false
 
     private let categoryKeys = ["transport", "food", "shopping",
                                "activities", "accommodation", "recommendations"]
@@ -1684,16 +1693,34 @@ private struct PendingConversationView: View {
     }
 
     private var statusBar: some View {
-        HStack(spacing: 8) {
-            if chosenCategory == nil {
-                Text("Elige un tema para empezar")
-                    .font(BT.footnote)
-                    .foregroundStyle(Color.inkMuted)
-            } else {
-                ProgressView().scaleEffect(0.8).tint(Color.inkMuted)
-                Text("Podrás escribir cuando un buddy se una")
-                    .font(BT.footnote)
-                    .foregroundStyle(Color.inkMuted)
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                if chosenCategory == nil {
+                    Text("Elige un tema para empezar")
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.inkMuted)
+                } else {
+                    ProgressView().scaleEffect(0.8).tint(Color.inkMuted)
+                    Text("Podrás escribir cuando un buddy se una")
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+            // A la vista, no solo en el menú "…": mientras se espera, poder
+            // arrepentirse es lo segundo que el usuario busca.
+            if chosenCategory != nil, onCancelRequest != nil {
+                Button("Cancelar solicitud") { confirmandoCancelar = true }
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.red)
+                    .buttonStyle(.plain)
+                    .confirmationDialog("¿Cancelar tu solicitud?",
+                                        isPresented: $confirmandoCancelar,
+                                        titleVisibility: .visible) {
+                        Button("Cancelar solicitud", role: .destructive) { onCancelRequest?() }
+                        Button("Seguir esperando", role: .cancel) {}
+                    } message: {
+                        Text("Dejaremos de avisar a los buddies.")
+                    }
             }
         }
         .frame(maxWidth: .infinity)
