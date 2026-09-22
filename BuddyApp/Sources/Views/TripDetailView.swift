@@ -1352,21 +1352,8 @@ struct PlaceGuideDetailSheet: View {
                     emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
                 }
             } else {
-                if allPhotos.count > 6 {
-                    HStack {
-                        Spacer()
-                        Button { showFullGallery = true } label: {
-                            HStack(spacing: 2) {
-                                Text("Ver todas").font(.system(size: 13, weight: .semibold))
-                                Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
-                            }
-                            .foregroundStyle(Color.brand)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 20)
-                }
-
+                // Sin "Ver todas": tocar cualquier foto abre el visor, y ahí
+                // se recorren TODAS (no solo las de esta fila).
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         addPhotoTile
@@ -1551,9 +1538,9 @@ struct VisorFotoInicio: Identifiable {
     var id: Int { indice }
 }
 
-/// Visor de fotos a pantalla completa. Mismo paginador que el feed del Home:
-/// tres fotos, un gesto = una foto, y el ciclo es aritmético (módulo), así que
-/// después de la última viene la primera, sin fin, en los dos sentidos.
+/// Visor de fotos a pantalla completa. Mismo paginador VERTICAL que el feed
+/// del Home: tres fotos, un gesto = una foto, y el ciclo es aritmético
+/// (módulo), así que después de la última viene la primera, sin fin.
 /// La foto se ve ENTERA (scaledToFit): acá se mira el lugar, no se decora.
 struct PlacePhotoViewer: View {
     let photos: [String]
@@ -1562,9 +1549,8 @@ struct PlacePhotoViewer: View {
     @Environment(\.dismiss) private var dismiss
     /// Índice lógico, sin límite; la foto sale del módulo.
     @State private var posicion: Int = 0
-    @State private var arrastreX: CGFloat = 0
-    /// Arrastre hacia abajo para cerrar.
-    @State private var arrastreY: CGFloat = 0
+    /// Desplazamiento vertical en curso del dedo (y el tramo animado).
+    @State private var arrastre: CGFloat = 0
     @State private var animando = false
 
     init(photos: [String], inicial: Int) {
@@ -1586,9 +1572,9 @@ struct PlacePhotoViewer: View {
 
     var body: some View {
         GeometryReader { geo in
-            let paso = geo.size.width
+            let paso = geo.size.height
             ZStack {
-                Color.black.opacity(1 - min(abs(arrastreY) / 400, 0.6)).ignoresSafeArea()
+                Color.black.ignoresSafeArea()
 
                 ForEach(paginas, id: \.self) { pagina in
                     CachedImage(urlString: photos[indice(pagina)]) { img in
@@ -1597,7 +1583,7 @@ struct PlacePhotoViewer: View {
                         ProgressView().tint(.white)
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .offset(x: CGFloat(pagina - posicion) * paso + arrastreX, y: arrastreY)
+                    .offset(y: CGFloat(pagina - posicion) * paso + arrastre)
                     .accessibilityHidden(pagina != posicion)
                 }
 
@@ -1622,7 +1608,6 @@ struct PlacePhotoViewer: View {
                     .padding(.horizontal, 16)
                     Spacer()
                 }
-                .opacity(arrastreY == 0 ? 1 : 0)
             }
             .contentShape(Rectangle())
             .gesture(gesto(paso: paso))
@@ -1638,37 +1623,27 @@ struct PlacePhotoViewer: View {
         posicion += direccion
     }
 
+    /// Vertical, como el feed del Home: hacia arriba la siguiente, hacia
+    /// abajo la anterior. Cerrar es solo con el botón, porque deslizar hacia
+    /// abajo ya significa "la foto anterior".
     private func gesto(paso: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { v in
-                guard !animando else { return }
-                if abs(v.translation.height) > abs(v.translation.width), arrastreX == 0 {
-                    // Vertical: solo hacia abajo, para cerrar.
-                    arrastreY = max(0, v.translation.height)
-                } else if arrastreY == 0 {
-                    arrastreX = v.translation.width * (photos.count <= 1 ? 0.25 : 1)
-                }
+                guard !animando, abs(v.translation.height) > abs(v.translation.width) else { return }
+                arrastre = v.translation.height * (photos.count <= 1 ? 0.25 : 1)
             }
             .onEnded { v in
                 guard !animando else { return }
-                if arrastreY > 0 {
-                    if v.predictedEndTranslation.height > 160 {
-                        dismiss()
-                    } else {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { arrastreY = 0 }
-                    }
-                    return
-                }
-                let recorrido = v.predictedEndTranslation.width
+                let recorrido = v.predictedEndTranslation.height
                 let direccion = photos.count > 1 && abs(recorrido) > paso / 5
                     ? (recorrido < 0 ? 1 : -1) : 0
                 guard direccion != 0 else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { arrastreX = 0 }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { arrastre = 0 }
                     return
                 }
                 animando = true
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    arrastreX = -CGFloat(direccion) * paso
+                    arrastre = -CGFloat(direccion) * paso
                 }
                 // Al terminar el viaje, la foto que entró pasa a ser la actual
                 // y el desplazamiento vuelve a cero sin animación: el dibujo
@@ -1679,7 +1654,7 @@ struct PlacePhotoViewer: View {
                     sinAnimacion.disablesAnimations = true
                     withTransaction(sinAnimacion) {
                         posicion += direccion
-                        arrastreX = 0
+                        arrastre = 0
                     }
                     animando = false
                     ImagePrefetcher.prefetch([photos[indice(posicion + 1)], photos[indice(posicion - 1)]])
