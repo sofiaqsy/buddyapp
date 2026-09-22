@@ -1612,7 +1612,6 @@ private struct PendingConversationView: View {
     /// "¿cancelar qué, exactamente?" — ¿ya no quiero ayuda, me equivoqué,
     /// vuelvo al Home? Desde el menú la intención es inequívoca.
     var onCancelRequest: (() -> Void)? = nil
-    @State private var confirmandoCancelar = false
 
     private let categoryKeys = ["transport", "food", "shopping",
                                "activities", "accommodation", "recommendations"]
@@ -1709,18 +1708,12 @@ private struct PendingConversationView: View {
             // A la vista, no solo en el menú "…": mientras se espera, poder
             // arrepentirse es lo segundo que el usuario busca.
             if chosenCategory != nil, onCancelRequest != nil {
-                Button("Cancelar solicitud") { confirmandoCancelar = true }
+                // Sin confirmación: cancelar es barato (se vuelve a elegir
+                // tema en un toque) y el modal era un paso de más.
+                Button("Cancelar solicitud") { onCancelRequest?() }
                     .font(BT.footnoteBold)
                     .foregroundStyle(Color.red)
                     .buttonStyle(.plain)
-                    .confirmationDialog("¿Cancelar tu solicitud?",
-                                        isPresented: $confirmandoCancelar,
-                                        titleVisibility: .visible) {
-                        Button("Cancelar solicitud", role: .destructive) { onCancelRequest?() }
-                        Button("Seguir esperando", role: .cancel) {}
-                    } message: {
-                        Text("Dejaremos de avisar a los buddies.")
-                    }
             }
         }
         .frame(maxWidth: .infinity)
