@@ -1742,9 +1742,9 @@ private struct PendingConversationView: View {
                         Haptic.medium()
                         onPickCategory(key)
                     } label: {
-                        // Solo el título: el subtítulo lo repetía ("Comer:
-                        // Restaurantes y sabores locales") y angostaba tanto
-                        // la columna que "Alojamiento" se partía en dos.
+                        // El título va en UNA línea (encoge un poco si hace
+                        // falta): sin esto "Alojamiento" se partía en
+                        // "Alojamien-to". El subtítulo sí puede ocupar dos.
                         HStack(spacing: 12) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 10)
@@ -1754,11 +1754,19 @@ private struct PendingConversationView: View {
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundStyle(Color.accent)
                             }
-                            Text(info.label)
-                                .font(BT.footnoteBold)
-                                .foregroundStyle(Color.ink)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(info.label)
+                                    .font(BT.footnoteBold)
+                                    .foregroundStyle(Color.ink)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                Text(info.subtitle)
+                                    .font(BT.caption1)
+                                    .foregroundStyle(Color.inkMuted)
+                                    .multilineTextAlignment(.leading)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                             Spacer(minLength: 0)
                         }
                         .padding(12)
