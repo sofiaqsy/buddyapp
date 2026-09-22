@@ -576,9 +576,14 @@ struct TripDetailView: View {
         // que ocupa su contenido y no más, así una pestaña con una sola fila
         // de fotos no deja una franja vacía debajo. Si el contenido pasa del
         // tope, el scroll de adentro se encarga.
+        // Abierto desde la tarjeta de UN lugar (focusPlaceId), el panel nace ya
+        // con el alto del detalle aunque el lugar tarde un instante en
+        // resolverse: si no, el panel aparecía con el alto de la lista y un
+        // segundo después bajaba a su sitio.
         .frame(
             width: geo.size.width,
-            height: selectedPlace == nil ? sheetHeight + bottomClearance : detalleHeight,
+            height: selectedPlace == nil && focusPlaceId == nil
+                ? sheetHeight + bottomClearance : detalleHeight,
             alignment: .top,
         )
         .glassPanel()
