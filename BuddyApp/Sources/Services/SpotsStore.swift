@@ -47,8 +47,10 @@ final class SpotsStore: ObservableObject {
         let gen = generation
         inFlightCoords = coords
         let task = Task { [weak self] in
+            let t0 = Date()
             do {
                 let cards = try await APIClient.shared.fetchPlaceCards(lat: lat, lng: lng)
+                dlog("⏱️ [tiempo] spots \(reason) \(Cronometro.ms(desde: t0))ms → \(cards.count) lugar(es)")
                 guard let self else { return }
                 guard gen == self.generation else {
                     dlog("🗂️ [spots] \(reason): respuesta superada por una petición más nueva — descartada")

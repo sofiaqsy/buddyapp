@@ -652,6 +652,9 @@ struct CategoryPickerView: View {
     /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
     /// cuando el orden cambia debajo.
     @State private var feedDesfase: Int = 0
+    /// Solo para el log de tiempos: la primera vez que hay una recomendación
+    /// asentada en pantalla.
+    @State private var feedPrimeraMedida = false
     /// Nace COMPLETA: si empezara con una sola página, el ScrollView se
     /// dispondría con esa única página y al aparecer las otras 120 conservaría
     /// el desplazamiento —no el id—, quedando pegado al borde de arriba, desde
@@ -1155,6 +1158,7 @@ struct CategoryPickerView: View {
     ///   usuario pide otra tanda tocando el tab, sí: ahí se salta a la primera
     ///   del orden nuevo, que por la memoria de vistas no es la de recién.
     private func reconstruirFeed(manteniendoVisible: Bool = true) {
+        let tRank = Date()
         let nueva = FeedRanking.secuencia(
             porLugar: fotosPorLugar,
             id: { $0.id },
@@ -1200,6 +1204,11 @@ struct CategoryPickerView: View {
         // que podría repetirse de una al rehacer el orden.
         if let visible = feedFoto(en: feedPosicion ?? 0) {
             FeedMemoria.shared.registrar(fotoId: visible.id)
+        }
+        dlog("⏱️ [tiempo] ranking \(Cronometro.ms(desde: tRank))ms → \(nueva.count) fotos")
+        if !feedPrimeraMedida, !nueva.isEmpty {
+            feedPrimeraMedida = true
+            dlog("⏱️ [tiempo] primera recomendación lista a los \(Cronometro.desdeArranque())ms del arranque")
         }
         dlog("🎞️ [feed] secuencia rehecha (\(nueva.count) fotos, \(FeedMemoria.shared.recientes.count) recientes): \(nueva.prefix(5).map { "\($0.place.name)#\($0.id.suffix(1))" }.joined(separator: " → "))")
     }

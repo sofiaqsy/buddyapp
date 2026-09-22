@@ -1323,6 +1323,8 @@ struct InicioView: View {
 
     private func _loadDataBody(force: Bool) async {
         guard !Task.isCancelled else { return }
+        let t0 = Date()
+        defer { dlog("⏱️ [tiempo] loadData completo \(Cronometro.ms(desde: t0))ms (desde el arranque \(Cronometro.desdeArranque())ms)") }
         await MainActor.run { loadDataFailed = false }
         // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
         // exploreCards va en paralelo con destinations, ANTES de que
@@ -1344,7 +1346,9 @@ struct InicioView: View {
             dlog("🗂️ [spots] loadData: esperando el primer fix del GPS para pedir con coordenadas")
         }
 
+        let tDest = Date()
         let fetchedDests = (try? await APIClient.shared.fetchDestinations()) ?? []
+        dlog("⏱️ [tiempo] destinations \(Cronometro.ms(desde: tDest))ms → \(fetchedDests.count)")
         await MainActor.run {
             destinations = fetchedDests
             ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
@@ -1355,7 +1359,12 @@ struct InicioView: View {
         dlog("🏠 [loadData] hasSession=\(Session.hasSession) travelerId=\(tid?.prefix(8) ?? "nil") isVerified=\(Session.isVerified)")
         guard Session.hasSession else {
             dlog("🏠 [loadData] sin sesión — solo contenido público")
-            await MainActor.run { isLoadingData = false }
+            await MainActor.run {
+            if isLoadingData {
+                dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque")
+            }
+            isLoadingData = false
+        }
             await refreshHomeCommunityContext()
                 return
         }
@@ -1380,7 +1389,12 @@ struct InicioView: View {
             guard Session.travelerId == snapshotId else {
                 let newId = Session.travelerId?.prefix(8) ?? "?"
                 print("⚠️ [loadData] travelerId cambió (nil → \(newId)) — descarto y reintento con identidad correcta")
-                await MainActor.run { isLoadingData = false }
+                await MainActor.run {
+            if isLoadingData {
+                dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque")
+            }
+            isLoadingData = false
+        }
                 Task { await loadData() }
                 return
             }
@@ -1442,7 +1456,12 @@ struct InicioView: View {
                 await MainActor.run { loadDataFailed = true }
             }
         }
-        await MainActor.run { isLoadingData = false }
+        await MainActor.run {
+            if isLoadingData {
+                dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque")
+            }
+            isLoadingData = false
+        }
         let doneJourney = await MainActor.run { activeJourney?.id.prefix(8) ?? "nil" }
         let doneLive = await MainActor.run { liveJourneys.count }
         dlog("🏠 [loadData] done — activeJourney=\(doneJourney) liveJourneys=\(doneLive)")

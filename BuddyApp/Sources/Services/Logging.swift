@@ -16,3 +16,28 @@ func dlog(_ message: @autoclosure () -> String) {
     print(message())
     #endif
 }
+
+
+// MARK: – Cronómetro
+//
+// Para responder "¿cuánto tarda el Home en estar listo?" con números y no con
+// impresiones. Todo esto vive en Debug: en Release dlog no imprime y las
+// medidas no se toman.
+
+enum Cronometro {
+    /// Momento en que arrancó la app. Sirve de cero para "desde el arranque".
+    static let arranque = Date()
+
+    static func desdeArranque() -> Int { ms(desde: arranque) }
+
+    static func ms(desde inicio: Date) -> Int { Int(Date().timeIntervalSince(inicio) * 1000) }
+
+    /// Mide un tramo y lo deja en el log con su nombre.
+    @discardableResult
+    static func medir<T>(_ nombre: String, _ cuerpo: () throws -> T) rethrows -> T {
+        let t0 = Date()
+        let r = try cuerpo()
+        dlog("⏱️ [tiempo] \(nombre) \(ms(desde: t0))ms")
+        return r
+    }
+}

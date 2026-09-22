@@ -148,14 +148,18 @@ final class APIClient {
             let peticion = req
             let enviar: @Sendable () async throws -> (Data, HTTPURLResponse) = {
                 dlog("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
+                let t0 = Date()
                 let (d, r) = try await APIClient.session.data(for: peticion)
+                dlog("⏱️ [tiempo] \(method) \(path) \(Cronometro.ms(desde: t0))ms")
                 guard let h = r as? HTTPURLResponse else { throw APIError.unknown }
                 return (d, h)
             }
             (data, http) = try await inFlight.run(key: "GET \(path)", operation: enviar)
         } else {
             dlog("🌐 [APIClient] \(method) \(path) reqId=\(reqId.prefix(8))")
+            let t0 = Date()
             let (d, response) = try await APIClient.session.data(for: req)
+            dlog("⏱️ [tiempo] \(method) \(path) \(Cronometro.ms(desde: t0))ms")
             guard let h = response as? HTTPURLResponse else { throw APIError.unknown }
             (data, http) = (d, h)
         }

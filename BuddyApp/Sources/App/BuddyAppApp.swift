@@ -10,6 +10,9 @@ struct BuddyAppApp: App {
 
     init() {
         UITabBar.appearance().isHidden = true
+        // Toca el cronómetro acá para que su cero sea el arranque de verdad y
+        // no la primera vez que alguien lo consulta.
+        _ = Cronometro.arranque
         print("🚀 [AppLaunch] ─────────────────────────────────────")
         print("🚀 [AppLaunch] TravelerService.hasSession=\(TravelerService.shared.hasSession)")
         print("🚀 [AppLaunch] travelerId=\(TravelerService.shared.travelerId?.prefix(8) ?? "NIL")")
