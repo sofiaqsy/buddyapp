@@ -1161,7 +1161,11 @@ struct CategoryPickerView: View {
 
             consultCTA
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, 16)
+                // Mismos 4/4 que el carrusel real (ver ahí el porqué): el
+                // esqueleto tiene que medir EXACTAMENTE lo mismo, si no el
+                // bloque entero salta al llegar las fotos.
+                .padding(.top, 4)
+                .padding(.bottom, 4)
                 .disabled(true)
                 .layoutPriority(1)
                 .redacted(reason: .placeholder)
@@ -1523,8 +1527,13 @@ struct CategoryPickerView: View {
             // selector — justo lo contrario de lo que el carrusel comunica.
             consultCTA
             .padding(.horizontal, Spacing.edge)
-            .padding(.top, 16)
-            .padding(.bottom, showsExploreCarousel ? 16 : 0)
+            // 16→4: el aire de arriba y abajo del CTA era mas del que un
+            // boton necesita para respirar. Bajarlo a 4 (el minimo que
+            // sigue leyendose como separacion, no como pegado) le devuelve
+            // ~24pt a la foto de arriba sin tocar el boton mismo — su
+            // padding interno (10pt, en consultCTA) sigue igual.
+            .padding(.top, 4)
+            .padding(.bottom, showsExploreCarousel ? 4 : 0)
             // El botón es la acción de la pantalla: reclama su alto antes que
             // nada. Sin esto, una fila de fotos con alto intrínseco grande lo
             // empujaba fuera de la pantalla (debajo de la tab bar).
