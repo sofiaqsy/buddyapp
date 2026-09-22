@@ -1014,24 +1014,27 @@ struct InicioView: View {
 
 
 
-    /// Busca una solicitud propia todavía sin atender en el destino vigente.
-    /// Con match ya no aplica: ese mismo pedido dejó de estar en búsqueda.
+    /// La solicitud propia que sigue buscando buddy, para que el botón del Home
+    /// diga "Buscando…". Con match ya no aplica: ese pedido dejó de buscar.
+    ///
+    /// Antes se leía de GET /matching/requests/:destino, que es la lista del
+    /// BUDDY y excluye las solicitudes de quien pregunta: la propia nunca
+    /// aparecía y el estado "Buscando" no se veía jamás.
     private func refreshOpenRequest(hasMatch: Bool) async {
         guard Session.hasSession, !hasMatch else {
             await MainActor.run { openRequest = nil }
             return
         }
-        let destId = effectiveTripJourney.flatMap { $0.destination?.id ?? $0.destinationId }
-            ?? resolvedLocation?.destinationId
-        guard let destId else {
-            await MainActor.run { openRequest = nil }
-            return
+        // Un fallo de red no borra lo que había: mejor seguir mostrando
+        // "Buscando" un momento de más que esconder una búsqueda en curso.
+        do {
+            let mia = try await APIClient.shared.fetchMyRequest()
+            let activa = (mia?.isActive == true) ? mia : nil
+            await MainActor.run { openRequest = activa }
+            dlog("🏠 [refreshOpenRequest] \(activa.map { "abierta cat=\($0.category)" } ?? "ninguna")")
+        } catch {
+            dlog("🏠 [refreshOpenRequest] falló (\(error.localizedDescription)) — conservo lo que había")
         }
-        let myId = Session.travelerId
-        let requests = (try? await APIClient.shared.fetchOpenRequests(destinationId: destId)) ?? []
-        let mine = requests.first { $0.travelerId == myId && $0.isActive }
-        await MainActor.run { openRequest = mine }
-        dlog("🏠 [refreshOpenRequest] destId=\(destId.prefix(8)) → \(mine.map { "abierta cat=\($0.category)" } ?? "ninguna")")
     }
 
     /// Resuelve el GPS contra el backend y actualiza `resolvedLocation`.

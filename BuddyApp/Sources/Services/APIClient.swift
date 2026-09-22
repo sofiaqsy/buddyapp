@@ -1003,6 +1003,13 @@ final class APIClient {
         return try await request(path: "/matching/request", method: "POST", body: body)
     }
 
+    /// La solicitud activa DEL PROPIO viajero, o nil. Hay como mucho una
+    /// (el backend lo impone). No usar fetchOpenRequests para esto: esa es la
+    /// lista del buddy y EXCLUYE las solicitudes de quien pregunta.
+    func fetchMyRequest() async throws -> APIHelpRequest? {
+        try await request(path: "/matching/my-request")
+    }
+
     func fetchOpenRequests(destinationId: String) async throws -> [APIHelpRequest] {
         try await request(path: "/matching/requests/\(destinationId)")
     }

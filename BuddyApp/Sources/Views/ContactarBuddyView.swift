@@ -995,8 +995,10 @@ struct CategoryPickerView: View {
         // El botón nombra el DESTINO: dice a dónde va la consulta, que es lo
         // que el subtítulo dejó de repetir. Sin destino resuelto, la frase de
         // siempre.
+        // Con una solicitud abierta el botón cuenta en qué está: buscando,
+        // y dónde. Tocarlo reabre esa consulta.
         let title = searchingCategoryKey != nil
-            ? "Buscando buddy…"
+            ? (destinationName.map { "Buscando buddies en \($0)…" } ?? "Buscando buddies…")
             : (destinationName.map { "Consultar en \($0)" } ?? "Consultar a buddies")
         return Text(title).font(BT.footnoteBold).foregroundColor(Color.ink)
     }
@@ -1037,8 +1039,12 @@ struct CategoryPickerView: View {
                 }
             }
         } else if searchingCategoryKey != nil {
-            Image(systemName: "bubble.left.fill")
-                .foregroundStyle(Color.inkMuted)
+            // En lugar del globo de chat: todavía no hay con quién hablar,
+            // hay una búsqueda en curso.
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(Color.brand)
+                .frame(width: 20, height: 20)
         } else {
             Image(systemName: "bubble.left.fill")
                 .foregroundStyle(Color.ink)
@@ -1046,18 +1052,13 @@ struct CategoryPickerView: View {
     }
 
     @ViewBuilder private var ctaTrailing: some View {
-        if searchingCategoryKey != nil && activeBuddyName == nil {
-            ProgressView()
-                .progressViewStyle(.circular)
-                .scaleEffect(0.8)
-                .tint(Color.inkMuted)
-        } else {
-            ZStack {
-                Circle().fill(Color.brand).frame(width: 30, height: 30)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
-            }
+        // La flecha se queda también mientras se busca: el botón sigue
+        // abriendo la consulta (el indicador de carga ya va a la izquierda).
+        ZStack {
+            Circle().fill(Color.brand).frame(width: 30, height: 30)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
         }
     }
 
