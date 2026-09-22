@@ -285,10 +285,12 @@ struct ContactarBuddyView: View {
             print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
             // La encuesta pendiente la presenta RootView globalmente (en cualquier
             // tab y en tiempo real), así que aquí no hace falta detectarla.
-            let destIdOpt: String? = resolvedDestinationId
-            guard let destId = destIdOpt else { phase = .selectCategory; return }
-            let requests = try await APIClient.shared.fetchOpenRequests(destinationId: destId)
-            if let open = requests.first(where: { $0.travelerId == userId && $0.isActive }) {
+            // La solicitud PROPIA sale de /my-request. Antes se buscaba en
+            // /matching/requests/:destino, que es la lista del buddy y excluye
+            // las de quien pregunta: al volver a esta pantalla nunca se
+            // retomaba la búsqueda y aparecían los temas otra vez.
+            let mia = try await APIClient.shared.fetchMyRequest()
+            if let open = mia, open.isActive {
                 dlog("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) cat=\(open.category) → retomando conversación")
                 activeRequestId = open.id
                 isExpandingSearch = false
