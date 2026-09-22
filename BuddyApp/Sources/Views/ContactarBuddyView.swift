@@ -83,6 +83,11 @@ struct ContactarBuddyView: View {
     @State private var chosenCategory: String? = nil    // apiKey elegido, para el primer msg del chat
     /// true cuando el backend ya escaló al menos una vez — cambia el copy de la UI.
     @State private var isExpandingSearch: Bool = false
+    /// La solicitud espera a que aparezca un buddy (el backend no encontró a
+    /// nadie que cubra la zona y la mantiene activa hasta 24 h). nil hasta la
+    /// primera respuesta de /status; mientras tanto se deduce de la zona.
+    @State private var enEspera: Bool? = nil
+    private var esperandoBuddy: Bool { enEspera ?? (buddyCount <= 0) }
     /// Evita que el timer y el SSE disparen pollForMatch() simultáneamente.
     @State private var isPollInFlight: Bool = false
 
@@ -107,11 +112,21 @@ struct ContactarBuddyView: View {
         // Sin tema elegido todavía no hay hilo: lo que se ve es el selector.
         guard let key = pendingCategoryKey else { return [] }
         var out: [ChatItem] = [.pendingCategory(key)]
-        let city = resolvedDestinationName ?? "la zona"
-        out.append(.system(
-            id: "contacting",
-            text: "Estamos contactando buddies en \(city)…",
-            footnote: "Normalmente toma menos de 1 minuto."))
+        // Dos situaciones distintas del backend, dos textos distintos: con
+        // candidatos se les está avisando; sin ellos la solicitud espera (hasta
+        // 24 h) a que alguien cubra la zona. Decir "contactando" en el segundo
+        // caso era falso.
+        if esperandoBuddy {
+            out.append(.system(
+                id: "waiting",
+                text: "Estamos buscando un buddy en esta zona.",
+                footnote: "Ahora mismo no hay buddies disponibles, pero mantendremos tu solicitud activa y te avisaremos cuando encontremos uno."))
+        } else {
+            out.append(.system(
+                id: "contacting",
+                text: "Estamos contactando buddies en esta zona.",
+                footnote: "Te avisaremos cuando alguien pueda ayudarte."))
+        }
         // Se cuelga de una señal real del backend (el worker de escalado), no
         // de un temporizador inventado en el cliente.
         if isExpandingSearch {
@@ -136,6 +151,7 @@ struct ContactarBuddyView: View {
                         buddyCount: buddyCount,
                         items: pendingItems,
                         chosenCategory: pendingCategoryKey,
+                        enEspera: esperandoBuddy,
                         onPickCategory: { key in Task { await handleRequest(category: key, description: nil) } },
                         onBack: { dismiss() },
                         onCancelRequest: pendingCategoryKey == nil ? nil : cancelSearch)
@@ -294,6 +310,7 @@ struct ContactarBuddyView: View {
                 dlog("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) cat=\(open.category) → retomando conversación")
                 activeRequestId = open.id
                 isExpandingSearch = false
+                enEspera = nil
                 // Reconstruir la conversación al volver. Sin esto la solicitud
                 // seguía viva (bien) pero el hilo se dibujaba otra vez con el
                 // selector de tema, como si no hubieras pedido nada — que es
@@ -346,6 +363,7 @@ struct ContactarBuddyView: View {
                 lat: gps?.coordinate.latitude, lng: gps?.coordinate.longitude)
             activeRequestId = req.id
             isExpandingSearch = false
+            enEspera = nil
             startPolling(); startSSEMatch(requestId: req.id)
         } catch APIError.activeRequestExists(let requestId) {
             // Ya había una búsqueda en curso (típicamente huérfana por un
@@ -359,6 +377,7 @@ struct ContactarBuddyView: View {
             print("🔁 [handleRequest] 409 active_request_exists → retomando request \(requestId)")
             activeRequestId = requestId
             isExpandingSearch = false
+            enEspera = nil
             pendingCategoryKey = category
             phase = .searching
             startPolling(); startSSEMatch(requestId: requestId)
@@ -399,6 +418,7 @@ struct ContactarBuddyView: View {
             pendingCategoryKey = nil
             chosenCategory = nil
             isExpandingSearch = false
+            enEspera = nil
             withAnimation(.easeOut(duration: 0.25)) { phase = .composing }
         } else {
             phase = .selectCategory
@@ -409,6 +429,10 @@ struct ContactarBuddyView: View {
         pollTask?.cancel()
         dlog("⏱️ [startPolling] iniciado — requestId=\(activeRequestId ?? "nil")")
         pollTask = Task {
+            // Primera consulta enseguida (no a los 30 s): de ella sale si la
+            // solicitud espera o si ya se está avisando a buddies.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled { await pollForMatch(inicial: true) }
             var tick = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
@@ -506,7 +530,10 @@ struct ContactarBuddyView: View {
         sseMatchTask = nil
     }
 
-    private func pollForMatch() async {
+    /// - Parameter inicial: la primera consulta, segundos después de crear o
+    ///   retomar la solicitud. El backend arma la cola en segundo plano, así
+    ///   que "none" ahí significa "todavía no", no "no existe".
+    private func pollForMatch(inicial: Bool = false) async {
         // Un solo poll en vuelo a la vez — evita llamadas paralelas del timer y del SSE.
         guard !isPollInFlight else {
             dlog("📶 [pollForMatch] ya hay un poll en vuelo — omitido")
@@ -542,7 +569,13 @@ struct ContactarBuddyView: View {
                         argument: "¡Encontramos tu buddy! Conectando al chat.")
                 }
 
+            case "waiting":
+                // Sin buddies que cubran la zona: la solicitud sigue activa y
+                // el backend vuelve a buscar solo. Se sigue consultando.
+                enEspera = true
+
             case "searching":
+                enEspera = false
                 // El backend escala lazy si el candidato actual expiró.
                 // position > 1 significa que ya estamos en el segundo candidato o más.
                 if let pos = status.position { isExpandingSearch = pos > 1 }
@@ -566,6 +599,10 @@ struct ContactarBuddyView: View {
                 phase = .selectCategory
 
             default:
+                if inicial {
+                    dlog("📶 [pollForMatch] primera consulta sin cola todavía — espero al siguiente tick")
+                    break
+                }
                 // "none" → la cola no existe (solicitud inválida o borrada).
                 // Tratamos como si no hubiera solicitud activa → volver al selector.
                 pollTask?.cancel()
@@ -1608,6 +1645,8 @@ private struct PendingConversationView: View {
     /// nil mientras el usuario todavía no eligió tema — entonces el composer se
     /// reemplaza por las categorías.
     let chosenCategory: String?
+    /// La solicitud espera a que aparezca un buddy (nadie cubre la zona aún).
+    var enEspera: Bool = false
     let onPickCategory: (String) -> Void
     let onBack: () -> Void
     /// Cancelar es una intención consciente y vive en el menú, no como una
@@ -1683,7 +1722,9 @@ private struct PendingConversationView: View {
     private var banner: some View {
         Text(chosenCategory == nil
              ? "Cuéntanos sobre qué necesitas ayuda y buscamos a alguien que conozca \(destinationName ?? "la zona")."
-             : "Estamos avisando a buddies de \(destinationName ?? "la zona"). Cuando alguien acepte, se une aquí.")
+             : (enEspera
+                ? "Tu solicitud sigue activa en \(destinationName ?? "esta zona"). Cuando un buddy acepte, se une aquí."
+                : "Estamos avisando a buddies de \(destinationName ?? "la zona"). Cuando alguien acepte, se une aquí."))
             .font(BT.caption1)
             .foregroundStyle(Color.inkMuted)
             .fixedSize(horizontal: false, vertical: true)
