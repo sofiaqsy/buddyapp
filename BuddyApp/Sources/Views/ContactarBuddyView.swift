@@ -1079,14 +1079,17 @@ struct CategoryPickerView: View {
             }
         } else if searchingCategoryKey != nil {
             // En lugar del globo de chat: todavía no hay con quién hablar,
-            // hay una búsqueda en curso.
+            // hay una búsqueda en curso. Mismo marco 34×34 que el avatar de
+            // arriba: si el tamaño cambiara según el estado, el botón cambiaría
+            // de alto y empujaría toda la pantalla de abajo.
             ProgressView()
                 .progressViewStyle(.circular)
                 .tint(Color.brand)
-                .frame(width: 20, height: 20)
+                .frame(width: 34, height: 34)
         } else {
             Image(systemName: "bubble.left.fill")
                 .foregroundStyle(Color.ink)
+                .frame(width: 34, height: 34)
         }
     }
 
