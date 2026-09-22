@@ -895,6 +895,11 @@ struct PlacePhotoCard: View {
     var isFavorite: Bool = false
     var onToggleFavorite: () -> Void = {}
 
+    /// La foto sube de 90 a 115: sin la línea de "Por visitar" la tarjeta media
+    /// menos que el alto del carril (160) y quedaba una franja vacía debajo del
+    /// nombre. 115 + la banda del texto llena justo la fila.
+    private let fotoAlto: CGFloat = 115
+
     private let palettes: [[Color]] = [
         [Color(hex: "4A2820"), Color(hex: "6E3B2D")],
         [Color(hex: "3D2B1A"), Color(hex: "6B4226")],
@@ -908,13 +913,13 @@ struct PlacePhotoCard: View {
                 // Photo or gradient fallback
                 CachedImage(urlString: place.coverUrl) { img in
                     img.resizable().scaledToFill()
-                        .frame(width: 145, height: 90)
+                        .frame(width: 145, height: fotoAlto)
                         .clipped()
                 } placeholder: {
                     gradientFallback
-                        .frame(width: 145, height: 90)
+                        .frame(width: 145, height: fotoAlto)
                 }
-                .frame(width: 145, height: 90)
+                .frame(width: 145, height: fotoAlto)
                 .clipped()
 
                 // Scrim + emoji overlay
@@ -939,7 +944,7 @@ struct PlacePhotoCard: View {
                 }
 
             }
-            .frame(height: 90)
+            .frame(height: fotoAlto)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(place.name).font(.system(size: 12, weight: .bold)).foregroundStyle(.primary)
