@@ -1196,6 +1196,7 @@ struct CategoryPickerView: View {
             feedPrimeraMedida = true
             dlog("⏱️ [tiempo] primera recomendación lista a los \(Cronometro.desdeArranque())ms del arranque")
         }
+        dlog("🎞️ [feed] a la vista: \(feedFoto(en: feedPosicion)?.place.name ?? "nada")#\(feedFoto(en: feedPosicion)?.id.suffix(4) ?? "")")
         dlog("🎞️ [feed] secuencia rehecha (\(nueva.count) fotos, \(FeedMemoria.shared.recientes.count) recientes): \(nueva.prefix(5).map { "\($0.place.name)#\($0.id.suffix(1))" }.joined(separator: " → "))")
     }
 

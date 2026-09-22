@@ -14,6 +14,43 @@ enum HomeContext: Equatable {
     case trip(String)
 }
 
+/// La rama del Home que se dibujó la última vez (con viaje o general). Es una
+/// PISTA para el primer dibujo, nunca la verdad: no guarda datos del viaje, así
+/// que nada viejo se muestra como información del viaje. Solo permite no
+/// esperar a /travelers/me/journeys cuando lo más probable es que la rama no
+/// cambie; la respuesta del servidor sigue decidiendo.
+enum PistaHome {
+    enum Rama: String { case viaje, general }
+
+    private static let clave = "home.ultimaRama"
+    /// Una pista de hace más de una semana ya no dice nada del usuario de hoy.
+    private static let vigencia: TimeInterval = 7 * 24 * 3600
+
+    static func leer() -> Rama? {
+        #if DEBUG
+        // -pistaHome viaje|general|ninguna: fuerza la pista para probar los
+        // cuatro casos de arranque sin depender de lo guardado.
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-pistaHome"), i + 1 < args.count {
+            return Rama(rawValue: args[i + 1])
+        }
+        #endif
+        guard let d = UserDefaults.standard.dictionary(forKey: clave),
+              let r = (d["rama"] as? String).flatMap(Rama.init(rawValue:)),
+              let at = d["at"] as? Double,
+              Date().timeIntervalSince1970 - at < vigencia else { return nil }
+        return r
+    }
+
+    static func guardar(_ rama: Rama, tripId: String?) {
+        var d: [String: Any] = ["rama": rama.rawValue, "at": Date().timeIntervalSince1970]
+        if let tripId { d["tripId"] = tripId }
+        UserDefaults.standard.set(d, forKey: clave)
+    }
+
+    static func borrar() { UserDefaults.standard.removeObject(forKey: clave) }
+}
+
 struct InicioView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -36,6 +73,13 @@ struct InicioView: View {
     /// Reemplaza al viejo nearestDestination (5 destacados + radio 50 km), que
     /// podía elegir un destino vecino equivocado (ej: La Merced estando en Villa Rica).
     @State private var resolvedLocation: APILocationResolution? = nil
+    /// La pista con la que arrancó esta sesión del Home (se lee una vez).
+    @State private var pistaInicial: PistaHome.Rama? = PistaHome.leer()
+    /// Ya respondió /travelers/me/journeys en esta sesión.
+    @State private var viajesConfirmados = false
+    /// Ya se intentó resolver la ubicación (con resultado, sin cobertura, sin
+    /// red o sin permiso: cualquier desenlace cuenta).
+    @State private var resolucionIntentada = false
     /// Buddy cuyo perfil se está mirando desde "Comunidad viva".
     @State private var pulseProfileTarget: PulseProfileTarget? = nil
     @State private var destinations: [APIDestination] = []
@@ -321,8 +365,16 @@ struct InicioView: View {
             // tenemos; esto trae los que aún no conocemos.
             Task { await refreshSpotsForLocation() }
         }
+        // La pista se guarda solo con la rama CONFIRMADA: viajes respondidos y
+        // ubicación intentada. Antes de eso la rama puede ser provisoria.
+        .onChange(of: "\(ramaActual.rawValue)|\(viajesConfirmados)|\(resolucionIntentada)", initial: true) { viejo, _ in
+            dlog("🧭 [rama] \(ramaActual.rawValue) (pista=\(pistaInicial?.rawValue ?? "ninguna"), viajes=\(viajesConfirmados ? "ok" : "…"), ubicación=\(resolucionIntentada ? "ok" : "…")) a los \(Cronometro.desdeArranque())ms")
+            guard viajesConfirmados, resolucionIntentada else { return }
+            PistaHome.guardar(ramaActual, tripId: effectiveTripJourney?.id)
+        }
         .onChange(of: authState.isLoggedIn) { _, loggedIn in
             if !loggedIn {
+                PistaHome.borrar()
                 pendingJourney = nil
                 activeJourney  = nil
                 liveJourneys   = []
@@ -381,9 +433,17 @@ struct InicioView: View {
     ///   sin GPS + sin trip  → nil (flujo de permisos/registro existente)
     private var effectiveHomeContext: HomeContext? {
         if hasCurrentLocationContext { return .currentLocation }
+        // Con la pista "general", el viaje no se muestra hasta saber si el GPS
+        // resuelve: si llegaran los viajes antes que la resolución, el Home
+        // pasaría a la rama del viaje y volvería a la general un segundo
+        // después, rehaciendo el feed dos veces sin motivo.
+        if pistaInicial == .general, !resolucionIntentada { return nil }
         if let first = liveJourneys.first { return .trip(first.id) }
         return nil
     }
+
+    /// La rama que el Home dibuja AHORA.
+    private var ramaActual: PistaHome.Rama { effectiveTripJourney != nil ? .viaje : .general }
 
     /// El journey correspondiente al contexto efectivo, si es de tipo .trip.
     private var effectiveTripJourney: APIJourney? {
@@ -1074,6 +1134,7 @@ struct InicioView: View {
         // hay ubicación resuelta para decidir. Consultarlo antes de resolver
         // era preguntar con la respuesta a medias.
         await refreshResolvedLocation()
+        await MainActor.run { if !resolucionIntentada { resolucionIntentada = true } }
 
         // Si el contexto elegido es un trip, cargar el contexto de SU destino o
         // lugar (no necesariamente liveJourneys.first — puede ser cualquiera de
@@ -1323,9 +1384,9 @@ struct InicioView: View {
 
     /// Quita el esqueleto una sola vez y deja constancia de cuándo.
     @MainActor
-    private func terminarEsqueleto() {
+    private func terminarEsqueleto(motivo: String = "viajes resueltos") {
         guard isLoadingData else { return }
-        dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque, con \(spotsStore.spots.count) spot(s) en memoria")
+        dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque, con \(spotsStore.spots.count) spot(s) en memoria — \(motivo)")
         isLoadingData = false
     }
 
@@ -1333,7 +1394,16 @@ struct InicioView: View {
         guard !Task.isCancelled else { return }
         let t0 = Date()
         defer { dlog("⏱️ [tiempo] loadData completo \(Cronometro.ms(desde: t0))ms (desde el arranque \(Cronometro.desdeArranque())ms)") }
-        await MainActor.run { loadDataFailed = false }
+        await MainActor.run {
+            loadDataFailed = false
+            // Pista "general" y spots en cache: el Home se dibuja ya, sin
+            // esperar los viajes. Con la pista "viaje" (o sin pista) se espera
+            // como siempre: dibujar esa rama pediría datos del viaje guardados,
+            // y la pista no los guarda a propósito.
+            if pistaInicial == .general, !spotsStore.spots.isEmpty {
+                terminarEsqueleto(motivo: "pista general")
+            }
+        }
         // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
         // exploreCards va en paralelo con destinations, ANTES de que
         // isLoadingData pase a false — si se carga después (como antes),
@@ -1439,6 +1509,7 @@ struct InicioView: View {
                 pendingJourney = planning
                 liveJourneys   = newLive
                 dlog("🏠 [loadData] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(newLive.count)")
+                viajesConfirmados = true
                 // Con los viajes resueltos el Home ya sabe qué rama dibujar
                 // (con viaje o sin viaje), y el feed sale de los spots en
                 // cache. Esperar los matches y el chat —o los destinos— solo
