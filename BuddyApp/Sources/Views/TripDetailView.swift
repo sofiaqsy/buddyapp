@@ -185,6 +185,11 @@ struct TripDetailView: View {
     }
 
     private let sheetHeight: CGFloat = 265
+    /// Alto del panel con el detalle de un lugar. Menos que sheetHeight porque
+    /// ahí no hay tarjetas: nombre, presencia, pestañas y una fila de fotos.
+    /// Es el alto de ese contenido, medido en pantalla; las pestañas más largas
+    /// (Info, Buddies) se desplazan por dentro, como ya hacían.
+    private let detalleHeight: CGFloat = 246
     private let contentHeight: CGFloat = 160
     /// Antes la tab bar FLOTABA sobre el contenido, así que el panel se
     /// extendía por debajo de ella para que no asomara el mapa. Desde que la
@@ -573,10 +578,9 @@ struct TripDetailView: View {
         // tope, el scroll de adentro se encarga.
         .frame(
             width: geo.size.width,
-            height: selectedPlace == nil ? sheetHeight + bottomClearance : nil,
+            height: selectedPlace == nil ? sheetHeight + bottomClearance : detalleHeight,
             alignment: .top,
         )
-        .frame(maxHeight: selectedPlace == nil ? nil : sheetHeight + bottomClearance, alignment: .top)
         .glassPanel()
         .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
     }
@@ -1131,6 +1135,12 @@ struct PlaceGuideDetailSheet: View {
             // pero si no entra (la pestaña Info con texto largo) se deja
             // comprimir por el tope del panel y desplaza por dentro.
             .frame(maxHeight: altoContenido > 0 ? altoContenido : nil)
+            // Sin los márgenes que el scroll agrega solo por estar cerca del
+            // borde de la pantalla (el hueco del indicador de inicio): el
+            // panel ya termina sobre la tab bar, así que esa reserva quedaba
+            // como una franja vacía debajo de las fotos.
+            .contentMargins(.vertical, 0, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
         }
         .padding(.top, 10)
         .task {
@@ -1399,7 +1409,7 @@ struct PlaceGuideDetailSheet: View {
             }
         }
         .padding(.top, 20)
-        .padding(.bottom, 12)
+        .padding(.bottom, 6)
     }
 
     // MARK: Info

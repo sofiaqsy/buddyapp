@@ -1355,6 +1355,12 @@ struct CategoryPickerView: View {
                 // de la ventana: desde ahí no se puede retroceder y el feed
                 // deja de ser cíclico.
                 if !explorePhotos.isEmpty {
+                // ScrollViewReader porque escribir el binding de scrollPosition
+                // NO siempre mueve el scroll: si la primera disposición ocurre
+                // antes de que las páginas tengan contenido, el scroll se queda
+                // en el borde de la ventana y el binding sigue diciendo 0.
+                // scrollTo sí mueve, y así binding y realidad coinciden.
+                ScrollViewReader { proxy in
                 // Paginado NATIVO: cada página mide el visor entero
                 // (containerRelativeFrame), así que .paging asienta siempre en
                 // un borde de página y un gesto avanza exactamente una.
@@ -1399,8 +1405,13 @@ struct CategoryPickerView: View {
                                 }
                                 // Abrir el lugar es cosa de la recomendación
                                 // activa: las vecinas están fuera del visor.
+                                // Sin comparar contra feedPosicion: solo la
+                                // página visible puede recibir el toque, y el
+                                // binding puede ir atrasado respecto de dónde
+                                // descansa el scroll —cuando eso pasaba, tocar
+                                // la foto no hacía nada—. De paso se resincroniza.
                                 .onTapGesture {
-                                    guard pagina == feedPosicion else { return }
+                                    if feedPosicion != pagina { feedPosicion = pagina }
                                     Haptic.medium()
                                     onOpenPlace?(photo.place)
                                 }
@@ -1437,6 +1448,13 @@ struct CategoryPickerView: View {
                 }
                 .environment(\.exploreCardPhotoHeightOverride, photoAlto)
                 .environment(\.exploreCardWidthOverride, cardAncho)
+                // En cuanto hay secuencia, el feed se planta en la página 0.
+                .task(id: explorePhotos.isEmpty) {
+                    guard !explorePhotos.isEmpty else { return }
+                    proxy.scrollTo(0, anchor: .center)
+                    if feedPosicion != 0 { feedPosicion = 0 }
+                }
+                }
                 }
             }
             // Con la Home quieta la fila toma lo que sobra; en el resto de
