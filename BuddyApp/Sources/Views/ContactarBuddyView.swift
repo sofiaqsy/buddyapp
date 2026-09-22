@@ -251,6 +251,7 @@ struct ContactarBuddyView: View {
     // MARK: Logic
 
     private func loadBuddyCount() async {
+        let t0 = Date()
         let destIdOpt: String? = resolvedDestinationId
         guard let destId = destIdOpt else { return }
         // Sin journey (consulta desde el Home): contar por el punto del viajero.
@@ -259,12 +260,17 @@ struct ContactarBuddyView: View {
                                                                    lat: gpsCount?.coordinate.latitude,
                                                                    lng: gpsCount?.coordinate.longitude) {
             buddyCount = count
+            dlog("⏱️ [tiempo] loadBuddyCount \(Cronometro.ms(desde: t0))ms → \(count)")
         }
     }
 
     private func checkStatus() async {
         phase = .loading
-        dlog("🔍 [checkStatus] Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
+        // Cronometro y no un Date() propio: así se puede restar contra el
+        // tap en Home (mismo reloj, "ms desde el arranque") y ver cuánto de
+        // la espera es de red y cuánto es la animación de presentar la hoja.
+        let tCheckStatus = Date()
+        dlog("🔍 [checkStatus] arranca a los \(Cronometro.desdeArranque())ms — Session.hasSession=\(Session.hasSession) travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
         // Ensure a Traveler session exists before doing anything.
         // On a fresh install Session.travelerId is nil — this call hits /travelers/init
         // and persists the guest JWT so all subsequent guards and API calls succeed.
@@ -274,7 +280,7 @@ struct ContactarBuddyView: View {
                 await MainActor.run {
                     NotificationCenter.default.post(name: .travelerSessionCreated, object: nil)
                 }
-                dlog("🔍 [checkStatus] guest session created → travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
+                dlog("⏱️ [tiempo] checkStatus: sesión de invitado creada en \(Cronometro.ms(desde: tCheckStatus))ms → travelerId=\(Session.travelerId?.prefix(8) ?? "NIL")")
             } catch {
                 phase = .error("No se pudo iniciar sesión. Verifica tu conexión.")
                 return
@@ -282,7 +288,15 @@ struct ContactarBuddyView: View {
         }
         guard let userId = effectiveUserId else { phase = .error("Sin sesión."); return }
         do {
-            let matches = try await MatchingStore.shared.refresh(trigger: "contactar:checkStatus")
+            // Los dos van en paralelo: my-request no depende del resultado de
+            // matches, solo del código los ejecutaba uno después del otro. Si
+            // ya hay match (se vuelve abajo sin usar myRequestTask), Swift
+            // cancela esa tarea sola al salir del scope — no se desperdicia.
+            async let matchesTask = MatchingStore.shared.refresh(trigger: "contactar:checkStatus")
+            async let myRequestTask = APIClient.shared.fetchMyRequest()
+
+            let matches = try await matchesTask
+            dlog("⏱️ [tiempo] checkStatus: matches listos en \(Cronometro.ms(desde: tCheckStatus))ms (\(matches.count))")
             dlog("🔎 [checkStatus] userId=\(userId) — \(matches.count) match(es) recibidos")
             for m in matches {
                 print("   • match id=\(m.id) status=\(m.status ?? "nil") travelerId=\(m.travelerId) buddyId=\(m.buddyId ?? "nil")")
@@ -296,7 +310,9 @@ struct ContactarBuddyView: View {
                 match = active
                 let cat = initialRequest?.category
                 chosenCategory = (cat == nil || cat == "general") ? nil : cat
-                phase = .matched; return
+                phase = .matched
+                dlog("⏱️ [tiempo] checkStatus completo en \(Cronometro.ms(desde: tCheckStatus))ms → matched")
+                return
             }
             print("⚠️ [checkStatus] NINGÚN match activo para userId=\(userId) (status válidos: \(activeStatuses)) → buscando solicitudes abiertas")
             // La encuesta pendiente la presenta RootView globalmente (en cualquier
@@ -305,7 +321,8 @@ struct ContactarBuddyView: View {
             // /matching/requests/:destino, que es la lista del buddy y excluye
             // las de quien pregunta: al volver a esta pantalla nunca se
             // retomaba la búsqueda y aparecían los temas otra vez.
-            let mia = try await APIClient.shared.fetchMyRequest()
+            let mia = try await myRequestTask
+            dlog("⏱️ [tiempo] checkStatus: my-request listo en \(Cronometro.ms(desde: tCheckStatus))ms")
             if let open = mia, open.isActive {
                 dlog("🔄 [checkStatus] solicitud abierta encontrada id=\(open.id) cat=\(open.category) → retomando conversación")
                 activeRequestId = open.id
@@ -319,15 +336,18 @@ struct ContactarBuddyView: View {
                 pendingCategoryKey = open.category
                 chosenCategory = open.category == "general" ? nil : open.category
                 phase = .searching; startPolling(); startSSEMatch(requestId: open.id)
+                dlog("⏱️ [tiempo] checkStatus completo en \(Cronometro.ms(desde: tCheckStatus))ms → retomando búsqueda")
             } else if let seed = initialRequest {
                 // La Home ya eligió → crear la solicitud directamente.
                 // handleRequest() requiere phase == .selectCategory; se setea antes de llamarlo.
                 print("⚡️ [checkStatus] initialRequest=\(seed.category) → solicitando directo")
                 phase = .selectCategory
+                dlog("⏱️ [tiempo] checkStatus completo en \(Cronometro.ms(desde: tCheckStatus))ms → solicitando directo")
                 await handleRequest(category: seed.category, description: seed.description)
             } else {
                 print("📋 [checkStatus] sin match ni solicitud → \(startsConversation ? "conversación" : "selector de categoría")")
                 phase = startsConversation ? .composing : .selectCategory
+                dlog("⏱️ [tiempo] checkStatus completo en \(Cronometro.ms(desde: tCheckStatus))ms → \(startsConversation ? "conversación" : "selector")")
             }
         } catch { phase = .error(error.localizedDescription) }
     }

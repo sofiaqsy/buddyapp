@@ -579,7 +579,7 @@ struct InicioView: View {
                 navPath.append("register")
                 return
             }
-            print("🔵 [startConversationFromHome] destId=\(dest.destinationId)")
+            dlog("🔵 [startConversationFromHome] destId=\(dest.destinationId) a los \(Cronometro.desdeArranque())ms")
             homeHelpSheet = HomeHelpItem(destinationId: dest.destinationId, seed: nil,
                                          startsConversation: true)
         }
