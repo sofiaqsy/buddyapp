@@ -643,10 +643,15 @@ struct CategoryPickerView: View {
     /// hasta el touch-up (como se hizo antes) no evitaba ningún error de
     /// índice, solo dejaba el z-order desactualizado durante todo el drag.
     @State private var carouselCenterId: String? = nil
-    /// Página en la que descansa el scroll. Es la recomendación ACTIVA: se
-    /// actualiza cuando el scroll se asienta, no mientras el dedo arrastra.
-    @State private var feedPosicion: Int? = 0
-    /// La secuencia rankeada que el paginador recorre.
+    /// Índice LÓGICO de la recomendación activa. Puede crecer o bajar sin
+    /// límite: la foto sale del módulo (feedFoto), así que no hay principio
+    /// ni final ni ventana de páginas que se pueda agotar.
+    @State private var feedPosicion: Int = 0
+    /// Desplazamiento en curso del dedo (y el tramo animado al soltar).
+    @State private var feedDragY: CGFloat = 0
+    /// Mientras una tarjeta termina de entrar, el gesto no acepta otra: sin
+    /// esto dos golpes seguidos dejan el feed a medio camino.
+    @State private var feedAnimando = false
     @State private var feedSecuencia: [ExplorePhoto] = []
     /// Cuánto hay que correr la página para leer la secuencia. Lo mueve solo
     /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
@@ -655,14 +660,6 @@ struct CategoryPickerView: View {
     /// Solo para el log de tiempos: la primera vez que hay una recomendación
     /// asentada en pantalla.
     @State private var feedPrimeraMedida = false
-    /// El recentrado del borde ya se intentó: no se insiste (ver feedAsentado).
-    @State private var feedRecentrado = false
-    /// Nace COMPLETA: si empezara con una sola página, el ScrollView se
-    /// dispondría con esa única página y al aparecer las otras 120 conservaría
-    /// el desplazamiento —no el id—, quedando pegado al borde de arriba, desde
-    /// donde ya no se puede retroceder. Solo se encoge si de verdad hay una
-    /// sola recomendación.
-    @State private var feedVentana: [Int] = ExploreCarouselCard.ventanaInicial
 
     struct BuddyCategory: Identifiable {
         let id = UUID()
@@ -1173,39 +1170,25 @@ struct CategoryPickerView: View {
             return
         }
         let actual = manteniendoVisible ? carouselCenterId : nil
-        // Si el feed venía VACÍO, sus páginas no median nada y el scroll se
-        // quedó descansando en el borde de arriba de la ventana; desde ahí ya
-        // no se puede retroceder. Hay que volver a anclarlo.
-        let veniaVacio = feedSecuencia.isEmpty
         feedSecuencia = nueva
-        let ventana = nueva.count <= 1 ? Self.ventanaUnica : Self.ventanaCompleta
-        dlog("🎞️ [feed] reconstruir: ventana \(feedVentana.count)→\(ventana.count), veniaVacio=\(veniaVacio), pagina=\(feedPosicion.map(String.init) ?? "nil")")
-        if veniaVacio || feedVentana.count != ventana.count {
-            // Lo mismo al cambiar el TAMAÑO de la ventana (de una sola página
-            // a todas, o al revés): el ScrollView conserva su desplazamiento y
-            // no el id. En ambos casos se vuelve a anclar en la página 0, y el
-            // desfase se encarga de que la foto siga siendo la misma.
-            feedVentana = ventana
-            feedPosicion = 0
-        }
         if let actual, let destino = nueva.firstIndex(where: { $0.id == actual }) {
             // page + desfase ≡ destino (mod n)
             let n = nueva.count
-            let pagina = feedPosicion ?? 0
+            let pagina = feedPosicion
             feedDesfase = ((destino - pagina) % n + n) % n
         } else {
             // La página no se mueve (moverla sería un scroll a la vista); lo
             // que se corre es el desfase, de modo que esta página pase a ser
             // la primera del orden nuevo.
             let n = nueva.count
-            let pagina = feedPosicion ?? 0
+            let pagina = feedPosicion
             feedDesfase = ((-pagina) % n + n) % n
             carouselCenterId = nueva[feedIndexWrapped(pagina + feedDesfase)].id
         }
         // La tarjeta que queda a la vista también cuenta como vista: si no, la
         // primera del feed (que nadie "asienta", ya está ahí) sería la única
         // que podría repetirse de una al rehacer el orden.
-        if let visible = feedFoto(en: feedPosicion ?? 0) {
+        if let visible = feedFoto(en: feedPosicion) {
             FeedMemoria.shared.registrar(fotoId: visible.id)
         }
         dlog("⏱️ [tiempo] ranking \(Cronometro.ms(desde: tRank))ms → \(nueva.count) fotos")
@@ -1258,25 +1241,13 @@ struct CategoryPickerView: View {
         return ((i % n) + n) % n
     }
 
-    /// Cuántas páginas hay a cada lado de la de arranque. El rango es FIJO:
-    /// recentrar una ventana chica movía el contenido bajo el dedo (el
-    /// ScrollView conserva el desplazamiento, no el id, así que al correr la
-    /// ventana la página activa saltaba a la vecina y volvía, cambiando el
-    /// lugar que se estaba mirando). Las páginas son perezosas y su id es un
-    /// entero, así que tener mil no cuesta nada: solo se construyen las que se
-    /// ven, y las fotos salen del módulo, sin duplicar datos.
-    /// Al arrancar, el layout recorre las páginas desde el borde de la ventana
-    /// hasta la activa, así que el radio se paga en el primer frame. 60 son
-    /// varias vueltas enteras al catálogo en cada sentido y cuesta la mitad
-    /// que 120.
-    private static let feedRadio = 60
-
-    /// Las páginas que existen. Es ESTADO y no una propiedad calculada: como
-    /// propiedad se construía un array de 241 enteros en CADA pasada de body
-    /// —incluidas todas las del gesto— y el ForEach volvía a compararlos. Solo
-    /// cambia cuando pasa a haber una sola recomendación, o más de una.
-    private static let ventanaCompleta: [Int] = ExploreCarouselCard.ventanaInicial
-    private static let ventanaUnica: [Int] = [0]
+    /// Qué páginas se dibujan: la activa y sus dos vecinas, por su índice
+    /// lógico. Con una sola recomendación no hay vecinas ni ciclo. Con ids
+    /// lógicos, al avanzar la tarjeta que entró CONSERVA su vista (solo cambia
+    /// su offset), así que no se reconstruye ni parpadea.
+    private var feedPaginas: [Int] {
+        explorePhotos.count <= 1 ? [feedPosicion] : [feedPosicion - 1, feedPosicion, feedPosicion + 1]
+    }
 
     /// La foto que le toca a una página lógica, o nil si todavía no hay
     /// secuencia (el primer layout puede adelantarse al ranking).
@@ -1285,14 +1256,57 @@ struct CategoryPickerView: View {
         return explorePhotos[feedIndexWrapped(pagina + feedDesfase)]
     }
 
-    /// Mueve el feed una recomendación, sin gesto. Lo usan las acciones de
-    /// accesibilidad: escribir scrollPosition SÍ desplaza el scroll, así que
-    /// el paginado nativo se encarga del resto (incluido el ciclo).
+    /// Mueve el feed una recomendación, sin gesto (acciones de accesibilidad).
     private func feedSalto(_ direccion: Int) {
-        guard explorePhotos.count > 1 else { return }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            feedPosicion = (feedPosicion ?? 0) + direccion
-        }
+        guard explorePhotos.count > 1, !feedAnimando else { return }
+        feedPosicion += direccion
+        feedAsentado(en: feedPosicion)
+    }
+
+    /// Paginado vertical: un gesto, una recomendación. El arrastre sigue al
+    /// dedo; al soltar, o cruza el umbral y avanza exactamente una, o vuelve a
+    /// su sitio. Nunca queda a medio camino.
+    private func feedGesto(paso: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { valor in
+                guard !feedAnimando, !zoomState.isZooming else { return }
+                // Arrastre dominante horizontal: no es de este feed.
+                guard abs(valor.translation.height) > abs(valor.translation.width) else { return }
+                // Sin ciclo posible, el arrastre solo "pesa" y vuelve.
+                feedDragY = valor.translation.height * (explorePhotos.count <= 1 ? 0.25 : 1)
+            }
+            .onEnded { valor in
+                guard !feedAnimando, !zoomState.isZooming else { return }
+                let recorrido = valor.predictedEndTranslation.height
+                // Un quinto de tarjeta o un gesto rápido alcanzan: el umbral
+                // sale del paso, no de un número suelto.
+                let umbral = paso / 5
+                let direccion = explorePhotos.count > 1 && abs(recorrido) > umbral
+                    ? (recorrido < 0 ? 1 : -1)
+                    : 0
+                guard direccion != 0 else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { feedDragY = 0 }
+                    return
+                }
+                feedAnimando = true
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    feedDragY = -CGFloat(direccion) * paso
+                }
+                // Al terminar el viaje, la tarjeta que entró pasa a ser la
+                // activa y el desplazamiento vuelve a cero SIN animación: el
+                // dibujo es idéntico, así que el cambio no se ve.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(360))
+                    var sinAnimacion = Transaction()
+                    sinAnimacion.disablesAnimations = true
+                    withTransaction(sinAnimacion) {
+                        feedPosicion += direccion
+                        feedDragY = 0
+                    }
+                    feedAnimando = false
+                    feedAsentado(en: feedPosicion)
+                }
+            }
     }
 
     /// Las fotos de al lado de la activa, ARRIBA y ABAJO. Solo se precargaba
@@ -1300,14 +1314,13 @@ struct CategoryPickerView: View {
     /// disco con el dedo en la pantalla y se sentía lento.
     private func precargarVecinas() {
         guard !explorePhotos.isEmpty else { return }
-        let pagina = feedPosicion ?? 0
+        let pagina = feedPosicion
         ImagePrefetcher.prefetch([0, 1, -1, 2, -2].map {
             explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)].url
         })
     }
 
-    /// Al asentarse en una recomendación: se fija la activa, se recentra la
-    /// ventana (invisible: el scroll sigue anclado a este mismo id) y se piden
+    /// Al asentarse en una recomendación: se fija la activa y se piden
     /// las fotos vecinas para que la siguiente ya esté lista.
     private func feedAsentado(en pagina: Int) {
         guard !explorePhotos.isEmpty else { return }
@@ -1320,26 +1333,6 @@ struct CategoryPickerView: View {
         // Solo lo que el usuario vio DE VERDAD (página asentada) cuenta como
         // visto; cruzar el visor no basta.
         FeedMemoria.shared.registrar(fotoId: foto.id)
-        // Red de seguridad del borde: si el scroll llega cerca del final de la
-        // ventana (puede pasar si el feed se dibujó antes de tener contenido y
-        // quedó anclado ahí), se salta a la página equivalente cerca del
-        // centro. Es la MISMA foto —los índices son módulo n—, así que el
-        // salto no se ve, y desde el centro vuelve a haber recorrido en los
-        // dos sentidos.
-        // Red de seguridad del borde, UNA sola vez. Si el scroll vuelve al
-        // borde después de recentrarlo, insistir solo provoca un vaivén
-        // (se vio decenas de idas y vueltas -60 ↔ 0 en un segundo): la
-        // página del borde muestra la MISMA foto por el módulo, así que
-        // quedarse ahí es preferible a pelear con el scroll.
-        if abs(pagina) > Self.feedRadio - 5, explorePhotos.count > 1, !feedRecentrado {
-            feedRecentrado = true
-            let n = explorePhotos.count
-            let equivalente = ((pagina % n) + n) % n
-            dlog("🎞️ [feed] borde de la ventana en \(pagina) → recentro en \(equivalente)")
-            var sinAnimacion = Transaction()
-            sinAnimacion.disablesAnimations = true
-            withTransaction(sinAnimacion) { feedPosicion = equivalente }
-        }
 
         ImagePrefetcher.prefetch([1, -1, 2, -2].map {
             explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)].url
@@ -1363,123 +1356,53 @@ struct CategoryPickerView: View {
                 let photoAlto = exploreFitsScreen ? geo.size.height : exploreCardPhoto
                 let cardAlto = photoAlto
                 let cardAncho = exploreFitsScreen ? geo.size.width : photoAlto * 3 / 4
-                // Una tarjeta por gesto. El paso es lo que sea más alto, la
-                // tarjeta o el visor, más el aire que las separa: así la que
-                // entra y la que sale descansan SIEMPRE fuera del visor y no
-                // asoma ningún borde arriba ni abajo en pantallas grandes.
-                // El ScrollView se crea RECIÉN con la secuencia lista. Si nace
-                // vacío, sus páginas miden cero, el ancla inicial no se puede
-                // aplicar y el scroll queda descansando en el borde de arriba
-                // de la ventana: desde ahí no se puede retroceder y el feed
-                // deja de ser cíclico.
                 // Alto > 0: en una pasada donde la fila mide 0 (la Home se
-                // está recolocando) TODAS las páginas medirían cero y el
-                // scroll, que se posiciona por desplazamiento, se iba al
-                // extremo de la ventana (-60). Ahí empezaba el vaivén con el
-                // recentrado. Sin alto no se dibuja el visor.
+                // está recolocando) no hay tarjeta que dibujar.
                 if !explorePhotos.isEmpty, geo.size.height > 1 {
-                // ScrollViewReader porque escribir el binding de scrollPosition
-                // NO siempre mueve el scroll: si la primera disposición ocurre
-                // antes de que las páginas tengan contenido, el scroll se queda
-                // en el borde de la ventana y el binding sigue diciendo 0.
-                // scrollTo sí mueve, y así binding y realidad coinciden.
-                ScrollViewReader { proxy in
-                // Paginado NATIVO: cada página mide el visor entero
-                // (containerRelativeFrame), así que .paging asienta siempre en
-                // un borde de página y un gesto avanza exactamente una.
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(feedVentana, id: \.self) { pagina in
-                            // La secuencia se arma en onChange, así que el
-                            // primer layout puede llegar antes que ella.
+                    // Una tarjeta por gesto. El paso es lo que sea más alto, la
+                    // tarjeta o el visor: la que entra y la que sale descansan
+                    // SIEMPRE fuera del visor.
+                    let paso = max(cardAlto, geo.size.height)
+                    ZStack {
+                        ForEach(feedPaginas, id: \.self) { pagina in
                             if let photo = feedFoto(en: pagina) {
-                            ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
-                                // Identidad por FOTO: la del ForEach es la
-                                // página, y sin esto el estado interno de la
-                                // tarjeta (distancia, "Estás aquí", el pulso)
-                                // se heredaba al cambiar de lugar.
-                                .id(photo.id)
-                                // Con VoiceOver el deslizamiento vertical es
-                                // del sistema, así que cambiar de
-                                // recomendación se ofrece por el rotor.
-                                .accessibilityAction(named: "Siguiente recomendación") {
-                                    feedSalto(1)
-                                }
-                                .accessibilityAction(named: "Recomendación anterior") {
-                                    feedSalto(-1)
-                                }
-                                .frame(width: cardAncho, height: cardAlto)
-                                // La tarjeta se centra dentro de su página; la
-                                // página mide el visor con un alto EXPLÍCITO y
-                                // no con containerRelativeFrame: en una pila
-                                // perezosa, las páginas que todavía no se
-                                // construyeron no tienen alto resuelto, el
-                                // scroll calcula mal sus posiciones y un solo
-                                // gesto podía saltar decenas de páginas. Con
-                                // todas iguales y sabidas, un gesto es una.
-                                .frame(maxWidth: .infinity)
-                                .frame(height: geo.size.height)
-                                // Solo opacidad. El scaleEffect encogía la
-                                // tarjeta mientras entraba o salía, y con la
-                                // foto a sangre eso abría una franja de fondo
-                                // entre una y otra durante el gesto.
-                                .scrollTransition(.interactive) { content, fase in
-                                    content.opacity(fase.isIdentity ? 1 : 0.9)
-                                }
-                                // Abrir el lugar es cosa de la recomendación
-                                // activa: las vecinas están fuera del visor.
-                                // Sin comparar contra feedPosicion: solo la
-                                // página visible puede recibir el toque, y el
-                                // binding puede ir atrasado respecto de dónde
-                                // descansa el scroll —cuando eso pasaba, tocar
-                                // la foto no hacía nada—. De paso se resincroniza.
-                                .onTapGesture {
-                                    if feedPosicion != pagina { feedPosicion = pagina }
-                                    Haptic.medium()
-                                    onOpenPlace?(photo.place)
-                                }
+                                let esActiva = pagina == feedPosicion
+                                ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
+                                    // Identidad por FOTO: sin esto el estado
+                                    // interno de la tarjeta (distancia, "Estás
+                                    // aquí", el pulso) se heredaba al cambiar
+                                    // de lugar.
+                                    .id(photo.id)
+                                    // Con VoiceOver el deslizamiento vertical es
+                                    // del sistema, así que cambiar de
+                                    // recomendación se ofrece por el rotor.
+                                    .accessibilityAction(named: "Siguiente recomendación") {
+                                        feedSalto(1)
+                                    }
+                                    .accessibilityAction(named: "Recomendación anterior") {
+                                        feedSalto(-1)
+                                    }
+                                    .frame(width: cardAncho, height: cardAlto)
+                                    .offset(y: CGFloat(pagina - feedPosicion) * paso + feedDragY)
+                                    // Solo la activa abre el lugar: las vecinas
+                                    // están fuera del visor o a medio entrar.
+                                    .onTapGesture {
+                                        guard esActiva else { return }
+                                        Haptic.medium()
+                                        onOpenPlace?(photo.place)
+                                    }
+                                    .allowsHitTesting(esActiva)
+                                    .accessibilityHidden(!esActiva)
                             }
                         }
                     }
-                    .scrollTargetLayout()
-                }
-                .scrollTargetBehavior(.paging)
-                // La ventana es simétrica (-N…N), así que su CENTRO es la
-                // página 0: el feed arranca ahí sin depender de que escribir
-                // el binding mueva el scroll. Escribirlo no sirve cuando las
-                // páginas todavía no tienen alto —el feed nace vacío— y el
-                // scroll se quedaba en el borde de arriba, sin vuelta atrás.
-                .defaultScrollAnchor(.center)
-                .scrollPosition(id: $feedPosicion)
-                // Identidad atada al TAMAÑO de la ventana: si pasa de una sola
-                // página a todas (el feed tenía una recomendación y llegaron
-                // más), el ScrollView se rehace y vuelve a aplicar su ancla en
-                // vez de conservar un desplazamiento que ya no significa lo
-                // mismo. En el uso normal la ventana no cambia, así que esto
-                // no se dispara mientras el usuario navega.
-                .id(feedVentana.count)
-                .onAppear { dlog("🎞️ [feed] ScrollView CREADO (ventana=\(feedVentana.count), fotos=\(explorePhotos.count))") }
-                .onDisappear { dlog("🎞️ [feed] ScrollView destruido") }
-                // Con el pellizco activo el scroll no compite por el gesto, y
-                // con una sola recomendación no hay a dónde ir.
-                .scrollDisabled(zoomState.isZooming || explorePhotos.count <= 1)
-                // scrollPosition se escribe cuando el scroll llega a su página
-                // destino: ese es el momento en que la recomendación pasa a ser
-                // la activa (no mientras el dedo arrastra).
-                .onChange(of: feedPosicion) { vieja, nueva in
-                    dlog("🎞️ [feed] scrollPosition \(vieja.map(String.init) ?? "nil") → \(nueva.map(String.init) ?? "nil")")
-                    guard let nueva else { return }
-                    feedAsentado(en: nueva)
-                }
-                .environment(\.exploreCardPhotoHeightOverride, photoAlto)
-                .environment(\.exploreCardWidthOverride, cardAncho)
-                // En cuanto hay secuencia, el feed se planta en la página 0.
-                .task(id: explorePhotos.isEmpty) {
-                    guard !explorePhotos.isEmpty else { return }
-                    proxy.scrollTo(0, anchor: .center)
-                    if feedPosicion != 0 { feedPosicion = 0 }
-                }
-                }
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    // El gesto vive en toda la fila (no solo sobre la tarjeta)
+                    // para que un arrastre que empieza al costado también pagine.
+                    .contentShape(Rectangle())
+                    .gesture(feedGesto(paso: paso))
+                    .environment(\.exploreCardPhotoHeightOverride, photoAlto)
+                    .environment(\.exploreCardWidthOverride, cardAncho)
                 }
             }
             // Con la Home quieta la fila toma lo que sobra; en el resto de
@@ -1993,11 +1916,6 @@ private let exploreCardPhotoHeight: CGFloat =
 private let exploreCardPaper: Color = .canvas
 
 private struct ExploreCarouselCard: View {
-    /// Las páginas del feed vertical: la activa y 60 a cada lado. Vive acá
-    /// porque el valor inicial de un @State no puede leer un miembro estático
-    /// del propio tipo que lo declara.
-    static let ventanaInicial: [Int] = Array(-60...60)
-
     /// Mismo alto resuelto que usa el carrusel: la foto de la ficha y la del
     /// fondo tienen que medir lo mismo o la tarjeta se descuadra.
     @Environment(\.exploreCardPhotoHeightOverride) private var exploreCardPhotoOverride: CGFloat?
