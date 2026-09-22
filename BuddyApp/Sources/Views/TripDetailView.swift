@@ -886,6 +886,9 @@ struct RecommendationPin: View {
 
 // MARK: – PLACE PHOTO CARD
 
+/// Tarjeta del carrusel de lugares del mapa. Sin corazón ni "Por visitar": el
+/// favorito vive en la ficha del lugar (el corazón de su cabecera), y el estado
+/// de visita ya lo cuenta la línea teal sobre la foto.
 struct PlacePhotoCard: View {
     let place: Place
     let index: Int
@@ -935,30 +938,12 @@ struct PlacePhotoCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
 
-                // Favorito — círculo blanco siempre legible sobre cualquier foto
-                Button(action: onToggleFavorite) {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(isFavorite ? Color.errorRed : Color.ink.opacity(0.45))
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(.white))
-                        .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
-                        .symbolEffect(.bounce, value: isFavorite)
-                }
-                .buttonStyle(.plain)
-                .padding(8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
             .frame(height: 90)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(place.name).font(.system(size: 12, weight: .bold)).foregroundStyle(.primary)
                 Text(place.description).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                Label(place.isCollected ? "Visitado" : "Por visitar",
-                      systemImage: place.isCollected ? "checkmark.circle.fill" : "location.circle")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(place.isCollected ? Color.teal : Color.sand)
-                    .padding(.top, 1)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
