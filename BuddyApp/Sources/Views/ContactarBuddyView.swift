@@ -655,6 +655,8 @@ struct CategoryPickerView: View {
     /// Solo para el log de tiempos: la primera vez que hay una recomendación
     /// asentada en pantalla.
     @State private var feedPrimeraMedida = false
+    /// El recentrado del borde ya se intentó: no se insiste (ver feedAsentado).
+    @State private var feedRecentrado = false
     /// Nace COMPLETA: si empezara con una sola página, el ScrollView se
     /// dispondría con esa única página y al aparecer las otras 120 conservaría
     /// el desplazamiento —no el id—, quedando pegado al borde de arriba, desde
@@ -1177,6 +1179,7 @@ struct CategoryPickerView: View {
         let veniaVacio = feedSecuencia.isEmpty
         feedSecuencia = nueva
         let ventana = nueva.count <= 1 ? Self.ventanaUnica : Self.ventanaCompleta
+        dlog("🎞️ [feed] reconstruir: ventana \(feedVentana.count)→\(ventana.count), veniaVacio=\(veniaVacio), pagina=\(feedPosicion.map(String.init) ?? "nil")")
         if veniaVacio || feedVentana.count != ventana.count {
             // Lo mismo al cambiar el TAMAÑO de la ventana (de una sola página
             // a todas, o al revés): el ScrollView conserva su desplazamiento y
@@ -1323,7 +1326,13 @@ struct CategoryPickerView: View {
         // centro. Es la MISMA foto —los índices son módulo n—, así que el
         // salto no se ve, y desde el centro vuelve a haber recorrido en los
         // dos sentidos.
-        if abs(pagina) > Self.feedRadio - 5, explorePhotos.count > 1 {
+        // Red de seguridad del borde, UNA sola vez. Si el scroll vuelve al
+        // borde después de recentrarlo, insistir solo provoca un vaivén
+        // (se vio decenas de idas y vueltas -60 ↔ 0 en un segundo): la
+        // página del borde muestra la MISMA foto por el módulo, así que
+        // quedarse ahí es preferible a pelear con el scroll.
+        if abs(pagina) > Self.feedRadio - 5, explorePhotos.count > 1, !feedRecentrado {
+            feedRecentrado = true
             let n = explorePhotos.count
             let equivalente = ((pagina % n) + n) % n
             dlog("🎞️ [feed] borde de la ventana en \(pagina) → recentro en \(equivalente)")
@@ -1363,7 +1372,12 @@ struct CategoryPickerView: View {
                 // aplicar y el scroll queda descansando en el borde de arriba
                 // de la ventana: desde ahí no se puede retroceder y el feed
                 // deja de ser cíclico.
-                if !explorePhotos.isEmpty {
+                // Alto > 0: en una pasada donde la fila mide 0 (la Home se
+                // está recolocando) TODAS las páginas medirían cero y el
+                // scroll, que se posiciona por desplazamiento, se iba al
+                // extremo de la ventana (-60). Ahí empezaba el vaivén con el
+                // recentrado. Sin alto no se dibuja el visor.
+                if !explorePhotos.isEmpty, geo.size.height > 1 {
                 // ScrollViewReader porque escribir el binding de scrollPosition
                 // NO siempre mueve el scroll: si la primera disposición ocurre
                 // antes de que las páginas tengan contenido, el scroll se queda
@@ -1444,6 +1458,8 @@ struct CategoryPickerView: View {
                 // mismo. En el uso normal la ventana no cambia, así que esto
                 // no se dispara mientras el usuario navega.
                 .id(feedVentana.count)
+                .onAppear { dlog("🎞️ [feed] ScrollView CREADO (ventana=\(feedVentana.count), fotos=\(explorePhotos.count))") }
+                .onDisappear { dlog("🎞️ [feed] ScrollView destruido") }
                 // Con el pellizco activo el scroll no compite por el gesto, y
                 // con una sola recomendación no hay a dónde ir.
                 .scrollDisabled(zoomState.isZooming || explorePhotos.count <= 1)
