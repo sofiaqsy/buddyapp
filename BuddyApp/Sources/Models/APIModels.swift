@@ -205,6 +205,7 @@ struct APIPlace: Decodable, Identifiable {
             stickerImageUrl: stickerCatalog?.first?.imageUrl,
             stickerId: stickerCatalog?.first?.id,
             category: placeTypeToCategory(placeType ?? ""),
+            categoryIcon: placeCategory?.icon,
             latitude: lat,
             longitude: lng,
             radiusMeters: Double(geofenceRadius ?? 50),

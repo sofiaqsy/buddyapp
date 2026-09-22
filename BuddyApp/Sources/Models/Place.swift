@@ -12,6 +12,11 @@ struct Place: Identifiable, Codable {
     var isCollected: Bool = false    // true after QR scan or geofence unlock
     var isFavorite: Bool = false     // marcado por el usuario (sincroniza con backend)
     let category: Category
+    /// El símbolo REAL de la categoría del lugar (spot_category.icon: fork.knife,
+    /// cup.and.saucer.fill, bed.double.fill…). `category` viene de place_type,
+    /// que casi siempre llega vacío y caía en .culture: por eso todos los pines
+    /// del mapa salían con el mismo icono de columnas.
+    var categoryIcon: String? = nil
     let latitude: Double
     let longitude: Double
     let radiusMeters: Double

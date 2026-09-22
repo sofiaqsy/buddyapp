@@ -807,7 +807,10 @@ struct RecommendationPin: View {
     let place: Place
     let isSelected: Bool
 
-    private var glyph: String { place.category.symbol }
+    /// El icono de su categoría cuando el lugar lo trae; si no, el genérico de
+    /// la categoría gruesa. Sin esto todos los pines eran el mismo: place_type
+    /// casi nunca llega y todo caía en "cultura" (las columnas).
+    private var glyph: String { place.categoryIcon ?? place.category.symbol }
 
     var body: some View {
         if place.featured {
