@@ -755,10 +755,10 @@ struct CategoryPickerView: View {
         // del punto, y la distancia que la respalda es a la zona del buddy, no
         // al buddy. Afirmar cercanía sería inventar un dato.
         let n = communityContext?.buddies ?? buddyCount
-        guard n > 0 else { return "Buscando buddies que ayuden en esta zona" }
+        guard n > 0 else { return "Aún no hay buddies en esta zona" }
         return n == 1
-            ? "1 buddy ayuda en esta zona"
-            : "\(n) buddies ayudan en esta zona"
+            ? "1 buddy conoce esta zona"
+            : "\(n) buddies conocen esta zona"
     }
 
     private var noBuddies: Bool {
@@ -1614,7 +1614,10 @@ private struct PendingConversationView: View {
             // Mismo banner que el chat real usa bajo el header para explicar el
             // rol de cada uno. Acá anticipa lo que va a pasar, que es lo que el
             // usuario necesita saber en este punto.
-            banner
+            // Antes de elegir tema el encabezado ya dice de qué va la
+            // pantalla: el banner solo aparece cuando hay algo nuevo que
+            // contar (a quién se está avisando).
+            if chosenCategory != nil { banner }
             disponibilidad
 
             if chosenCategory == nil {
@@ -1630,7 +1633,9 @@ private struct PendingConversationView: View {
             // Ocupa el lugar del input bar, con el mismo tratamiento que la
             // barra de "Conexión cerrada": el área inferior del chat nunca
             // queda vacía, y dice por qué todavía no se puede escribir.
-            statusBar
+            // Antes de elegir tema no hay nada que explicar abajo: las
+            // tarjetas del centro son la única acción.
+            if chosenCategory != nil { statusBar }
         }
         .background(Color.canvas)
     }
@@ -1640,10 +1645,12 @@ private struct PendingConversationView: View {
     /// buscando. "Ayudan en esta zona" y no "cerca de ti": el conteo es por
     /// COBERTURA del punto, no por distancia al buddy.
     private var textoDisponibilidad: String {
-        guard buddyCount > 0 else { return "Buscando buddies que ayuden en esta zona" }
+        // Sin buddies, la consulta no se ofrece a nadie (el backend la cierra
+        // sin candidatos): "Buscando…" prometía una búsqueda que no ocurre.
+        guard buddyCount > 0 else { return "Aún no hay buddies en esta zona" }
         return buddyCount == 1
-            ? "1 buddy ayuda en esta zona"
-            : "\(buddyCount) buddies ayudan en esta zona"
+            ? "1 buddy conoce esta zona"
+            : "\(buddyCount) buddies conocen esta zona"
     }
 
     private var disponibilidad: some View {
@@ -1665,7 +1672,7 @@ private struct PendingConversationView: View {
     private var banner: some View {
         Text(chosenCategory == nil
              ? "Cuéntanos sobre qué necesitas ayuda y buscamos a alguien que conozca \(destinationName ?? "la zona")."
-             : "Estamos avisando a buddies de \(destinationName ?? "la zona"). En cuanto alguien acepte, se une a esta conversación.")
+             : "Estamos avisando a buddies de \(destinationName ?? "la zona"). Cuando alguien acepte, se une aquí.")
             .font(BT.caption1)
             .foregroundStyle(Color.inkMuted)
             .fixedSize(horizontal: false, vertical: true)
@@ -1699,7 +1706,7 @@ private struct PendingConversationView: View {
         VStack(spacing: Spacing.lg) {
             Spacer(minLength: 0)
 
-            SystemLine(text: "Selecciona el tema de tu consulta")
+            SystemLine(text: "¿Sobre qué es tu consulta?")
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 ForEach(categoryKeys, id: \.self) { key in
@@ -1708,7 +1715,10 @@ private struct PendingConversationView: View {
                         Haptic.medium()
                         onPickCategory(key)
                     } label: {
-                        HStack(alignment: .top, spacing: 12) {
+                        // Solo el título: el subtítulo lo repetía ("Comer:
+                        // Restaurantes y sabores locales") y angostaba tanto
+                        // la columna que "Alojamiento" se partía en dos.
+                        HStack(spacing: 12) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 10)
                                     .fill(Color.groupedBg)
@@ -1717,17 +1727,11 @@ private struct PendingConversationView: View {
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundStyle(Color.accent)
                             }
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(info.label)
-                                    .font(BT.footnoteBold)
-                                    .foregroundStyle(Color.ink)
-                                    .multilineTextAlignment(.leading)
-                                Text(info.subtitle)
-                                    .font(BT.caption1)
-                                    .foregroundStyle(Color.inkMuted)
-                                    .multilineTextAlignment(.leading)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                            Text(info.label)
+                                .font(BT.footnoteBold)
+                                .foregroundStyle(Color.ink)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                             Spacer(minLength: 0)
                         }
                         .padding(12)
@@ -1792,20 +1796,20 @@ private struct PendingConversationView: View {
                 )
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("BuddyApp")
+                Text(destinationName.map { "Consulta en \($0)" } ?? "Tu consulta")
                     .font(BT.headline)
                     .foregroundStyle(Color.ink)
-                HStack(spacing: 4) {
-                    Text("Tu buddy")
+                    .lineLimit(1)
+                    // Encoge un poco antes de cortar: "San Francisco" no
+                    // entraba entero junto al avatar y al menú.
+                    .minimumScaleFactor(0.75)
+                // La ciudad ya va en el título; repetirla acá sobraba. Sin
+                // buddies en la zona no hay quien responda, así que la
+                // promesa no se muestra (la línea de abajo lo dice).
+                if buddyCount > 0 {
+                    Text("Te responde alguien de la zona")
                         .font(BT.caption1)
                         .foregroundStyle(Color.inkMuted)
-                    if let city = destinationName {
-                        Text("·").font(BT.caption1).foregroundStyle(Color.inkMuted)
-                        Text(city)
-                            .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted)
-                            .lineLimit(1)
-                    }
                 }
             }
 
