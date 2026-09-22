@@ -1517,6 +1517,7 @@ struct CategoryPickerView: View {
             consultCTA
             .padding(.horizontal, Spacing.edge)
             .padding(.top, 16)
+            .padding(.bottom, showsExploreCarousel ? 16 : 0)
             // El botón es la acción de la pantalla: reclama su alto antes que
             // nada. Sin esto, una fila de fotos con alto intrínseco grande lo
             // empujaba fuera de la pantalla (debajo de la tab bar).
