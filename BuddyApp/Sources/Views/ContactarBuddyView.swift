@@ -3912,11 +3912,15 @@ struct BuddyMessageBubble: View {
         // never overlaps the time.
         // +6 extra chars = ~4pt gap between last word and time label
         let timeSpacer = timeStr.map { String(repeating: " ", count: $0.count + 6) } ?? ""
+        // .body real (17pt) y no BT.body (=16, alias de .callout): WhatsApp
+        // usa 17pt para el texto del mensaje y a ese lado se notaba chico.
+        // Solo acá, sin tocar BT.body: otras pantallas SÍ quieren 16.
+        let textoBurbuja = Font.system(.body)
         return ZStack(alignment: .bottomTrailing) {
             (Text(linkedText(message.content ?? ""))
-                .font(BT.body)
+                .font(textoBurbuja)
                 .foregroundStyle(isMe ? Color.white : Color.ink)
-             + Text(timeSpacer).font(BT.body))
+             + Text(timeSpacer).font(textoBurbuja))
                 .tint(isMe ? Color.white.opacity(0.85) : Color.teal)
                 .environment(\.openURL, OpenURLAction { url in
                     UIApplication.shared.open(url)
@@ -3931,13 +3935,15 @@ struct BuddyMessageBubble: View {
                     .padding(.bottom, 1)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        // Un poco más de aire que antes (12/8/6 → 14/9/7), a la medida de
+        // WhatsApp: con el texto ya más grande, el margen viejo quedaba justo.
+        .padding(.horizontal, 14)
+        .padding(.top, 9)
+        .padding(.bottom, 7)
         .background(isMe ? Color.teal : Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay(
-            RoundedRectangle(cornerRadius: 18)
+            RoundedRectangle(cornerRadius: 20)
                 .stroke(isMe ? Color.clear : Color.border, lineWidth: 1)
         )
     }
