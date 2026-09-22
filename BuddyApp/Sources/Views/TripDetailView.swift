@@ -1035,6 +1035,8 @@ struct PlaceGuideDetailSheet: View {
     @State private var buddies: [APIPlaceBuddy] = []
     @State private var isLoadingBuddies = true
     @State private var showFullGallery = false
+    /// La foto con la que se abrió el visor a pantalla completa.
+    @State private var visorFoto: VisorFotoInicio? = nil
     /// Alto real del contenido de la pestaña abierta (ver el ScrollView).
     @State private var altoContenido: CGFloat = 0
 
@@ -1152,6 +1154,9 @@ struct PlaceGuideDetailSheet: View {
         }
         .sheet(isPresented: $showFullGallery) {
             PlaceFullGallerySheet(placeName: place.name, photos: allPhotos)
+        }
+        .fullScreenCover(item: $visorFoto) { inicio in
+            PlacePhotoViewer(photos: allPhotos, inicial: inicio.indice)
         }
         .fullScreenCover(item: $editingJourney) { journey in
             // publishesOnSave: acá no existe el paso posterior de "publicar el
@@ -1367,7 +1372,9 @@ struct PlaceGuideDetailSheet: View {
                         addPhotoTile
 
                         ForEach(galleryPhotos.prefix(12)) { photo in
-                            Button { showFullGallery = true } label: {
+                            Button {
+                                visorFoto = VisorFotoInicio(indice: allPhotos.firstIndex(of: photo.url) ?? 0)
+                            } label: {
                                 CachedImage(urlString: photo.url) { img in
                                     img.resizable().scaledToFill()
                                 } placeholder: {
@@ -1491,26 +1498,36 @@ struct PlaceGuideDetailSheet: View {
 }
 
 /// "Ver todas" desde la pestaña Fotos — grid simple de TODAS las fotos ya
-/// cargadas (no vuelve a pedirlas al server).
+/// cargadas (no vuelve a pedirlas al server). Tocar una la abre en grande.
 struct PlaceFullGallerySheet: View {
     let placeName: String
     let photos: [String]
 
     @Environment(\.dismiss) private var dismiss
+    @State private var visorFoto: VisorFotoInicio? = nil
     private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 3) {
-                    ForEach(Array(photos.enumerated()), id: \.offset) { _, url in
-                        CachedImage(urlString: url) { img in
-                            img.resizable().scaledToFill()
-                        } placeholder: {
-                            Rectangle().fill(Color.sandLight)
-                        }
-                        .aspectRatio(1, contentMode: .fill)
-                        .clipped()
+                    ForEach(Array(photos.enumerated()), id: \.offset) { i, url in
+                        // La celda la define un cuadrado vacío y la foto va
+                        // ENCIMA, recortada a él. Con la foto como celda,
+                        // scaledToFill la dejaba medir lo que quisiera y cada
+                        // una se desbordaba sobre sus vecinas.
+                        Color.sandLight
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay {
+                                CachedImage(urlString: url) { img in
+                                    img.resizable().scaledToFill()
+                                } placeholder: {
+                                    Color.sandLight
+                                }
+                            }
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture { visorFoto = VisorFotoInicio(indice: i) }
                     }
                 }
             }
@@ -1522,6 +1539,152 @@ struct PlaceFullGallerySheet: View {
                 }
             }
         }
+        .fullScreenCover(item: $visorFoto) { inicio in
+            PlacePhotoViewer(photos: photos, inicial: inicio.indice)
+        }
+    }
+}
+
+/// Con qué foto se abre el visor.
+struct VisorFotoInicio: Identifiable {
+    let indice: Int
+    var id: Int { indice }
+}
+
+/// Visor de fotos a pantalla completa. Mismo paginador que el feed del Home:
+/// tres fotos, un gesto = una foto, y el ciclo es aritmético (módulo), así que
+/// después de la última viene la primera, sin fin, en los dos sentidos.
+/// La foto se ve ENTERA (scaledToFit): acá se mira el lugar, no se decora.
+struct PlacePhotoViewer: View {
+    let photos: [String]
+    let inicial: Int
+
+    @Environment(\.dismiss) private var dismiss
+    /// Índice lógico, sin límite; la foto sale del módulo.
+    @State private var posicion: Int = 0
+    @State private var arrastreX: CGFloat = 0
+    /// Arrastre hacia abajo para cerrar.
+    @State private var arrastreY: CGFloat = 0
+    @State private var animando = false
+
+    init(photos: [String], inicial: Int) {
+        self.photos = photos
+        self.inicial = inicial
+        // Desde el primer cuadro, no en onAppear: si no, asomaba la foto 1.
+        _posicion = State(initialValue: inicial)
+    }
+
+    private func indice(_ i: Int) -> Int {
+        let n = photos.count
+        guard n > 0 else { return 0 }
+        return ((i % n) + n) % n
+    }
+
+    private var paginas: [Int] {
+        photos.count <= 1 ? [posicion] : [posicion - 1, posicion, posicion + 1]
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let paso = geo.size.width
+            ZStack {
+                Color.black.opacity(1 - min(abs(arrastreY) / 400, 0.6)).ignoresSafeArea()
+
+                ForEach(paginas, id: \.self) { pagina in
+                    CachedImage(urlString: photos[indice(pagina)]) { img in
+                        img.resizable().scaledToFit()
+                    } placeholder: {
+                        ProgressView().tint(.white)
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .offset(x: CGFloat(pagina - posicion) * paso + arrastreX, y: arrastreY)
+                    .accessibilityHidden(pagina != posicion)
+                }
+
+                VStack {
+                    HStack {
+                        Button("Cerrar") { dismiss() }
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.black.opacity(0.45), in: Capsule())
+                        Spacer()
+                        if photos.count > 1 {
+                            Text("\(indice(posicion) + 1) / \(photos.count)")
+                                .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(.black.opacity(0.45), in: Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    Spacer()
+                }
+                .opacity(arrastreY == 0 ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+            .gesture(gesto(paso: paso))
+        }
+        .background(Color.black)
+        .statusBarHidden()
+        .accessibilityAction(named: "Siguiente foto") { saltar(1) }
+        .accessibilityAction(named: "Foto anterior") { saltar(-1) }
+    }
+
+    private func saltar(_ direccion: Int) {
+        guard photos.count > 1, !animando else { return }
+        posicion += direccion
+    }
+
+    private func gesto(paso: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { v in
+                guard !animando else { return }
+                if abs(v.translation.height) > abs(v.translation.width), arrastreX == 0 {
+                    // Vertical: solo hacia abajo, para cerrar.
+                    arrastreY = max(0, v.translation.height)
+                } else if arrastreY == 0 {
+                    arrastreX = v.translation.width * (photos.count <= 1 ? 0.25 : 1)
+                }
+            }
+            .onEnded { v in
+                guard !animando else { return }
+                if arrastreY > 0 {
+                    if v.predictedEndTranslation.height > 160 {
+                        dismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { arrastreY = 0 }
+                    }
+                    return
+                }
+                let recorrido = v.predictedEndTranslation.width
+                let direccion = photos.count > 1 && abs(recorrido) > paso / 5
+                    ? (recorrido < 0 ? 1 : -1) : 0
+                guard direccion != 0 else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { arrastreX = 0 }
+                    return
+                }
+                animando = true
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    arrastreX = -CGFloat(direccion) * paso
+                }
+                // Al terminar el viaje, la foto que entró pasa a ser la actual
+                // y el desplazamiento vuelve a cero sin animación: el dibujo
+                // es idéntico, así que el cambio no se ve.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(360))
+                    var sinAnimacion = Transaction()
+                    sinAnimacion.disablesAnimations = true
+                    withTransaction(sinAnimacion) {
+                        posicion += direccion
+                        arrastreX = 0
+                    }
+                    animando = false
+                    ImagePrefetcher.prefetch([photos[indice(posicion + 1)], photos[indice(posicion - 1)]])
+                }
+            }
     }
 }
 
