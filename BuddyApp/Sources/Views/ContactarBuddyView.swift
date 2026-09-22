@@ -995,15 +995,18 @@ struct CategoryPickerView: View {
         } label: {
             HStack(spacing: 10) {
                 ctaLeading
+                // La segunda línea reserva su alto SIEMPRE, con o sin
+                // subtítulo (opacity, no if): antes solo existía con
+                // subtítulo, así que el botón crecía un renglón al pasar a
+                // "Buscando…" y empujaba la foto de arriba hacia arriba.
                 VStack(alignment: .leading, spacing: 2) {
                     ctaTitleText
                         .lineLimit(1)
-                    if let sub = ctaSubtitle {
-                        Text(sub)
-                            .font(BT.caption1)
-                            .foregroundStyle(Color.inkMuted)
-                            .lineLimit(1)
-                    }
+                    Text(ctaSubtitle ?? " ")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
+                        .opacity(ctaSubtitle == nil ? 0 : 1)
                 }
                 Spacer(minLength: 8)
                 ctaTrailing
