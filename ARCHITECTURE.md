@@ -42,6 +42,14 @@ The Home feed is decided in `FeedRanking.secuencia` and only *displayed* by the
 vertical pager. The pager never decides what comes next; the ranking layer never
 knows about scrolling. Keep that split.
 
+**The pager navigates the ranked feed; it does not build, rank, or reshape the
+feed.** It is the three-card drag pager in `ContactarBuddyView.exploreCarousel`
+(one drag = exactly one recommendation, cyclic by modulo arithmetic, no scroll
+window). The native `ScrollView` paging it replaced caused three separate bugs
+from the same source (a lazy 121-page window has no stable extent), so don't
+bring it back. Startup work (the cached spots, when the network re-ranks) lives
+upstream of the pager and must never require changing it.
+
 ```
 LAYER 1 — LOCAL CONTEXT     the closest 3 distinct places, one photo each,
                             in distance order.            HARD CONSTRAINT

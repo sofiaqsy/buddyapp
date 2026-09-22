@@ -20,6 +20,15 @@ final class LocationService: NSObject, ObservableObject {
     static weak var current: LocationService?
 
     private let manager = CLLocationManager()
+
+    /// La última ubicación que el sistema ya conoce, sin esperar un fix nuevo.
+    /// Solo si es reciente: una vieja (otro barrio, otra ciudad) pediría los
+    /// spots equivocados y luego habría que pedirlos otra vez.
+    func ubicacionConocida(maxEdad: TimeInterval) -> CLLocation? {
+        guard let loc = manager.location,
+              Date().timeIntervalSince(loc.timestamp) < maxEdad else { return nil }
+        return loc
+    }
     private var hasFetchedCity = false
     private var lastGeocodedLocation: CLLocation?
     /// Fix anterior, solo para loguear cuánto se movió el viajero entre fixes.

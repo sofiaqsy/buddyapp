@@ -28,14 +28,29 @@ final class SpotsStore: ObservableObject {
     private var generation = 0
     /// Dos peticiones dentro de este radio se consideran la misma.
     private static let coalesceMeters: CLLocationDistance = 150
+    /// La última petición que TERMINÓ bien, con sus coordenadas y su hora.
+    private var ultimaCompletada: (coords: CLLocation?, at: Date)?
+    /// Cuánto vale esa respuesta para una petición del mismo lugar.
+    private static let vigenciaRecienPedida: TimeInterval = 120
 
     private init() {
         spots = Self.loadCache()
-        dlog("🗂️ [spots] cache al arrancar → \(spots.count) spot(s)")
+        dlog("🗂️ [spots] cache al arrancar → \(spots.count) spot(s) (a los \(Cronometro.desdeArranque())ms)")
     }
 
-    func refresh(lat: Double?, lng: Double?, reason: String) async {
+    /// - Parameter omitirSiReciente: el primer fix del GPS al arrancar llega
+    ///   casi siempre al mismo lugar que la ubicación conocida con la que ya se
+    ///   pidió. Con esto no se repite la petición (ni el reordenamiento que
+    ///   trae): el orden fino lo mantiene reorder(from:) en cada fix, sin red.
+    func refresh(lat: Double?, lng: Double?, reason: String, omitirSiReciente: Bool = false) async {
         let coords = lat.flatMap { la in lng.map { CLLocation(latitude: la, longitude: $0) } }
+
+        if omitirSiReciente, let ultima = ultimaCompletada, coords != nil,
+           Self.equivalent(ultima.coords, coords),
+           Date().timeIntervalSince(ultima.at) < Self.vigenciaRecienPedida {
+            dlog("🗂️ [spots] \(reason): mismo lugar pedido hace \(Int(Date().timeIntervalSince(ultima.at)))s — no repito")
+            return
+        }
 
         if let inFlight, Self.equivalent(inFlightCoords, coords) {
             dlog("🗂️ [spots] \(reason): ya hay una petición equivalente en vuelo — me engancho")
@@ -57,6 +72,8 @@ final class SpotsStore: ObservableObject {
                     return
                 }
                 withAnimation(.easeInOut(duration: 0.25)) { self.spots = cards }
+                self.ultimaCompletada = (coords, Date())
+                dlog("⏱️ [tiempo] spots de la red en pantalla a los \(Cronometro.desdeArranque())ms del arranque")
                 Self.saveCache(cards)
                 dlog("🗂️ [spots] \(reason): \(cards.count) spot(s) — guardados en cache")
             } catch {

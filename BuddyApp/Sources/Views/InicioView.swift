@@ -1065,7 +1065,7 @@ struct InicioView: View {
     }
 
     private func refreshSpotsForLocation() async {
-        await SpotsStore.shared.refresh(lat: feedLat, lng: feedLng, reason: "gps")
+        await SpotsStore.shared.refresh(lat: feedLat, lng: feedLng, reason: "gps", omitirSiReciente: true)
     }
 
     private func refreshHomeCommunityContext() async {
@@ -1321,6 +1321,14 @@ struct InicioView: View {
         }
     }
 
+    /// Quita el esqueleto una sola vez y deja constancia de cuándo.
+    @MainActor
+    private func terminarEsqueleto() {
+        guard isLoadingData else { return }
+        dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque, con \(spotsStore.spots.count) spot(s) en memoria")
+        isLoadingData = false
+    }
+
     private func _loadDataBody(force: Bool) async {
         guard !Task.isCancelled else { return }
         let t0 = Date()
@@ -1340,18 +1348,32 @@ struct InicioView: View {
         // otra vez un segundo después era la petición duplicada del arranque.
         let authorized = locationService.authorizationStatus == .authorizedWhenInUse ||
                          locationService.authorizationStatus == .authorizedAlways
-        if feedLat != nil || !authorized {
-            Task { await SpotsStore.shared.refresh(lat: feedLat, lng: feedLng, reason: "loadData") }
+        // Sin fix todavía, la ubicación que el sistema ya conoce (si es de los
+        // últimos 10 minutos) alcanza para pedir: esperar el fix nuevo solo
+        // retrasaba la petición. Cuando el fix llega, el reorden local lo
+        // aplica y la red solo se repite si de verdad cambió el lugar.
+        let conocida = authorized && feedLat == nil
+            ? locationService.ubicacionConocida(maxEdad: 600) : nil
+        let spotsLat = feedLat ?? conocida?.coordinate.latitude
+        let spotsLng = feedLng ?? conocida?.coordinate.longitude
+        if spotsLat != nil || !authorized {
+            if conocida != nil { dlog("🗂️ [spots] loadData: pido con la ubicación conocida, sin esperar el fix") }
+            Task { await SpotsStore.shared.refresh(lat: spotsLat, lng: spotsLng, reason: "loadData") }
         } else {
             dlog("🗂️ [spots] loadData: esperando el primer fix del GPS para pedir con coordenadas")
         }
 
-        let tDest = Date()
-        let fetchedDests = (try? await APIClient.shared.fetchDestinations()) ?? []
-        dlog("⏱️ [tiempo] destinations \(Cronometro.ms(desde: tDest))ms → \(fetchedDests.count)")
-        await MainActor.run {
-            destinations = fetchedDests
-            ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
+        // Los destinos no deciden nada de lo que se ve en el Home (solo se
+        // guardan y se precargan sus portadas), así que no retienen el
+        // esqueleto: cargan por su cuenta.
+        Task {
+            let tDest = Date()
+            let fetchedDests = (try? await APIClient.shared.fetchDestinations()) ?? []
+            dlog("⏱️ [tiempo] destinations \(Cronometro.ms(desde: tDest))ms → \(fetchedDests.count)")
+            await MainActor.run {
+                destinations = fetchedDests
+                ImagePrefetcher.prefetch(destinations.compactMap { $0.coverUrl })
+            }
         }
 
         // Sin ninguna sesión (ni guest ni verified): solo contenido público.
@@ -1360,10 +1382,7 @@ struct InicioView: View {
         guard Session.hasSession else {
             dlog("🏠 [loadData] sin sesión — solo contenido público")
             await MainActor.run {
-            if isLoadingData {
-                dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque")
-            }
-            isLoadingData = false
+            terminarEsqueleto()
         }
             await refreshHomeCommunityContext()
                 return
@@ -1390,10 +1409,7 @@ struct InicioView: View {
                 let newId = Session.travelerId?.prefix(8) ?? "?"
                 print("⚠️ [loadData] travelerId cambió (nil → \(newId)) — descarto y reintento con identidad correcta")
                 await MainActor.run {
-            if isLoadingData {
-                dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque")
-            }
-            isLoadingData = false
+            terminarEsqueleto()
         }
                 Task { await loadData() }
                 return
@@ -1423,6 +1439,13 @@ struct InicioView: View {
                 pendingJourney = planning
                 liveJourneys   = newLive
                 dlog("🏠 [loadData] ✅ state written — activeJourney=\(active?.id.prefix(8) ?? "nil") liveJourneys=\(newLive.count)")
+                // Con los viajes resueltos el Home ya sabe qué rama dibujar
+                // (con viaje o sin viaje), y el feed sale de los spots en
+                // cache. Esperar los matches y el chat —o los destinos— solo
+                // retenía un feed que ya estaba listo. Antes de esto NO: si la
+                // rama cambiara después, el feed se rehace y la tarjeta a la
+                // vista cambia.
+                terminarEsqueleto()
             }
 
             let shouldFetchMatch = await MainActor.run { activeJourney != nil }
@@ -1457,10 +1480,7 @@ struct InicioView: View {
             }
         }
         await MainActor.run {
-            if isLoadingData {
-                dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque")
-            }
-            isLoadingData = false
+            terminarEsqueleto()
         }
         let doneJourney = await MainActor.run { activeJourney?.id.prefix(8) ?? "nil" }
         let doneLive = await MainActor.run { liveJourneys.count }
