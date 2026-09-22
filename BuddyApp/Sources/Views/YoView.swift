@@ -264,6 +264,22 @@ struct YoView: View {
             // guardar es lo que deja la recomendación visible.
             TripEditorSheet(journey: journey, initialPage: -1, publishesOnSave: true) {}
         }
+        // El lugar ya se creó (CompartirLugarSheet ya cerró su propio spinner
+        // al llamar onCreated), pero el editor todavía no se presenta: eso
+        // pasa recién en el onDismiss de arriba, después de que la animación
+        // de cierre de esa hoja termine. Sin nada acá, la pantalla de Yo
+        // queda un instante sin decir nada — como si el toque no hubiera
+        // hecho nada.
+        .overlay {
+            if pendingShareJourney != nil {
+                ZStack {
+                    Color.black.opacity(0.15).ignoresSafeArea()
+                    ProgressView().tint(.white).scaleEffect(1.2)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: pendingShareJourney != nil)
         .task { await loadProfile() }
         .task { await loadUnattendedDemand() }
         .onReceive(NotificationCenter.default.publisher(for: .stickerUnlocked)) { _ in
