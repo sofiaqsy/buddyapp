@@ -1143,7 +1143,14 @@ struct PlaceGuideDetailSheet: View {
             .scrollBounceBehavior(.basedOnSize)
         }
         .padding(.top, 10)
-        .task {
+        // id: place.id — sin esto, tocar OTRO pin sin cerrar el panel
+        // actualizaba el título (lee `place` directo) pero las fotos se
+        // quedaban con las del lugar anterior: un .task sin id corre UNA sola
+        // vez por instancia de vista, y bottomSection reusa la misma vista al
+        // cambiar selectedPlace, así que nunca volvía a pedir la galería.
+        .task(id: place.id) {
+            isLoadingGallery = true
+            isLoadingBuddies = true
             async let galleryTask: APIPlaceGallery? = try? APIClient.shared.fetchSpotGallery(spotId: place.id.uuidString)
             async let buddiesTask: [APIPlaceBuddy]? = fetchBuddiesIfPossible()
             let (g, b) = await (galleryTask, buddiesTask)
