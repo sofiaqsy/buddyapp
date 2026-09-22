@@ -887,8 +887,8 @@ struct RecommendationPin: View {
 // MARK: – PLACE PHOTO CARD
 
 /// Tarjeta del carrusel de lugares del mapa. Sin corazón ni "Por visitar": el
-/// favorito vive en la ficha del lugar (el corazón de su cabecera), y el estado
-/// de visita ya lo cuenta la línea teal sobre la foto.
+/// estado de visita lo cuenta la línea teal sobre la foto, y el favorito ya no
+/// se marca desde la app (ver la cabecera de la ficha del lugar).
 struct PlacePhotoCard: View {
     let place: Place
     let index: Int
@@ -1194,16 +1194,6 @@ struct PlaceGuideDetailSheet: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-
-            Button(action: onToggleFavorite) {
-                Image(systemName: isFavorite ? "heart.fill" : "heart")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(isFavorite ? Color.errorRed : Color.ink.opacity(0.6))
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.secondary.opacity(0.12)))
-                    .symbolEffect(.bounce, value: isFavorite)
-            }
-            .buttonStyle(.plain)
 
             Button {
                 Haptic.light()
