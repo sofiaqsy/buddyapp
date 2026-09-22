@@ -36,6 +36,33 @@ App launch
 - `APIClient.sharedRefresh` calls `expireSession()` when every refresh path fails.
 - `AuthState.sessionNeedsReauth` presents `IdentitySheet(purpose: .reauth)` from `ContentView`. A successful sign-in calls `hydrate`, which clears `needsReauth`.
 
+## Home startup: hint first, network confirms
+
+```
+launch → cached branch hint (PistaHome) → cached spots (SpotsStore)
+       → feed drawn immediately → network confirms in the background
+```
+
+The first recommendation appears at ~0.45–0.55 s (cold, simulator) without
+waiting for any request. Rules that keep this safe:
+
+- `PistaHome` stores only the last *drawn* branch (`viaje` / `general`), never
+  trip data. It is a rendering hint, not the source of truth. It is saved only
+  once the branch is confirmed (trips answered **and** GPS resolution tried),
+  expires after 7 days, and is cleared on logout.
+- Hint `general` → draw now. Hint `viaje` → wait for `/travelers/me/journeys`
+  (drawing that branch would need cached trip data).
+- With hint `general`, the trip branch is held until GPS resolution was tried,
+  so the Home never goes general → trip → general.
+- A confirmation that doesn't change the branch must not touch the feed. A real
+  change rebuilds it once.
+- `/destinations` never blocks the Home; the first spots request uses the last
+  known location (< 10 min) instead of waiting for a fresh fix.
+
+Verified 2026-09-22: no trip → no trip, trip → trip, no trip → trip (one
+transition, including the case where trips arrive before GPS resolution) and
+trip → no trip. Debug: `-pistaHome viaje|general|ninguna`.
+
 ## Home feed: three layers, and one hard constraint
 
 The Home feed is decided in `FeedRanking.secuencia` and only *displayed* by the
