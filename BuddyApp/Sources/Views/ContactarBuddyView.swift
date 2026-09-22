@@ -1006,24 +1006,50 @@ struct CategoryPickerView: View {
             // (ícono, título, subtítulo) vivían en el mismo HStack y el
             // ícono se centraba contra el BLOQUE de dos líneas, así que
             // quedaba más abajo que el título en vez de a su altura.
+            //
+            // El ZStack de abajo resuelve un problema aparte: la línea del
+            // subtítulo reserva su alto SIEMPRE (con o sin texto), para que
+            // el botón no cambie de tamaño al pasar a "Buscando…". Pero esa
+            // reserva vivía COMO fila, debajo de la visible, así que sin
+            // subtítulo el título quedaba pegado arriba y todo ese aire
+            // reservado caía abajo, nunca repartido. Un sizer invisible fija
+            // el alto total (el mismo de siempre) y el contenido visible se
+            // centra DENTRO de ese alto — con subtítulo, ya lo llena entero
+            // y no se mueve; sin él, la fila de arriba queda al medio.
+            // El sizer define el alto (fijo, intrínseco, SIN maxHeight
+            // infinito: eso volvía al botón "codicioso" de todo el alto
+            // disponible y dejaba la foto de arriba en 0). El contenido
+            // visible va de overlay encima, sin afectar el tamaño del
+            // botón — solo se reposiciona dentro de él.
+            // maxWidth infinito es seguro acá (lo acota el ancho fijo de la
+            // fila, nunca el alto): es lo mismo que ya hacía el Spacer real
+            // para llegar al borde. minHeight/maxHeight iguales (34, sin
+            // infinito) es lo que evita la fila codiciosa de antes.
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 10) {
-                    ctaLeading
-                    ctaTitleText
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    ctaTrailing
-                }
-                // La segunda línea reserva su alto SIEMPRE, con o sin
-                // subtítulo (opacity, no if): antes solo existía con
-                // subtítulo, así que el botón crecía un renglón al pasar a
-                // "Buscando…" y empujaba la foto de arriba hacia arriba.
+                Color.clear.frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34)
                 Text(ctaSubtitle ?? " ")
                     .font(BT.caption1)
-                    .foregroundStyle(Color.inkMuted)
                     .lineLimit(1)
-                    .opacity(ctaSubtitle == nil ? 0 : 1)
-                    .padding(.leading, 44) // 34 del ícono + 10 de espacio
+            }
+            .opacity(0)
+            .accessibilityHidden(true)
+            .overlay(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 10) {
+                        ctaLeading
+                        ctaTitleText
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        ctaTrailing
+                    }
+                    if let sub = ctaSubtitle {
+                        Text(sub)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                            .padding(.leading, 44) // 34 del ícono + 10 de espacio
+                    }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
