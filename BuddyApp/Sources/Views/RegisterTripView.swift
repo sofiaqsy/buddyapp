@@ -59,7 +59,7 @@ struct RegisterTripView: View {
 
                         // Search field
                         HStack(spacing: Spacing.sm) {
-                            if isSearching {
+                            if isSearching && searchText != prefilledDestinationName {
                                 ProgressView().scaleEffect(0.7)
                             } else {
                                 Image(systemName: "magnifyingglass")
