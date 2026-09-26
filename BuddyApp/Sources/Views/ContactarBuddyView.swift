@@ -751,16 +751,74 @@ struct CategoryPickerView: View {
     /// changes"). Fuente de verdad única para CTA/dots/zIndex — congelarlo
     /// hasta el touch-up (como se hizo antes) no evitaba ningún error de
     /// índice, solo dejaba el z-order desactualizado durante todo el drag.
+    /// Para el ajuste de `paso` a la grilla física de píxeles — puntos y
+    /// píxeles no son la misma unidad, y multiplicar/dividir por esto es lo
+    /// correcto en vez de redondear puntos a secas.
+    @Environment(\.displayScale) private var feedDisplayScale
     @State private var carouselCenterId: String? = nil
     /// Índice LÓGICO de la recomendación activa. Puede crecer o bajar sin
     /// límite: la foto sale del módulo (feedFoto), así que no hay principio
     /// ni final ni ventana de páginas que se pueda agotar.
     @State private var feedPosicion: Int = 0
-    /// Desplazamiento en curso del dedo (y el tramo animado al soltar).
-    @State private var feedDragY: CGFloat = 0
-    /// Mientras una tarjeta termina de entrar, el gesto no acepta otra: sin
-    /// esto dos golpes seguidos dejan el feed a medio camino.
+    /// Posición de asentado: SOLO la mueve `withAnimation` (el resorte al
+    /// soltar) o una asignación directa puntual en los tres bordes de
+    /// transición (cancelar un resorte en curso, migrar el remanente antes
+    /// de animar, resetear al terminar). Nunca se escribe frame a frame.
+    /// Mezclar escritura animada y escritura directa por-frame en la MISMA
+    /// propiedad es justo lo que generaba los `Invalid sample
+    /// AnimatablePair`: SwiftUI llevaba una curva de interpolación para
+    /// esta `.offset` y cada frame de arrastre la reiniciaba a mitad de
+    /// camino. Separar en dos propiedades — una que SOLO anima, otra que
+    /// SOLO se escribe por-frame — es lo que elimina el conflicto de raíz.
+    @State private var feedBaseOffset: CGFloat = 0
+    /// Espejo del valor REALMENTE dibujado de `feedBaseOffset`, cuadro a
+    /// cuadro, incluso a mitad de un resorte. Leer `feedBaseOffset`
+    /// directamente durante una animación en curso da el DESTINO (SwiftUI
+    /// actualiza el `@State` al instante; solo el DIBUJO interpola), no el
+    /// punto intermedio en pantalla — por eso un gesto que interrumpía un
+    /// asentado en pleno vuelo heredaba de golpe el valor final y saltaba.
+    /// `FeedOffsetTracker` usa `animatableData` (que SÍ recibe el valor
+    /// interpolado cuadro a cuadro desde Core Animation) para mantener esta
+    /// caja al día con lo que el usuario ve de verdad. Es una clase, no
+    /// `@State`: escribirla desde `animatableData` ocurre en medio de un
+    /// ciclo de render, y mutar `@State` ahí dispara "Modifying state during
+    /// view update".
+    private final class FeedOffsetBox {
+        var value: CGFloat = 0
+    }
+    @State private var feedOffsetBox = FeedOffsetBox()
+    /// Traducción del dedo: SOLO se escribe por asignación directa, cada
+    /// frame de `.onChanged`, 1:1 con el gesto. NUNCA pasa por
+    /// `withAnimation`. La posición visual final es `feedBaseOffset +
+    /// feedDragTranslation` — la suma, no una propiedad compartida.
+    @State private var feedDragTranslation: CGFloat = 0
+    /// Punto de partida de ESTE gesto dentro de `feedDragTranslation`,
+    /// fijado en el primer onChanged que se atiende. Sin esto, un segundo
+    /// swipe que empieza mientras el primero todavía se está asentando
+    /// saltaría de golpe. Con el ancla, el segundo gesto continúa desde la
+    /// posición visual actual (ver "cancela el resorte" más abajo), la
+    /// interrumpe al instante y no hay salto ni espera.
+    @State private var feedDragAnchor: CGFloat? = nil
+    /// true mientras la tarjeta que ganó el gesto anterior todavía está
+    /// animando hacia su sitio. Solo gatea las acciones de accesibilidad
+    /// (feedSalto) — el gesto de arrastre NUNCA se bloquea por esto, para
+    /// que el siguiente swipe pueda interrumpir de inmediato.
     @State private var feedAnimando = false
+    /// Generación del gesto actual. Se incrementa cada vez que arranca un
+    /// gesto FÍSICO nuevo (primer onChanged de ese toque). El `completion`
+    /// de `withAnimation` para un asentado NO se cancela solo porque
+    /// cancelemos feedBaseOffset sin animar en el gesto nuevo — sigue
+    /// programado con `.logicallyComplete` y dispara igual, más tarde, con
+    /// o sin gesto nuevo encima. Sin esta ficha, ese completion tardío pisa
+    /// feedPosicion/feedBaseOffset con los del asentado VIEJO mientras el
+    /// segundo swipe ya está en curso — el salto/hueco que se veía. El
+    /// completion se compara contra esto antes de escribir nada; si ya no
+    /// coincide, es de un gesto superado y no debe tocar el estado.
+    @State private var feedGestureToken = 0
+    /// Solo para el diagnóstico [FEED INTERRUPT]: el `targetOffset` del
+    /// asentado en curso, para poder loguearlo cuando un gesto nuevo lo
+    /// interrumpe.
+    @State private var feedTargetOffset: CGFloat = 0
     @State private var feedSecuencia: [ExplorePhoto] = []
     /// Cuánto hay que correr la página para leer la secuencia. Lo mueve solo
     /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
@@ -1402,12 +1460,16 @@ struct CategoryPickerView: View {
         return ((i % n) + n) % n
     }
 
-    /// Qué páginas se dibujan: la activa y sus dos vecinas, por su índice
+    /// Qué páginas se dibujan: la activa y sus vecinas, por su índice
     /// lógico. Con una sola recomendación no hay vecinas ni ciclo. Con ids
     /// lógicos, al avanzar la tarjeta que entró CONSERVA su vista (solo cambia
     /// su offset), así que no se reconstruye ni parpadea.
+    /// TEMPORAL: ventana ampliada a ±2 (en vez de ±1) mientras se audita el
+    /// bug del hueco en blanco — descarta que la causa sea "vecina
+    /// insuficiente" y deja margen mientras se prueba el fix real (la ficha
+    /// de generación de más abajo).
     private var feedPaginas: [Int] {
-        explorePhotos.count <= 1 ? [feedPosicion] : [feedPosicion - 1, feedPosicion, feedPosicion + 1]
+        explorePhotos.count <= 1 ? [feedPosicion] : [feedPosicion - 2, feedPosicion - 1, feedPosicion, feedPosicion + 1, feedPosicion + 2]
     }
 
     /// La foto que le toca a una página lógica, o nil si todavía no hay
@@ -1424,47 +1486,255 @@ struct CategoryPickerView: View {
         feedAsentado(en: feedPosicion)
     }
 
+    /// Puente para leer el valor REAL en pantalla de `feedBaseOffset`
+    /// mientras un resorte está en curso. `animatableData` es lo único que
+    /// SwiftUI actualiza con el valor interpolado cuadro a cuadro (Core
+    /// Animation se lo entrega directo, sin pasar por `@State`); escribirlo
+    /// en `box` deja ese valor disponible para leer fuera del ciclo de
+    /// render, en el gesture handler.
+    ///
+    /// CRÍTICO: `body(content:)` tiene que APLICAR `value` de verdad (acá,
+    /// como el `.offset` que mueve el stack). La primera versión de este
+    /// tipo devolvía `content` sin tocarlo — compilaba y conformaba a
+    /// `Animatable`, pero como el resultado dibujado no dependía de `value`,
+    /// SwiftUI no tenía ningún motivo para interpolarlo cuadro a cuadro: el
+    /// log mostraba `feedOffsetBox.value` saltando directo al destino
+    /// (idéntico a `feedBaseOffset`), no al punto intermedio real. Un
+    /// modificador `Animatable` solo recibe cuadros interpolados en
+    /// `animatableData` mientras su salida REALMENTE se mueve con ese valor.
+    private struct FeedOffsetTracker: Animatable, ViewModifier {
+        var value: CGFloat
+        let box: FeedOffsetBox
+        var animatableData: CGFloat {
+            get { value }
+            set {
+                value = newValue
+                box.value = newValue
+                dlog("🎞️ [FEED PRESENTATION] value=\(newValue)")
+            }
+        }
+        func body(content: Content) -> some View {
+            content.offset(y: value)
+        }
+    }
+
     /// Paginado vertical: un gesto, una recomendación. El arrastre sigue al
-    /// dedo; al soltar, o cruza el umbral y avanza exactamente una, o vuelve a
-    /// su sitio. Nunca queda a medio camino.
+    /// dedo 1:1, sin animación de por medio — la animación entra SOLO al
+    /// soltar, una vez, hacia el destino ya decidido. Nunca queda a medio
+    /// camino, y un gesto nuevo puede interrumpir uno que se está asentando
+    /// sin esperar ni saltar.
     private func feedGesto(paso: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { valor in
-                guard !feedAnimando, !zoomState.isZooming else { return }
+                guard !zoomState.isZooming else { return }
                 // Arrastre dominante horizontal: no es de este feed.
                 guard abs(valor.translation.height) > abs(valor.translation.width) else { return }
-                // Sin ciclo posible, el arrastre solo "pesa" y vuelve.
-                feedDragY = valor.translation.height * (explorePhotos.count <= 1 ? 0.25 : 1)
+                let factor: CGFloat = explorePhotos.count <= 1 ? 0.25 : 1
+                let crudo = valor.translation.height * factor
+                let esPrimerCuadro = feedDragAnchor == nil
+                if feedDragAnchor == nil {
+                    // Diagnóstico pedido: capturar el estado exacto ANTES
+                    // de tocar nada, en el instante en que este gesto nuevo
+                    // arranca sobre un asentado que podría seguir en vuelo.
+                    dlog("🎞️ [FEED INTERRUPT] tokenNuevo=\(feedGestureToken + 1) pagina=\(feedPosicion) feedBaseOffset=\(feedBaseOffset) feedDragTranslation=\(feedDragTranslation) feedOffsetBoxValue=\(feedOffsetBox.value) targetOffset=\(feedTargetOffset) feedAnimando=\(feedAnimando)")
+                    // Arranca un gesto FÍSICO nuevo.
+                    feedGestureToken += 1
+                    // Si había un asentado en curso, NUNCA se compromete
+                    // feedPosicion por el simple hecho de que empiece un
+                    // gesto nuevo — feedPosicion es la página lógica
+                    // asentada y solo cambia cuando UN gesto completa SU
+                    // propio asentado (más abajo, en el completion), CON
+                    // UNA excepción angosta: si el resorte interrumpido ya
+                    // estaba a un puñado de píxeles de su destino (ver
+                    // "near-target commit" abajo), se considera visualmente
+                    // asentado y se comete de inmediato — así una racha de
+                    // swipes rápidos en la misma dirección no se queda
+                    // rebotando sin avanzar nunca de página. Un asentado
+                    // interrumpido que NO calificó pierde dueño de
+                    // inmediato: el token ya cambió, así que cuando su
+                    // completion dispare (más tarde, con
+                    // `.logicallyComplete`) el guard de generación lo va a
+                    // descartar sin tocar nada.
+                    let wasAnimando = feedAnimando
+                    feedAnimando = false
+                    // REBASE, no fusión: `feedOffsetBox.value` es el valor
+                    // REALMENTE dibujado de feedBaseOffset cuadro a cuadro
+                    // (ver FeedOffsetTracker) — si había un resorte en
+                    // curso, esto es el punto intermedio de verdad, nunca
+                    // su destino final.
+                    let presentation = feedOffsetBox.value
+                    let target = feedTargetOffset
+                    let remaining = abs(target - presentation)
+                    let commitThreshold: CGFloat = 12
+                    let shouldCommit = wasAnimando && remaining <= commitThreshold
+                    dlog("🎞️ [FEED INTERRUPT COMMIT CHECK] presentation=\(presentation) target=\(target) remaining=\(remaining) shouldCommit=\(shouldCommit)")
+                    if shouldCommit {
+                        // El resorte interrumpido ya estaba a `remaining`
+                        // píxeles de `target` — visualmente indistinguible
+                        // de haber terminado. La dirección viene SOLO del
+                        // `target` de ESE asentado (nunca del gesto nuevo
+                        // que recién arranca), así que esto no puede
+                        // reintroducir el bug de commit en dirección
+                        // equivocada que motivó remover el commit-through
+                        // original: acá no hay ambigüedad de dirección,
+                        // solo se reconoce un resorte que ya llegó.
+                        let oldPagina = feedPosicion
+                        let direction = target < 0 ? 1 : -1
+                        feedPosicion += direction
+                        feedBaseOffset = 0
+                        feedDragTranslation = 0
+                        dlog("🎞️ [FEED INTERRUPT COMMIT] oldPagina=\(oldPagina) newPagina=\(feedPosicion) direction=\(direction) presentation=\(presentation) target=\(target) remaining=\(remaining)")
+                        feedAsentado(en: feedPosicion)
+                        feedDragAnchor = -crudo
+                        dlog("🎞️ [FEED GESTURE START] token=\(feedGestureToken) pagina=\(feedPosicion) anchor=\(feedDragAnchor ?? 0) visualAlAgarrar=0.0 paso=\(paso) ventana=\(feedPaginas)")
+                    } else {
+                        // La corrección: `feedBaseOffset` se fija
+                        // DIRECTAMENTE a esa presentación (asignación
+                        // puntual, no animada) y `feedDragTranslation`
+                        // arranca en 0 — NUNCA se suma la presentación
+                        // adentro de feedDragTranslation, porque entonces
+                        // el próximo cuadro la tarjeta se dibuja con
+                        // presentación + presentación + delta del dedo (el
+                        // salto al doble que se veía). A partir de acá el
+                        // invariante es `feedBaseOffset == presentación
+                        // congelada` y `feedDragTranslation == delta crudo
+                        // del dedo desde este instante`, sin mezclar ambas
+                        // cosas en una sola propiedad.
+                        dlog("🎞️ [FEED REBASE] presentationBefore=\(presentation) oldBase=\(feedBaseOffset) oldDrag=\(feedDragTranslation) newBase=\(presentation) newDrag=0.0")
+                        feedBaseOffset = presentation
+                        feedDragTranslation = 0
+                        feedDragAnchor = -crudo
+                        dlog("🎞️ [FEED GESTURE START] token=\(feedGestureToken) pagina=\(feedPosicion) anchor=\(feedDragAnchor ?? 0) visualAlAgarrar=\(presentation) paso=\(paso) ventana=\(feedPaginas)")
+                    }
+                }
+                let base = feedDragAnchor ?? 0
+                // El acotado tiene que ser sobre el TOTAL visible
+                // (feedBaseOffset + arrastre), no sobre el arrastre solo.
+                // Motivo: cuando un gesto nuevo rebasa a mitad de un
+                // asentado (ver [FEED REBASE] arriba), feedBaseOffset ya
+                // arranca con parte del camino recorrido — por ejemplo
+                // -506 de un target de -534. Si acá se acota SOLO
+                // `base + crudo` a ±paso, el dedo recibe un rango fresco
+                // completo de ±paso encima de un feedBaseOffset que ya
+                // estaba casi en destino, y el total (feedBaseOffset +
+                // feedDragTranslation) se va mucho más allá de una página
+                // (se vieron casos de -703 con target -534.67). Ese
+                // sobretiro es lo que después obliga al resorte a viajar
+                // de vuelta desde -703 hasta -534, y se siente como
+                // rebote/pegajoso en swipes rápidos consecutivos. Acotando
+                // el TOTAL a ±paso, la tarjeta nunca se dibuja más allá de
+                // una página de distancia sin importar cuánto había
+                // avanzado ya feedBaseOffset — sin tocar paso, el umbral
+                // de commit, ni la dirección (que sigue viniendo solo del
+                // target del asentado interrumpido).
+                let totalCrudo = feedBaseOffset + base + crudo
+                let totalAcotado = max(-paso, min(paso, totalCrudo))
+                feedDragTranslation = totalAcotado - feedBaseOffset
+                dlog("🎞️ [FEED DRAG] token=\(feedGestureToken) pagina=\(feedPosicion) anchor=\(base) translation=\(valor.translation.height) visualOffset=\(feedBaseOffset + feedDragTranslation)")
+                if esPrimerCuadro {
+                    dlog("🎞️ [FEED FIRST DRAG] presentationAtStart=\(feedBaseOffset) translation=\(valor.translation.height) visualOffset=\(feedBaseOffset + feedDragTranslation)")
+                }
             }
             .onEnded { valor in
-                guard !feedAnimando, !zoomState.isZooming else { return }
+                feedDragAnchor = nil
+                guard !zoomState.isZooming else { return }
+                // predictedEndTranslation ya combina distancia y velocidad
+                // (Apple extrapola dónde terminaría el pan si desacelerara
+                // con normalidad): un flick corto y rápido cruza el umbral
+                // igual que un arrastre largo y lento. No hace falta un
+                // cálculo de velocidad aparte.
                 let recorrido = valor.predictedEndTranslation.height
-                // Un quinto de tarjeta o un gesto rápido alcanzan: el umbral
-                // sale del paso, no de un número suelto.
                 let umbral = paso / 5
                 let direccion = explorePhotos.count > 1 && abs(recorrido) > umbral
                     ? (recorrido < 0 ? 1 : -1)
                     : 0
+                // Migración de un solo golpe: la posición visual TOTAL en
+                // este instante es feedBaseOffset (la presentación con la
+                // que arrancó este gesto, congelada desde el rebase de
+                // arriba) MÁS feedDragTranslation (lo que se movió el dedo
+                // desde entonces) — ya no es solo feedDragTranslation,
+                // porque feedBaseOffset dejó de estar fijo en 0 durante el
+                // arrastre. Esa suma pasa a ser el nuevo punto de partida
+                // de feedBaseOffset (asignación directa, sin animar — la
+                // suma no cambia, así que no se ve), y feedDragTranslation
+                // queda en 0 y NO vuelve a tocarse hasta el siguiente
+                // gesto. De acá en más, SOLO feedBaseOffset se mueve, y
+                // SOLO vía withAnimation: las dos propiedades nunca se
+                // animan a la vez ni se escriben por-frame a la vez.
+                let remanente = feedBaseOffset + feedDragTranslation
+                feedBaseOffset = remanente
+                feedDragTranslation = 0
                 guard direccion != 0 else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { feedDragY = 0 }
+                    // Mismo caso degenerado que abajo: si el arrastre ya
+                    // volvió exactamente a 0 (por ejemplo, el acotado por
+                    // TOTAL de más arriba lo dejó ahí), animar 0 → 0 no
+                    // mueve nada y feedOffsetBox nunca se resincroniza.
+                    guard abs(feedBaseOffset) > 0.01 else {
+                        feedOffsetBox.value = 0
+                        return
+                    }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { feedBaseOffset = 0 }
+                    return
+                }
+                // La ficha de ESTE asentado: se compara contra la actual
+                // dentro del completion, más abajo.
+                let miToken = feedGestureToken
+                let destino = -CGFloat(direccion) * paso
+                // Caso degenerado: el acotado por TOTAL de [FEED DRAG] ya
+                // puede haber dejado `remanente` clavado exactamente en
+                // `destino` (el dedo arrastró hasta saturar ±paso, que es
+                // justo el mismo valor al que este asentado apuntaría).
+                // Si eso pasa, `withAnimation { feedBaseOffset = destino }`
+                // anima un valor a SÍ MISMO — SwiftUI no interpola nada
+                // (no hay distancia), así que el setter de
+                // `animatableData` NUNCA se llama, y con él nunca se llama
+                // tampoco la única línea que sincroniza feedOffsetBox.
+                // Resultado observado: feedOffsetBox queda congelado para
+                // siempre en el último valor animado de verdad, y CADA
+                // gesto futuro rebasa sobre ese número viejo — el feed
+                // "pierde su efecto normal" tras muchos swipes rápidos.
+                // La corrección: si no hay distancia que animar, resolver
+                // el asentado directo acá mismo (igual que el completion
+                // de abajo) y sincronizar el box a mano, ya que nadie más
+                // lo va a hacer.
+                guard abs(remanente - destino) > 0.01 else {
+                    dlog("🎞️ [FEED SETTLE INSTANT] token=\(feedGestureToken) pagina=\(feedPosicion) destino=\(destino) remanente=\(remanente) — sin distancia que animar, resuelvo directo y resincronizo feedOffsetBox")
+                    feedPosicion += direccion
+                    feedBaseOffset = 0
+                    feedDragTranslation = 0
+                    feedOffsetBox.value = 0
+                    feedAnimando = false
+                    feedAsentado(en: feedPosicion)
                     return
                 }
                 feedAnimando = true
+                feedTargetOffset = destino
+                dlog("🎞️ [FEED SETTLE START] token=\(miToken) pagina=\(feedPosicion) translation=\(valor.translation.height) predictedEndTranslation=\(recorrido) visualOffset=\(feedBaseOffset) targetOffset=\(destino) paso=\(paso) ventana=\(feedPaginas)")
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    feedDragY = -CGFloat(direccion) * paso
-                }
-                // Al terminar el viaje, la tarjeta que entró pasa a ser la
-                // activa y el desplazamiento vuelve a cero SIN animación: el
-                // dibujo es idéntico, así que el cambio no se ve.
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(360))
-                    var sinAnimacion = Transaction()
-                    sinAnimacion.disablesAnimations = true
-                    withTransaction(sinAnimacion) {
-                        feedPosicion += direccion
-                        feedDragY = 0
+                    feedBaseOffset = destino
+                } completion: {
+                    // Guard de generación: si un gesto físico nuevo empezó
+                    // desde que se programó ESTE asentado, feedGestureToken
+                    // ya cambió. Este completion es de un asentado SUPERADO
+                    // — el resorte fue cancelado sin animar en el
+                    // onChanged del gesto nuevo, pero `.logicallyComplete`
+                    // igual dispara este bloque más tarde. Escribir
+                    // feedPosicion/feedBaseOffset acá pisaría el gesto en
+                    // curso con datos viejos. Se descarta sin tocar nada —
+                    // el gesto vigente ya es dueño del estado.
+                    guard feedGestureToken == miToken else {
+                        dlog("🎞️ [FEED SETTLE COMPLETE] token=\(miToken) DESCARTADO (generación actual=\(feedGestureToken)) — asentado superado por un gesto nuevo, no se toca el estado")
+                        return
                     }
+                    // Se dispara con la finalización REAL del resorte (no una
+                    // espera fija adivinada). La tarjeta que entró pasa a ser
+                    // la activa y el desplazamiento vuelve a cero en la misma
+                    // pasada, sin animación: el dibujo es idéntico al último
+                    // frame del resorte, así que el cambio no se ve.
+                    feedPosicion += direccion
+                    feedBaseOffset = 0
                     feedAnimando = false
+                    dlog("🎞️ [FEED SETTLE COMPLETE] token=\(miToken) pagina=\(feedPosicion) visualOffset=\(feedBaseOffset + feedDragTranslation) ventana=\(feedPaginas)")
                     feedAsentado(en: feedPosicion)
                 }
             }
@@ -1523,7 +1793,18 @@ struct CategoryPickerView: View {
                     // Una tarjeta por gesto. El paso es lo que sea más alto, la
                     // tarjeta o el visor: la que entra y la que sale descansan
                     // SIEMPRE fuera del visor.
-                    let paso = max(cardAlto, geo.size.height)
+                    // Ajustado a la grilla FÍSICA de píxeles: geo.size.height
+                    // suele traer fracciones (811.33... puntos) y, como cada
+                    // tarjeta se offsetea un múltiplo EXACTO de este valor,
+                    // la fracción se acumula en un hueco de subpíxel entre
+                    // tarjetas. Quieto no se nota — el compositor lo redondea
+                    // al dibujar — pero en un arrastre rápido, con el offset
+                    // cambiando cada frame, ese hueco aparece como una línea
+                    // del fondo (canvas claro) colándose entre las fotos.
+                    // Redondear en PUNTOS no alcanza en pantallas @3x: hay
+                    // que redondear en PÍXELES y volver a puntos.
+                    let pasoBruto = max(cardAlto, geo.size.height)
+                    let paso = (pasoBruto * feedDisplayScale).rounded() / feedDisplayScale
                     ZStack {
                         ForEach(feedPaginas, id: \.self) { pagina in
                             if let photo = feedFoto(en: pagina) {
@@ -1544,7 +1825,15 @@ struct CategoryPickerView: View {
                                         feedSalto(-1)
                                     }
                                     .frame(width: cardAncho, height: cardAlto)
-                                    .offset(y: CGFloat(pagina - feedPosicion) * paso + feedDragY)
+                                    // Solo el desplazamiento ESTÁTICO por
+                                    // página acá — feedBaseOffset y
+                                    // feedDragTranslation se aplican una
+                                    // sola vez sobre TODO el stack, más
+                                    // abajo (no por tarjeta): ver por qué en
+                                    // el comentario sobre el orden del
+                                    // gesto vs. el offset, después del
+                                    // ZStack.
+                                    .offset(y: CGFloat(pagina - feedPosicion) * paso)
                                     // Solo la activa abre el lugar: las vecinas
                                     // están fuera del visor o a medio entrar.
                                     .onTapGesture {
@@ -1557,6 +1846,24 @@ struct CategoryPickerView: View {
                             }
                         }
                     }
+                    // Cuadro a cuadro, incluso a mitad de un resorte: ver
+                    // FeedOffsetTracker arriba. feedDragTranslation no
+                    // anima (por-frame, directo) así que un `.offset` plano
+                    // alcanza para él.
+                    //
+                    // CRÍTICO: este offset va en el CONTENIDO (el ZStack),
+                    // nunca en la vista que lleva `.gesture()` más abajo. Si
+                    // la misma vista que reconoce el `DragGesture` también
+                    // se desplaza con el resorte/arrastre, su coordenada
+                    // `.local` (de la que `DragGesture` calcula
+                    // `translation`) se mueve con ella — el gesto persigue
+                    // su propio desplazamiento y la traducción reportada se
+                    // dispara sin control. `.frame(width:height:)` DESPUÉS
+                    // fija un marco de tamaño y posición estables para el
+                    // gesto, sin importar cuánto se desplace el contenido
+                    // dentro.
+                    .modifier(FeedOffsetTracker(value: feedBaseOffset, box: feedOffsetBox))
+                    .offset(y: feedDragTranslation)
                     .frame(width: geo.size.width, height: geo.size.height)
                     // El gesto vive en toda la fila (no solo sobre la tarjeta)
                     // para que un arrastre que empieza al costado también pagine.
