@@ -1385,7 +1385,16 @@ actor HomeBootstrap {
     /// respuesta): así cualquier petición que llegue después ya lo ve en curso.
     func preparar(lat: Double?, lng: Double?) {
         if pendiente != nil { return }
-        if let e = entradas.values.first, e.hasta > Date(), self.lat == lat, self.lng == lng { return }
+        // Mismo punto (a ~200 m): las coordenadas del GPS y las de loadData
+        // difieren en decimales sueltos, y eso no justifica otro viaje.
+        func cerca(_ a: Double?, _ b: Double?) -> Bool {
+            switch (a, b) {
+            case (nil, nil): return true
+            case let (x?, y?): return abs(x - y) < 0.002
+            default: return false
+            }
+        }
+        if let e = entradas.values.first, e.hasta > Date(), cerca(self.lat, lat), cerca(self.lng, lng) { return }
         self.lat = lat; self.lng = lng
         entradas.removeAll()
         let t0 = Date()

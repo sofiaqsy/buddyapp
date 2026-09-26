@@ -358,12 +358,20 @@ struct InicioView: View {
             dlog("🏠 [gps] \(desde) desde la última consulta → refresco ubicación + spots")
             lastCommunityContextLocation = loc
             lastCommunityContextAt = Date()
-            Task { await refreshHomeCommunityContext() }
+            // El bootstrap se registra ANTES de lanzar las dos peticiones de
+            // abajo: si no, el feed (place-shares) salía por su cuenta y otra
+            // vez dentro del bootstrap. Con esto el feed espera al viaje único
+            // y se sirve de él.
+            let (la, lo) = (loc.coordinate.latitude, loc.coordinate.longitude)
+            Task {
+                await HomeBootstrap.shared.preparar(lat: la, lng: lo)
+                Task { await refreshHomeCommunityContext() }
 
-            // Refetch: puede haber spots nuevos que antes quedaban fuera del
-            // radio de la consulta. El reorden de arriba solo mueve los que ya
-            // tenemos; esto trae los que aún no conocemos.
-            Task { await refreshSpotsForLocation() }
+                // Refetch: puede haber spots nuevos que antes quedaban fuera del
+                // radio de la consulta. El reorden de arriba solo mueve los que ya
+                // tenemos; esto trae los que aún no conocemos.
+                Task { await refreshSpotsForLocation() }
+            }
         }
         // La pista se guarda solo con la rama CONFIRMADA: viajes respondidos y
         // ubicación intentada. Antes de eso la rama puede ser provisoria.
