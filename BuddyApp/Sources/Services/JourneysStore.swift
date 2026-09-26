@@ -54,6 +54,15 @@ final class JourneysStore: ObservableObject {
         try await fetch(trigger: "\(trigger)/force")
     }
 
+    /// Un trip recién creado entra ya en el store: sin esto, quien pida
+    /// `load` dentro de la ventana de frescor recibe la lista vieja y el trip
+    /// nuevo no aparece hasta un pull-to-refresh.
+    func insertar(_ journey: APIJourney) {
+        journeys.removeAll { $0.id == journey.id }
+        journeys.insert(journey, at: 0)
+        lastFetchedAt = Date()
+    }
+
     private func fetch(trigger: String) async throws -> [APIJourney] {
         if let inFlight {
             dlog("📦 [JourneysStore] \(trigger) → ya hay una carga en vuelo, me engancho")

@@ -190,6 +190,7 @@ struct TripsView: View {
                     RegisterTripView { creado in
                         // El trip ya existe: se muestra al instante y se
                         // selecciona, sin esperar a otra ida al servidor.
+                        JourneysStore.shared.insertar(creado)
                         if !journeys.contains(where: { $0.id == creado.id }) {
                             journeys.insert(creado, at: 0)
                         }
@@ -449,7 +450,7 @@ struct TripsView: View {
         // motivo suficiente, y el .task de esta vista reaparece muchas veces
         // porque el TabView recrea la pestaña. Un pull-to-refresh sí lo es.
         let store = JourneysStore.shared
-        let fresco = trigger == "refreshable"
+        let fresco = (trigger == "refreshable" || trigger == "registerTrip")
             ? try? await store.refresh(trigger: "trips:\(trigger)")
             : try? await store.load(trigger: "trips:\(trigger)")
         if let fetched = fresco {
