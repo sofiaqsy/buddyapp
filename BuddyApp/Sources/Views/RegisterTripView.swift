@@ -346,6 +346,25 @@ struct RegisterTripView: View {
                     }
         }
         .background(Color.canvas)
+        .overlay {
+            if isCreating {
+                ZStack {
+                    Color.black.opacity(0.25).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView().tint(Color.ink)
+                        Text("Creando tu trip…")
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(Color.ink)
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 22)
+                    .background(Color.canvas)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isCreating)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             do {

@@ -187,7 +187,13 @@ struct TripsView: View {
             }
             .navigationDestination(for: String.self) { route in
                 if route == "register" {
-                    RegisterTripView { _ in
+                    RegisterTripView { creado in
+                        // El trip ya existe: se muestra al instante y se
+                        // selecciona, sin esperar a otra ida al servidor.
+                        if !journeys.contains(where: { $0.id == creado.id }) {
+                            journeys.insert(creado, at: 0)
+                        }
+                        selectedTripId = creado.id
                         navPath = NavigationPath()
                         Task { await loadJourneys(trigger: "registerTrip") }
                     }
