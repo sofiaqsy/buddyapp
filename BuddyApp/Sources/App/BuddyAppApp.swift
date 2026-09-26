@@ -13,6 +13,9 @@ struct BuddyAppApp: App {
         // Toca el cronómetro acá para que su cero sea el arranque de verdad y
         // no la primera vez que alguien lo consulta.
         _ = Cronometro.arranque
+        // Conexión con buddy-core abierta desde ya: el primer viaje de red del
+        // Home ya no paga los handshakes.
+        APIClient.shared.precalentar()
         print("🚀 [AppLaunch] ─────────────────────────────────────")
         print("🚀 [AppLaunch] TravelerService.hasSession=\(TravelerService.shared.hasSession)")
         print("🚀 [AppLaunch] travelerId=\(TravelerService.shared.travelerId?.prefix(8) ?? "NIL")")

@@ -1405,6 +1405,25 @@ struct InicioView: View {
             // y la pista no los guarda a propósito.
             if pistaInicial == .general, !spotsStore.spots.isEmpty {
                 terminarEsqueleto(motivo: "pista general")
+            } else if pistaInicial == .viaje, !spotsStore.spots.isEmpty,
+                      let previos = JourneysStore.shared.desdeDisco() {
+                // Pista "viaje" con los journeys de la última sesión en disco:
+                // se dibuja YA con eso y la red lo confirma después (el bloque
+                // de más abajo reescribe el estado con la respuesta real).
+                // Sin esto el Home esperaba ~4 s la respuesta de /journeys
+                // para saber qué rama pintar.
+                let vivos = previos
+                    .filter { ["active", "planning"].contains($0.status) }
+                    .sorted { ($0.status == "active" ? 0 : 1) < ($1.status == "active" ? 0 : 1) }
+                if !vivos.isEmpty {
+                    if contactSheetJourney == nil {
+                        activeJourney = previos.first(where: { $0.status == "active" })
+                    }
+                    pendingJourney = previos.first(where: { $0.status == "planning" })
+                    liveJourneys   = vivos
+                    viajesConfirmados = true
+                    terminarEsqueleto(motivo: "journeys en cache de disco (\(vivos.count))")
+                }
             }
         }
         // ── Contenido PÚBLICO: siempre carga, sin importar la sesión ──
@@ -1429,6 +1448,10 @@ struct InicioView: View {
             ? locationService.ubicacionConocida(maxEdad: 600) : nil
         let spotsLat = feedLat ?? conocida?.coordinate.latitude
         let spotsLng = feedLng ?? conocida?.coordinate.longitude
+        // Un solo viaje de red para journeys, matches, destinos, feed y ayudas
+        // cercanas. Vuelve al instante; las peticiones normales de más abajo
+        // esperan ese viaje y se sirven de él (ver HomeBootstrap).
+        await HomeBootstrap.shared.preparar(lat: spotsLat, lng: spotsLng)
         if spotsLat != nil || !authorized {
             if conocida != nil { dlog("🗂️ [spots] loadData: pido con la ubicación conocida, sin esperar el fix") }
             Task { await SpotsStore.shared.refresh(lat: spotsLat, lng: spotsLng, reason: "loadData") }

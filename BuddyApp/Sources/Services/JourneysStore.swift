@@ -13,8 +13,12 @@ import Foundation
 /// - Este store evita volver a preguntar por algo que se acaba de traer.
 ///
 /// Alcance deliberadamente mínimo: los datos, cuándo se trajeron, `load()`,
-/// `refresh()` y una sola petición en vuelo. Sin persistencia, sin sincronía
-/// en segundo plano, sin repositorio genérico.
+/// `refresh()` y una sola petición en vuelo. Sin sincronía en segundo plano
+/// ni repositorio genérico.
+///
+/// Una sola persistencia: la ÚLTIMA respuesta cruda, en disco y por traveler.
+/// Sirve para dibujar el Home al instante en el arranque (stale-while-
+/// revalidate) mientras la red confirma; nunca reemplaza al servidor.
 @MainActor
 final class JourneysStore: ObservableObject {
     static let shared = JourneysStore()
@@ -55,7 +59,12 @@ final class JourneysStore: ObservableObject {
             dlog("📦 [JourneysStore] \(trigger) → ya hay una carga en vuelo, me engancho")
             return try await inFlight.value
         }
-        let task = Task { try await APIClient.shared.fetchTravelerJourneys() }
+        let dueno = Session.travelerId
+        let task = Task {
+            try await APIClient.shared.fetchTravelerJourneys(rawSink: { data in
+                JourneysStore.guardarEnDisco(data, travelerId: dueno)
+            })
+        }
         inFlight = task
         do {
             let result = try await task.value
@@ -71,9 +80,45 @@ final class JourneysStore: ObservableObject {
         }
     }
 
+    // MARK: – Cache en disco (solo para el arranque)
+
+    nonisolated private static func archivo(travelerId: String) -> URL? {
+        guard let base = try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: true) else { return nil }
+        return base.appendingPathComponent("journeys-\(travelerId).json")
+    }
+
+    nonisolated fileprivate static func guardarEnDisco(_ data: Data, travelerId: String?) {
+        guard let travelerId, let url = archivo(travelerId: travelerId) else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtection])
+    }
+
+    /// Los journeys de la última sesión de ESTE traveler, o nil. Solo los lee
+    /// quien va a dibujar antes de que responda la red; el dato puede estar
+    /// viejo y la red siempre lo corrige.
+    func desdeDisco() -> [APIJourney]? {
+        guard let tid = Session.travelerId,
+              let url = Self.archivo(travelerId: tid),
+              let data = try? Data(contentsOf: url),
+              let lista = try? JSONDecoder.buddy.decode([APIJourney].self, from: data)
+        else { return nil }
+        return lista
+    }
+
     /// Logout: el siguiente `load()` tiene que ir al servidor con la identidad
     /// nueva, no devolver los journeys del anterior.
     func clear() {
+        // En el logout la sesión puede estar ya borrada: no se puede confiar en
+        // Session.travelerId para saber cuál archivo tocar. Se borran todos.
+        if let base = try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: false),
+           let nombres = try? FileManager.default.contentsOfDirectory(atPath: base.path) {
+            for n in nombres where n.hasPrefix("journeys-") && n.hasSuffix(".json") {
+                try? FileManager.default.removeItem(at: base.appendingPathComponent(n))
+            }
+        }
         journeys = []
         lastFetchedAt = nil
         inFlight?.cancel()

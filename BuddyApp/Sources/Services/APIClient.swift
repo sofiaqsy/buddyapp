@@ -110,7 +110,8 @@ final class APIClient {
         path: String,
         method: String = "GET",
         body: [String: Any]? = nil,
-        isRetry: Bool = false
+        isRetry: Bool = false,
+        rawSink: (@Sendable (Data) -> Void)? = nil
     ) async throws -> T {
         guard let url = URL(string: baseURL + path) else {
             throw APIError.invalidURL
@@ -131,6 +132,8 @@ final class APIClient {
             }
         }
 
+        if !isRetry { await TravelerService.shared.refreshTokenIfExpiring() }
+
         let reqId = UUID().uuidString
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
         req.httpMethod = method
@@ -142,7 +145,15 @@ final class APIClient {
         }
 
         let (data, http): (Data, HTTPURLResponse)
-        if method == "GET" {
+        var desdeBootstrap: Data? = nil
+        if method == "GET", !isRetry {
+            desdeBootstrap = await HomeBootstrap.shared.datos(para: path)
+        }
+        if let hit = desdeBootstrap,
+           let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) {
+            dlog("⚡️ [bootstrap] \(path) servido desde /home/bootstrap")
+            (data, http) = (hit, ok)
+        } else if method == "GET" {
             // Copia inmutable: capturar `req` (var) en un closure concurrente
             // es un aviso hoy y un error en Swift 6.
             let peticion = req
@@ -162,13 +173,16 @@ final class APIClient {
             dlog("⏱️ [tiempo] \(method) \(path) \(Cronometro.ms(desde: t0))ms")
             guard let h = response as? HTTPURLResponse else { throw APIError.unknown }
             (data, http) = (d, h)
+            // Una escritura cambia lo que el servidor devolvería: lo servido
+            // desde /home/bootstrap ya no es de fiar.
+            await HomeBootstrap.shared.invalidar(tras: path)
         }
 
         if http.statusCode == 401, !isRetry {
             print("🔑 [APIClient] \(method) \(path) → 401 reqId=\(reqId.prefix(8)) — attempting refresh")
             let refreshed = await sharedRefresh()
             if refreshed {
-                return try await request(path: path, method: method, body: body, isRetry: true)
+                return try await request(path: path, method: method, body: body, isRetry: true, rawSink: rawSink)
             } else {
                 throw APIError.server(401, "Session expired")
             }
@@ -190,7 +204,9 @@ final class APIClient {
         }
 
         do {
-            return try JSONDecoder.buddy.decode(T.self, from: data)
+            let decoded = try JSONDecoder.buddy.decode(T.self, from: data)
+            rawSink?(data)
+            return decoded
         } catch {
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "<non-UTF8>"
             print("❌ [APIClient] decode \(T.self) failed [\(path)] reqId=\(reqId.prefix(8)): \(error)\nraw: \(preview)")
@@ -205,6 +221,7 @@ final class APIClient {
         isRetry: Bool = false
     ) async throws {
         guard let url = URL(string: baseURL + path) else { throw APIError.invalidURL }
+        if !isRetry { await TravelerService.shared.refreshTokenIfExpiring() }
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
         req.httpMethod = method
         headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
@@ -282,6 +299,33 @@ final class APIClient {
     private struct DestinationsPage: Decodable {
         let items: [APIDestination]
         let total: Int
+    }
+
+    /// Abre la conexión con buddy-core (DNS + TCP + TLS) antes de que haga
+    /// falta. Desde España cada conexión nueva cuesta ~1.5 s de handshakes; el
+    /// bootstrap medía 295 ms en el servidor y 1975 ms en el teléfono. Usa la
+    /// misma URLSession que las peticiones, así que la conexión se reutiliza.
+    func precalentar() {
+        guard let raiz = URL(string: baseURL)?.deletingLastPathComponent() else { return }
+        var req = URLRequest(url: raiz.appendingPathComponent("health"))
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 8
+        Task.detached(priority: .utility) {
+            _ = try? await APIClient.session.data(for: req)
+        }
+    }
+
+    /// Respuesta cruda de /home/bootstrap. La decodifica HomeBootstrap, que
+    /// reparte cada parte a la petición normal que la pide.
+    func fetchHomeBootstrapRaw(lat: Double?, lng: Double?) async throws -> Data {
+        struct Sobre: Decodable { let ts: String? }
+        var path = "/home/bootstrap"
+        if let lat, let lng { path += "?lat=\(lat)&lng=\(lng)&radius_km=15" }
+        final class Caja: @unchecked Sendable { var data: Data? }
+        let caja = Caja()
+        let _: Sobre = try await request(path: path, rawSink: { caja.data = $0 })
+        guard let data = caja.data else { throw APIError.unknown }
+        return data
     }
 
     // Carga inicial: primeras 50 destinaciones (suficiente para pickers rápidos)
@@ -874,9 +918,12 @@ final class APIClient {
 
     /// Journeys del Traveler actual (guest o verified) — no requiere userId,
     /// el backend lo resuelve desde el traveler_id en el JWT.
-    func fetchTravelerJourneys(file: String = #fileID, line: Int = #line) async throws -> [APIJourney] {
+    func fetchTravelerJourneys(
+        file: String = #fileID, line: Int = #line,
+        rawSink: (@Sendable (Data) -> Void)? = nil
+    ) async throws -> [APIJourney] {
         dlog("🧭 [origen] journeys ← \(file):\(line)")
-        return try await request(path: "/travelers/me/journeys")
+        return try await request(path: "/travelers/me/journeys", rawSink: rawSink)
     }
 
     /// Publicaciones del perfil AGRUPADAS por viaje (una por trip, con momentos
@@ -1277,4 +1324,138 @@ extension JSONDecoder {
         }
         return d
     }()
+}
+
+
+// MARK: – /home/bootstrap
+
+/// Un solo viaje de red para lo que el Home pide al arrancar.
+///
+/// Cada petición HTTPS a buddy-core cuesta ~1 s de red pura (medido con /health
+/// desde España) aunque el servidor tarde 60 ms; el Home lanzaba una docena.
+/// `preparar` pide /home/bootstrap una vez y guarda cada parte. Las peticiones
+/// normales de siempre (journeys, matches, destinos, place-shares,
+/// recent-help-nearby) ESPERAN ese viaje si está en curso y se sirven de él:
+/// ni los stores ni las vistas cambian.
+///
+/// Fallo seguro: si el bootstrap falla o tarda más de 6 s, o una parte no
+/// coincide (otra ubicación, otro límite), la petición sale sola a la red como
+/// antes. Cualquier escritura invalida todo.
+actor HomeBootstrap {
+    static let shared = HomeBootstrap()
+
+    private struct Entrada { let data: Data; let hasta: Date }
+    private var entradas: [String: Entrada] = [:]
+    private var pendiente: Task<Void, Never>?
+    private var lat: Double?
+    private var lng: Double?
+
+    /// Una respuesta servida de aquí no debe vivir mucho: cubre el arranque,
+    /// no es un cache general.
+    private let vida: TimeInterval = 8
+    private let esperaMaxima: UInt64 = 6_000_000_000
+
+    /// Nombre de la parte que cubre esta ruta, o nil si no la cubre.
+    private static func parte(de path: String) -> String? {
+        if path == "/travelers/me/journeys" { return "journeys" }
+        if path == "/matching/matches"      { return "matches" }
+        if path == "/destinations?limit=5"  { return "destinations" }
+        if path.hasPrefix("/feed/place-shares?limit=12") { return "placeShares" }
+        if path.hasPrefix("/matching/recent-help-nearby?") && path.hasSuffix("radius_km=15") { return "recentHelpNearby" }
+        if path == "/matching/my-offers"           { return "myOffers" }
+        if path == "/matching/requests/for-buddy"  { return "forBuddy" }
+        if path == "/matching/my-request"          { return "myRequest" }
+        // recent-help de un destino: "/matching/recent-help/<id>" (sin query).
+        // El "/" final lo distingue de recent-help-nearby.
+        if path.hasPrefix("/matching/recent-help/"), !path.contains("?") {
+            return "recentHelp:" + path.dropFirst("/matching/recent-help/".count)
+        }
+        return nil
+    }
+
+    private static func coordenadas(de path: String) -> (Double, Double)? {
+        guard let c = URLComponents(string: "https://x" + path),
+              let la = c.queryItems?.first(where: { $0.name == "lat" })?.value.flatMap(Double.init),
+              let lo = c.queryItems?.first(where: { $0.name == "lng" })?.value.flatMap(Double.init)
+        else { return nil }
+        return (la, lo)
+    }
+
+    /// Arranca el viaje. Vuelve en cuanto queda registrado (no espera la
+    /// respuesta): así cualquier petición que llegue después ya lo ve en curso.
+    func preparar(lat: Double?, lng: Double?) {
+        if pendiente != nil { return }
+        if let e = entradas.values.first, e.hasta > Date(), self.lat == lat, self.lng == lng { return }
+        self.lat = lat; self.lng = lng
+        entradas.removeAll()
+        let t0 = Date()
+        let limite = esperaMaxima
+        pendiente = Task {
+            let crudo: Data? = await withTaskGroup(of: Data?.self) { grupo in
+                grupo.addTask { try? await APIClient.shared.fetchHomeBootstrapRaw(lat: lat, lng: lng) }
+                grupo.addTask { try? await Task.sleep(nanoseconds: limite); return nil }
+                let primero = await grupo.next() ?? nil
+                grupo.cancelAll()
+                return primero
+            }
+            await self.guardar(crudo, desde: t0)
+        }
+    }
+
+    private func guardar(_ crudo: Data?, desde t0: Date) {
+        defer { pendiente = nil }
+        guard let crudo,
+              let raiz = try? JSONSerialization.jsonObject(with: crudo) as? [String: Any],
+              let partes = raiz["parts"] as? [String: Any] else {
+            dlog("⚠️ [bootstrap] sin respuesta útil (\(Int(Date().timeIntervalSince(t0) * 1000))ms) — cada petición sale sola")
+            return
+        }
+        let hasta = Date().addingTimeInterval(vida)
+        var guardadas: [String] = []
+        for (nombre, valor) in partes {
+            guard let p = valor as? [String: Any],
+                  (p["status"] as? Int).map({ (200..<300).contains($0) }) == true,
+                  let contenido = p["data"], !(contenido is NSNull),
+                  JSONSerialization.isValidJSONObject(contenido) || contenido is String,
+                  let data = try? JSONSerialization.data(withJSONObject: contenido, options: [.fragmentsAllowed])
+            else { continue }
+            entradas[nombre] = Entrada(data: data, hasta: hasta)
+            guardadas.append(nombre)
+        }
+        dlog("⚡️ [bootstrap] listo en \(Int(Date().timeIntervalSince(t0) * 1000))ms — partes: \(guardadas.sorted().joined(separator: ", "))")
+    }
+
+    /// Los datos de esta ruta si el bootstrap los trae (esperándolo si está en
+    /// curso), o nil para que la petición salga a la red.
+    func datos(para path: String) async -> Data? {
+        guard let nombre = Self.parte(de: path) else { return nil }
+        if let pendiente { await pendiente.value }
+        guard let e = entradas[nombre], e.hasta > Date() else { return nil }
+        // place-shares y recent-help-nearby dependen de la ubicación: solo se
+        // sirven si es (casi) la misma con la que se pidió el bootstrap.
+        if nombre == "placeShares" || nombre == "recentHelpNearby" {
+            let pedida = Self.coordenadas(de: path)
+            switch (pedida, lat, lng) {
+            case let (c?, la?, lo?):
+                if abs(c.0 - la) > 0.002 || abs(c.1 - lo) > 0.002 { return nil }
+            case (nil, nil, _):
+                break
+            default:
+                return nil
+            }
+        }
+        return e.data
+    }
+
+    /// POST que en realidad solo LEEN (resolver una ubicación no cambia nada
+    /// de lo que trae el bootstrap): no lo invalidan. Tirar todo por un
+    /// /location/resolve mandaba a la red la petición siguiente que el
+    /// bootstrap ya traía.
+    private static let escriturasFalsas = ["/location/", "/places/resolve", "/notifications/"]
+
+    func invalidar(tras path: String) {
+        guard !entradas.isEmpty else { return }
+        if Self.escriturasFalsas.contains(where: { path.hasPrefix($0) }) { return }
+        entradas.removeAll()
+    }
 }

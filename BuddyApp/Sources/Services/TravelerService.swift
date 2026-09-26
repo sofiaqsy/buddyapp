@@ -211,6 +211,36 @@ final class TravelerService {
         return Date(timeIntervalSince1970: exp).timeIntervalSinceNow < 300 // 5 min buffer
     }
 
+    /// Segundos que le quedan al JWT, o nil si no se puede leer (anon key,
+    /// token mal formado). nil NO es "vencido": deja que el 401 decida.
+    private func jwtSecondsRemaining(_ token: String) -> TimeInterval? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let data = Data(base64Encoded: b64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp  = json["exp"] as? TimeInterval
+        else { return nil }
+        return Date(timeIntervalSince1970: exp).timeIntervalSinceNow
+    }
+
+    /// Renueva el JWT ANTES de mandar una petición protegida si ya venció o
+    /// vence en menos de `margin` segundos. El JWT vive 15 min: al abrir la app
+    /// tras un rato, todas las peticiones del Home salían con el token viejo,
+    /// recibían 401 a la vez y se repetían tras el refresh (~2.5 s perdidos).
+    /// Pasa por forceRefresh, así que las peticiones concurrentes comparten UN
+    /// solo refresh. Nunca lanza: si falla, la petición sale igual y el camino
+    /// del 401 sigue siendo la red de seguridad.
+    func refreshTokenIfExpiring(margin: TimeInterval = 120) async {
+        guard let tid = travelerId, let t = token, !t.isEmpty,
+              let restante = jwtSecondsRemaining(t), restante < margin else { return }
+        dlog("🔑 [TravelerService] JWT vence en \(Int(max(restante, 0)))s — renuevo antes de pedir")
+        _ = try? await forceRefresh(travelerId: tid)
+    }
+
     // Punto único de refresh del traveler. Todos los caminos que renuevan el
     // JWT pasan por aquí (APIClient en el 401, el bucle SSE de ConexionesView
     // y validateSession al arrancar), así que coalescer aquí los cubre a los
