@@ -203,6 +203,12 @@ final class APIClient {
             throw APIError.server(http.statusCode, errResp?.error ?? "Unknown error")
         }
 
+        // 204 no trae cuerpo — intentar decodificarlo como JSON siempre falla
+        // (DecodingError, no un error de red) y ese fallo se confundía con
+        // "sin conexión" en el caller. Es una respuesta legítima (p. ej.
+        // POST /location/resolve sin match): el caller decide qué significa.
+        if http.statusCode == 204 { throw APIError.noContent }
+
         do {
             let decoded = try JSONDecoder.buddy.decode(T.self, from: data)
             rawSink?(data)
@@ -1130,12 +1136,12 @@ final class APIClient {
             )
             dlog("🌍 [resolveLocation] lat=\(String(format: "%.4f", lat)) lng=\(String(format: "%.4f", lng)) → \(result.destinationName) (\(result.matchedBy))")
             return result
+        } catch APIError.noContent {
+            // 204 = el punto no cae en ningún destino conocido. Normal y
+            // esperado (p. ej. viajando por una zona sin cobertura todavía).
+            dlog("🌍 [resolveLocation] sin match para ese punto")
+            return nil
         } catch {
-            // 204 No Content = no match found
-            if let urlError = error as? URLError, urlError.code == .unknown {
-                dlog("🌍 [resolveLocation] No location match found")
-                return nil
-            }
             throw error
         }
     }
@@ -1272,6 +1278,12 @@ enum APIError: LocalizedError {
     /// 409 de POST /matching/match — otro buddy ganó la carrera (dos buddies
     /// aceptaron casi al mismo tiempo tras liberarse la solicitud).
     case alreadyTaken
+    /// 204 sin cuerpo — respuesta legítima (p. ej. POST /location/resolve
+    /// cuando el punto no cae en ningún destino conocido). Antes esto se
+    /// intentaba decodificar como JSON vacío y tiraba un DecodingError que
+    /// resolveLocation no reconocía: quedaba como "red caída" en los logs
+    /// cuando en realidad era "sin match", algo normal y esperado.
+    case noContent
 
     var errorDescription: String? {
         switch self {
@@ -1281,6 +1293,7 @@ enum APIError: LocalizedError {
         case .activeRequestExists: return "Ya tienes una solicitud activa."
         case .priorityWindowActive: return "Otro buddy tiene prioridad por unos segundos más."
         case .alreadyTaken:        return "Esta solicitud ya fue tomada por otro buddy."
+        case .noContent:           return "Sin contenido."
         }
     }
 }

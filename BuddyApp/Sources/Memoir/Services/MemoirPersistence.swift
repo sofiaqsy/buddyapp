@@ -191,6 +191,20 @@ final class MemoirPersistence {
     @MainActor
     func generateThumbnail(vm: CanvasViewModel, canvasSize: CGSize, pageId: UUID, journeyId: String) -> String? {
         guard canvasSize != .zero else { return nil }
+
+        // Red de seguridad: si la única foto de la página se agregó en el
+        // instante en que canvasSize aún era .zero (el VM recién recreado al
+        // cambiar de página), addPhoto se salta el layout "a pantalla
+        // completa" y la foto queda chica, sin cubrir el canvas. Eso deja el
+        // fondo blanco del canvas asomando detrás — franja horizontal que
+        // termina horneada dentro del JPEG exportado. Antes de renderizar, se
+        // vuelve a aplicar el layout de 1 foto: si ya cubría, no cambia nada;
+        // si no cubría, lo corrige acá, en el último punto antes de guardar.
+        let fotoCount = vm.sortedItems.reduce(0) { acc, it in
+            if case .photo = it.type { return acc + 1 }; return acc
+        }
+        if fotoCount == 1 { vm.applyLayout(.one, in: canvasSize) }
+
         let bgImage = vm.backgroundImage
 
         let renderer = ImageRenderer(content:

@@ -1377,13 +1377,23 @@ struct InicioView: View {
         // completa (la de las 20:29:13 no tenía causa visible en los logs).
         let origen = reason.isEmpty ? "línea \(line)" : "\(reason), línea \(line)"
         dlog("🏠 [loadData] pedida — \(origen)\(force ? " (force)" : "")")
-        let edad = Date().timeIntervalSince(lastLoadDataAt ?? .distantPast)
-        if !force, loadDataTask != nil || edad < 5 {
-            dlog("🏠 [loadData] \(reason.isEmpty ? "" : "(\(reason)) ")ignorado — \(loadDataTask != nil ? "ya hay una carga en vuelo" : "última hace \(Int(edad))s")")
+        // Coalescing, no solo debounce: si ya hay una carga en vuelo, un
+        // segundo toque (aunque sea force) no debe abrir una segunda
+        // pipeline completa. cancel() en un Task de Swift solo marca
+        // isCancelled — _loadDataBody no lo revisa en cada await, así que
+        // "cancelar y relanzar" terminaba corriendo ambas hasta el final
+        // (3 toques rápidos en el tab = 3 loadData completos en paralelo).
+        // Se deja seguir la carga en vuelo; el tap no se pierde, sale
+        // servido por esa misma carga cuando termine.
+        if loadDataTask != nil {
+            dlog("🏠 [loadData] \(reason.isEmpty ? "" : "(\(reason)) ")ignorado — ya hay una carga en vuelo")
             return
         }
-        // Cancel any in-flight loadData — only the latest matters.
-        loadDataTask?.cancel()
+        let edad = Date().timeIntervalSince(lastLoadDataAt ?? .distantPast)
+        if !force, edad < 5 {
+            dlog("🏠 [loadData] \(reason.isEmpty ? "" : "(\(reason)) ")ignorado — última hace \(Int(edad))s")
+            return
+        }
         let task = Task<Void, Never> { [self] in await _loadDataBody(force: force) }
         loadDataTask = task
         await task.value
@@ -2236,12 +2246,9 @@ struct PublishedTripCard: View {
         } else if thumbs.count == 1 {
             // Single memoir page: plain CachedImage — no TabView, no UIPageViewController,
             // no horizontal UIScrollView in the hierarchy → eliminates the overflow vector.
-            CachedImage(urlString: thumbs[0]) { img in
-                img.resizable().scaledToFit()
-            } placeholder: { Color(white: 0.96) }
-            .frame(width: w, height: h)
-            .contentShape(Rectangle())
-            .onTapGesture { Haptic.light(); showStory = true }
+            fittedMemoirPage(url: thumbs[0], width: w, height: h)
+                .contentShape(Rectangle())
+                .onTapGesture { Haptic.light(); showStory = true }
 
         } else {
             // Multiple memoir pages: TabView with fully pinned width × height so the
@@ -2249,18 +2256,40 @@ struct PublishedTripCard: View {
             // UIScrollView (which is the root cause of the horizontal layout corruption).
             TabView(selection: $page) {
                 ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
-                    CachedImage(urlString: url) { img in
-                        img.resizable().scaledToFit()
-                    } placeholder: { Color(white: 0.96) }
-                    .frame(width: w, height: h)
-                    .contentShape(Rectangle())
-                    .onTapGesture { Haptic.light(); showStory = true }
-                    .tag(i)
+                    fittedMemoirPage(url: url, width: w, height: h)
+                        .contentShape(Rectangle())
+                        .onTapGesture { Haptic.light(); showStory = true }
+                        .tag(i)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .frame(width: w, height: h)
         }
+    }
+
+    /// Una página de memoir cuyo aspect ratio no coincide con el de la card
+    /// (p. ej. una foto apaisada) deja franjas vacías arriba/abajo con
+    /// `scaledToFit`. En vez de mostrarlas en gris plano, se rellenan con la
+    /// misma foto agrandada y desenfocada detrás — la foto sigue completa,
+    /// sin recortar, pero ya no se ve como un borde roto.
+    @ViewBuilder
+    private func fittedMemoirPage(url: String, width w: CGFloat, height h: CGFloat) -> some View {
+        ZStack {
+            CachedImage(urlString: url) { img in
+                img.resizable().scaledToFill()
+            } placeholder: { Color(white: 0.96) }
+            .frame(width: w, height: h)
+            .clipped()
+            .blur(radius: 30)
+            .overlay(Color.black.opacity(0.15))
+
+            CachedImage(urlString: url) { img in
+                img.resizable().scaledToFit()
+            } placeholder: { Color.clear }
+            .frame(width: w, height: h)
+        }
+        .frame(width: w, height: h)
+        .clipped()
     }
 
     private var pageIndicator: some View {
