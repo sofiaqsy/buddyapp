@@ -1,8 +1,9 @@
-// Pruebas deterministas del ranking del feed del Home.
+// Pruebas deterministas del ranking del feed del Home y del enlace a la ficha
+// de Google Maps (GoogleMapsLink) y las reglas de las fotos de Google (GooglePhotoSupport).
 //
 // Se corren sin Xcode ni simulador, con el compilador a secas:
 //
-//     swiftc -O BuddyApp/Sources/Services/FeedRanking.swift Tools/main.swift -o /tmp/feedtests && /tmp/feedtests
+//     swiftc -O BuddyApp/Sources/Services/FeedRanking.swift BuddyApp/Sources/Models/Place.swift Tools/main.swift -o /tmp/feedtests && /tmp/feedtests
 //
 // El archivo se llama main.swift porque Swift solo permite código suelto (sin
 // función de entrada) en un archivo con ese nombre.
@@ -10,6 +11,8 @@
 // FeedRanking no depende de SwiftUI ni de la red: recibe las fotos agrupadas
 // por lugar (ya ordenados por cercanía) y devuelve la secuencia. Eso es lo que
 // hace que estos casos se puedan fijar acá, sin datos reales de por medio.
+
+import Foundation
 
 struct FotoFake {
     let id: String
@@ -124,5 +127,75 @@ revisar("Caso 7 (un lugar, 3 fotos)", secuencia([lugar("A", fotos: 3)]), primero
 let vacio = secuencia([])
 print("\(vacio.isEmpty ? "OK  " : "FALLA") Caso 8 (sin lugares): \(vacio.count) fotos")
 if !vacio.isEmpty { fallos += 1 }
+
+// ── Enlace a la ficha de Google Maps (GoogleMapsLink, Models/Place.swift) ─────
+//
+// La URL la arma el backend con datos de una persona (nombre, Place ID). El
+// cliente solo abre una búsqueda de Google Maps por https con query_place_id;
+// todo lo demás es "sin ficha" y no se abre.
+
+func revisarEnlace(_ caso: String, _ raw: String?, abre: Bool) {
+    let real = GoogleMapsLink.openableURL(raw) != nil
+    let ok = real == abre
+    if !ok { fallos += 1 }
+    print("\(ok ? "OK  " : "FALLA") Enlace — \(caso): \(real ? "abre" : "no abre") (esperado: \(abre ? "abre" : "no abre"))")
+}
+
+let fichaValida = "https://www.google.com/maps/search/?api=1&query=Cafeter%C3%ADa%20Rosal&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4"
+revisarEnlace("URL del backend para un spot vinculado", fichaValida, abre: true)
+revisarEnlace("spot sin vínculo (nil)", nil, abre: false)
+revisarEnlace("spot sin vínculo (cadena vacía)", "", abre: false)
+revisarEnlace("http en vez de https", fichaValida.replacingOccurrences(of: "https://", with: "http://"), abre: false)
+revisarEnlace("otro host", "https://evil.example.com/maps/search/?api=1&query=x&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4", abre: false)
+revisarEnlace("host que solo empieza igual", "https://www.google.com.evil.example.com/maps/search/?api=1&query=x&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4", abre: false)
+revisarEnlace("otra ruta de google.com", "https://www.google.com/search?q=x&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4", abre: false)
+revisarEnlace("sin query_place_id", "https://www.google.com/maps/search/?api=1&query=Cafeter%C3%ADa%20Rosal", abre: false)
+revisarEnlace("query_place_id vacío", "https://www.google.com/maps/search/?api=1&query=x&query_place_id=", abre: false)
+revisarEnlace("puerto distinto en www.google.com", "https://www.google.com:8443/maps/search/?api=1&query=x&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4", abre: false)
+revisarEnlace("credenciales en la URL", "https://user:pass@www.google.com/maps/search/?api=1&query=x&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4", abre: false)
+revisarEnlace("usuario@host engañoso", "https://www.google.com@evil.example.com/maps/search/?api=1&query=x&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4", abre: false)
+revisarEnlace("esquema personalizado", "comgooglemaps://?q=x&query_place_id=ChIJN1t_tDeuEmsRUsoyG83frY4", abre: false)
+revisarEnlace("texto que no es URL", "no es una url", abre: false)
+
+// Place sin vínculo: el campo es nil por defecto y no hay nada que abrir.
+let sinVinculo = Place(id: UUID(), name: "X", description: "", stickerSymbol: "mappin", stickerEmoji: "",
+                       category: .culture, latitude: 0, longitude: 0, radiusMeters: 50)
+revisarEnlace("Place sin vínculo (valor por defecto)", sinVinculo.googleMapsUrl, abre: false)
+
+// ── Fotos de Google en el Home (GooglePhotoSupport, Models/Place.swift) ───────
+
+func revisar(_ caso: String, _ real: Bool, esperado: Bool = true) {
+    let ok = real == esperado
+    if !ok { fallos += 1 }
+    print("\(ok ? "OK  " : "FALLA") Fotos de Google — \(caso)")
+}
+
+let rutaBuena = "/v1/places/google/photo-media?token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.c2lnLW5hbWU_-x"
+revisar("ruta de descarga del backend: válida", GooglePhotoSupport.isValidImagePath(rutaBuena))
+revisar("nil: no válida", GooglePhotoSupport.isValidImagePath(nil), esperado: false)
+revisar("vacía: no válida", GooglePhotoSupport.isValidImagePath(""), esperado: false)
+revisar("URL absoluta de otro host: NO se pide con la sesión", GooglePhotoSupport.isValidImagePath("https://evil.example.com/v1/places/google/photo-media?token=abc"), esperado: false)
+revisar("URL de Google: tampoco (la app solo habla con el backend)", GooglePhotoSupport.isValidImagePath("https://lh3.googleusercontent.com/p/abc"), esperado: false)
+revisar("otra ruta del backend: no válida", GooglePhotoSupport.isValidImagePath("/v1/travelers/me?token=abc"), esperado: false)
+revisar("sin token: no válida", GooglePhotoSupport.isValidImagePath("/v1/places/google/photo-media?token="), esperado: false)
+revisar("parámetros extra (&): no válida", GooglePhotoSupport.isValidImagePath(rutaBuena + "&redirect=https://evil.example.com"), esperado: false)
+revisar("token con '/': no válida", GooglePhotoSupport.isValidImagePath("/v1/places/google/photo-media?token=a/b"), esperado: false)
+revisar("token con '#': no válida", GooglePhotoSupport.isValidImagePath(rutaBuena + "#frag"), esperado: false)
+revisar("ruta absurdamente larga: no válida", GooglePhotoSupport.isValidImagePath(GooglePhotoSupport.imagePathPrefix + String(repeating: "a", count: 3000)), esperado: false)
+
+revisar("enlace de autor de Google (https): abre", GooglePhotoSupport.openableAuthorURL("https://maps.google.com/maps/contrib/1001") != nil)
+revisar("enlace de autor www.google.com: abre", GooglePhotoSupport.openableAuthorURL("https://www.google.com/maps/contrib/1") != nil)
+revisar("autor nil: no abre", GooglePhotoSupport.openableAuthorURL(nil) != nil, esperado: false)
+revisar("autor http: no abre", GooglePhotoSupport.openableAuthorURL("http://www.google.com/maps/contrib/1") != nil, esperado: false)
+revisar("autor en otro dominio: no abre", GooglePhotoSupport.openableAuthorURL("https://evil.example.com/x") != nil, esperado: false)
+revisar("autor con host engañoso (google.com.evil...): no abre", GooglePhotoSupport.openableAuthorURL("https://www.google.com.evil.example.com/x") != nil, esperado: false)
+revisar("autor con credenciales: no abre", GooglePhotoSupport.openableAuthorURL("https://www.google.com@evil.example.com/x") != nil, esperado: false)
+revisar("autor con puerto: no abre", GooglePhotoSupport.openableAuthorURL("https://www.google.com:8443/x") != nil, esperado: false)
+revisar("autor javascript: no abre", GooglePhotoSupport.openableAuthorURL("javascript:alert(1)") != nil, esperado: false)
+
+revisar("crédito de un autor", GooglePhotoSupport.creditLine(["Ana"]) == "Foto: Ana")
+revisar("crédito de dos autores", GooglePhotoSupport.creditLine(["Ana", "Beto"]) == "Foto: Ana y Beto")
+revisar("sin autores: sin línea de crédito", GooglePhotoSupport.creditLine([]) == nil)
+revisar("autores en blanco: sin línea de crédito", GooglePhotoSupport.creditLine(["  ", ""]) == nil)
 
 print(fallos == 0 ? "\nTODO OK" : "\n\(fallos) FALLA(S)")

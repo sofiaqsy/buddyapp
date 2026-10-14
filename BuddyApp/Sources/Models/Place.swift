@@ -22,6 +22,10 @@ struct Place: Identifiable, Codable {
     let radiusMeters: Double
     var coverUrl: String?
     var featured: Bool = false   // top community pick → featured marker tier
+    /// URL de la ficha de Google Maps del lugar, ya armada por el backend
+    /// (buddy-core/src/lib/googleMapsLink.js). nil si el spot no está vinculado
+    /// a un Google Place ID. Usar SIEMPRE vía GoogleMapsLink.openableURL.
+    var googleMapsUrl: String? = nil
 
     enum Category: String, Codable, CaseIterable {
         case cafe, nature, culture, market, viewpoint, hidden
@@ -86,4 +90,67 @@ extension Place {
     static let villaRicaSamples: [Place] = nearOrigin(
         CLLocationCoordinate2D(latitude: -10.600, longitude: -75.348)
     )
+}
+
+// MARK: - Enlace a la ficha de Google Maps
+
+/// Abrir la ficha de un spot en Google Maps NO requiere API key ni llamar a
+/// Places: el backend entrega una URL de Google Maps y la app solo la abre.
+///
+/// Esa URL se arma con datos que escribió una persona (nombre del lugar, Place
+/// ID), así que el cliente no abre cualquier cosa que llegue en el campo: solo
+/// una búsqueda de Google Maps por https con un query_place_id. Cualquier otra
+/// forma —otro host, otro esquema, otra ruta, sin id— se trata como "sin ficha".
+enum GoogleMapsLink {
+    static func openableURL(_ raw: String?) -> URL? {
+        guard let raw, !raw.isEmpty,
+              let url = URL(string: raw),
+              url.scheme == "https",
+              url.host == "www.google.com",
+              // Sin puerto ni credenciales: el backend nunca los genera, así que
+              // su presencia significa que la URL no es la que armó el backend.
+              url.port == nil, url.user == nil, url.password == nil,
+              url.path == "/maps/search/" || url.path == "/maps/search",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              items.contains(where: { $0.name == "query_place_id" && !($0.value ?? "").isEmpty })
+        else { return nil }
+        return url
+    }
+}
+
+/// Reglas de las fotos de Google en el Home que no dependen de SwiftUI ni de la
+/// red (por eso viven aquí y se prueban en Tools/main.swift).
+enum GooglePhotoSupport {
+    /// La ÚNICA ruta que la app descarga con su sesión: la que entrega el
+    /// backend para una foto. Si el servidor devolviera otra cosa (otro host,
+    /// otro camino), la app NO la pediría: el token de sesión no se manda a
+    /// ningún sitio que no sea la API de BuddyApp.
+    static let imagePathPrefix = "/v1/places/google/photo-media?token="
+
+    static func isValidImagePath(_ raw: String?) -> Bool {
+        guard let raw, raw.hasPrefix(imagePathPrefix), raw.count > imagePathPrefix.count, raw.count < 2400 else { return false }
+        let token = raw.dropFirst(imagePathPrefix.count)
+        // Un token firmado (JWT) solo usa estos caracteres; nada de "&", "/" ni "#".
+        return token.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.%".contains($0)) }
+    }
+
+    /// Enlace del autor de la foto: solo https hacia un dominio de Google, sin
+    /// puerto ni credenciales. Cualquier otro se descarta (el nombre se muestra igual).
+    static func openableAuthorURL(_ raw: String?) -> URL? {
+        guard let raw, !raw.isEmpty, raw.count <= 500,
+              let url = URL(string: raw),
+              url.scheme == "https",
+              let host = url.host?.lowercased(),
+              url.port == nil, url.user == nil, url.password == nil,
+              host == "google.com" || host.hasSuffix(".google.com") || host == "maps.app.goo.gl" || host == "goo.gl"
+        else { return nil }
+        return url
+    }
+
+    /// "Foto: Ana" / "Foto: Ana y Beto" — el crédito del autor que exige Google.
+    static func creditLine(_ names: [String]) -> String? {
+        let limpios = names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !limpios.isEmpty else { return nil }
+        return "Foto: " + limpios.joined(separator: " y ")
+    }
 }

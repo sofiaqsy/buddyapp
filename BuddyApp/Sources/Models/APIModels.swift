@@ -77,19 +77,32 @@ struct APIPlaceGuideSpot: Decodable, Identifiable {
     let lat: Double
     let lng: Double
     let coverUrl: String?
+    /// "pending" mientras espera aprobación — solo llega a quien lo propuso.
+    /// var con default: los init manuales existentes (BuddyProfileView) no lo pasan.
+    var status: String? = nil
+    /// Categoría curada del lugar (nombre + icono SF Symbol). /places/in-bounds
+    /// la manda; los init manuales existentes no la pasan.
+    var placeCategory: APIPlaceCategory? = nil
+    /// Ficha de Google Maps del spot, o nil si no está vinculado. Solo la manda
+    /// /places/in-bounds; los init manuales existentes no la pasan.
+    var googleMapsUrl: String? = nil
+
+    var isPendingApproval: Bool { status == "pending" }
 
     var asPlace: Place {
         Place(
             id: UUID(uuidString: id) ?? UUID(),
             name: name,
             description: "",
-            stickerSymbol: "mappin.circle.fill",
+            stickerSymbol: placeCategory?.icon ?? "mappin.circle.fill",
             stickerEmoji: "📍",
             category: .culture,
+            categoryIcon: placeCategory?.icon,
             latitude: lat,
             longitude: lng,
             radiusMeters: 50,
-            coverUrl: coverUrl
+            coverUrl: coverUrl,
+            googleMapsUrl: googleMapsUrl
         )
     }
 }
@@ -430,6 +443,31 @@ struct APIPlaceCoverPhoto: Codable, Hashable {
     let authorAvatarUrl: String?
 }
 
+/// Autor de una foto de Google (el crédito es obligatorio al mostrarla).
+struct APIGooglePhotoAuthor: Decodable, Hashable {
+    let name: String
+    let uri: String?
+}
+
+/// Una foto de Google de un lugar. `imagePath` es una ruta de BuddyApp (no de
+/// Google) con un token de pocos minutos: la imagen la baja el servidor.
+struct APIGooglePhoto: Decodable, Hashable, Identifiable {
+    var id: String { imagePath }
+    let imagePath: String
+    let width: Int?
+    let height: Int?
+    let authors: [APIGooglePhotoAuthor]
+}
+
+/// GET /places/google/spot-photos/{spotId}. Nada de esto se guarda en el
+/// dispositivo: ni el modelo ni las imágenes (solo memoria, mientras se ve).
+struct APIGooglePlacePhotos: Decodable {
+    let photos: [APIGooglePhoto]
+    let attribution: String?
+    /// Ficha del lugar en Google Maps (Stage 1): la "foto de origen".
+    let googleMapsUrl: String?
+}
+
 struct APIPlaceCard: Codable, Identifiable, Hashable {
     static func == (lhs: APIPlaceCard, rhs: APIPlaceCard) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -469,6 +507,11 @@ struct APIPlaceCard: Codable, Identifiable, Hashable {
     /// la card a mano.
     var status: String? = nil
     var isPendingApproval: Bool { status == "pending" }
+
+    /// true si el lugar tiene vínculo con Google Maps Y el servidor tiene las fotos
+    /// de Google encendidas. Solo habilita un botón: no cambia ni el orden ni las
+    /// fotos de la comunidad. nil/false en cache viejo y con la función apagada.
+    var googlePhotosAvailable: Bool? = nil
 
     var photoLabel: String { "\(photoCount) foto\(photoCount == 1 ? "" : "s")" }
 

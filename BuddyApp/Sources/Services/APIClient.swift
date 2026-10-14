@@ -428,6 +428,43 @@ final class APIClient {
         return res
     }
 
+    // MARK: – Fotos de Google (bajo demanda; nunca al cargar el Home)
+
+    /// Fotos de Google de un lugar. Lanza si el servidor las tiene apagadas o
+    /// falla: quien llama muestra "sin fotos" y el Home sigue como siempre.
+    func fetchGooglePlacePhotos(spotId: String) async throws -> APIGooglePlacePhotos {
+        let encoded = spotId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? spotId
+        let res: APIGooglePlacePhotos = try await request(path: "/places/google/spot-photos/\(encoded)")
+        dlog("🖼️ [APIClient] googlePhotos → \(res.photos.count)")
+        return res
+    }
+
+    /// Una imagen de Google, SOLO en memoria: sesión efímera sin URLCache y sin
+    /// pasar por ImageCache (que escribe a disco). Los términos de Google no
+    /// permiten guardar su contenido; la imagen vive mientras se ve en pantalla.
+    private static let googleImageSession: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.urlCache = nil
+        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        cfg.timeoutIntervalForRequest = 12
+        cfg.timeoutIntervalForResource = 20
+        return URLSession(configuration: cfg)
+    }()
+
+    func fetchGooglePhotoData(imagePath: String) async throws -> Data {
+        // Solo la ruta que da el backend: la sesión no viaja a ningún otro sitio.
+        // baseURL termina en "/v1" y la ruta del backend ya empieza por "/v1".
+        guard GooglePhotoSupport.isValidImagePath(imagePath), baseURL.hasSuffix("/v1"),
+              let url = URL(string: String(baseURL.dropLast(3)) + imagePath)
+        else { throw APIError.invalidURL }
+        await TravelerService.shared.refreshTokenIfExpiring()
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
+        req.setValue("Bearer \(TravelerService.shared.token ?? anonKey)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await APIClient.googleImageSession.data(for: req)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else { throw APIError.unknown }
+        return data
+    }
+
     func createSpot(destinationId: String, name: String, lat: Double, lng: Double, placeType: String? = nil) async throws -> APIPlaceGuideSpot {
         print("➕ [APIClient] createSpot dest=\(destinationId.prefix(8)) name=\"\(name)\"")
         var body: [String: Any] = ["destinationId": destinationId, "name": name, "lat": lat, "lng": lng]

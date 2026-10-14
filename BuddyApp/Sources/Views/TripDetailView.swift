@@ -420,6 +420,11 @@ struct TripDetailView: View {
             ),
             titleVisibility: .visible
         ) {
+            // La ficha del lugar (no una ruta): solo si el spot está vinculado a
+            // un Google Place ID. Sin vínculo la opción no aparece.
+            if GoogleMapsLink.openableURL(navigationTarget?.googleMapsUrl) != nil {
+                Button("Ver ficha en Google Maps") { openGoogleMapsListing() }
+            }
             Button("Google Maps") { openInGoogleMaps() }
             Button("Waze") { openInWaze() }
             Button("Apple Maps") { openInAppleMaps() }
@@ -439,6 +444,21 @@ struct TripDetailView: View {
         dlog("🧭 [ComoLlegar] googleMaps URL: \(url.absoluteString)")
         UIApplication.shared.open(url) { ok in
             print(ok ? "🧭 [ComoLlegar] googleMaps ✅ abierto" : "🧭 [ComoLlegar] googleMaps ❌ open falló")
+        }
+    }
+
+    private func openGoogleMapsListing() {
+        guard let p = navigationTarget else {
+            dlog("🧭 [ComoLlegar] fichaGoogle — navigationTarget=nil, no se abre nada")
+            return
+        }
+        guard let url = GoogleMapsLink.openableURL(p.googleMapsUrl) else {
+            dlog("🧭 [ComoLlegar] fichaGoogle — \(p.name) sin ficha vinculada (o URL no válida), no se abre nada")
+            return
+        }
+        dlog("🧭 [ComoLlegar] fichaGoogle → place=\(p.name) URL: \(url.absoluteString)")
+        UIApplication.shared.open(url) { ok in
+            print(ok ? "🧭 [ComoLlegar] fichaGoogle ✅ abierto" : "🧭 [ComoLlegar] fichaGoogle ❌ open falló")
         }
     }
 

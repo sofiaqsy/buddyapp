@@ -820,6 +820,9 @@ struct CategoryPickerView: View {
     /// interrumpe.
     @State private var feedTargetOffset: CGFloat = 0
     @State private var feedSecuencia: [ExplorePhoto] = []
+    /// Lugar cuyas fotos de Google se están viendo. Vive aquí y no en la tarjeta:
+    /// las tarjetas se recrean al paginar y la hoja se cerraría sola.
+    @State private var googleFotosLugar: APIPlaceCard?
     /// Cuánto hay que correr la página para leer la secuencia. Lo mueve solo
     /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
     /// cuando el orden cambia debajo.
@@ -1809,7 +1812,11 @@ struct CategoryPickerView: View {
                         ForEach(feedPaginas, id: \.self) { pagina in
                             if let photo = feedFoto(en: pagina) {
                                 let esActiva = pagina == feedPosicion
-                                ExploreCarouselCard(photo: photo, isNearest: photo.place.id == spotsStore.nearestId)
+                                ExploreCarouselCard(
+                                    photo: photo,
+                                    isNearest: photo.place.id == spotsStore.nearestId,
+                                    onGoogleFotos: esActiva ? { googleFotosLugar = photo.place } : nil
+                                )
                                     // Identidad por FOTO: sin esto el estado
                                     // interno de la tarjeta (distancia, "Estás
                                     // aquí", el pulso) se heredaba al cambiar
@@ -1882,6 +1889,10 @@ struct CategoryPickerView: View {
             .clipped()
             .layoutPriority(0)
             .environment(\.exploreCardPhotoHeightOverride, exploreCardPhoto)
+            // Fotos de Google Maps de la tarjeta (bajo demanda, ver GooglePlacePhotosSheet).
+            .sheet(item: $googleFotosLugar) { lugar in
+                GooglePlacePhotosSheet(place: lugar)
+            }
             // Quién está al frente, para el resto de la pantalla (el CTA lee el
             // lugar centrado). initial: true lo deja resuelto desde el primer
             // layout, sin una ventana en la que nadie es el centro.
@@ -1944,6 +1955,184 @@ private struct ExplorePhoto: Identifiable {
     /// Quién aportó ESTA foto — no el autor de la tarjeta del lugar.
     let authorName: String?
     let authorAvatarUrl: String?
+}
+
+
+// MARK: – Fotos de Google Maps (Home)
+//
+// Solo ENRIQUECEN una tarjeta que ya existe. No crean tarjetas, no tocan el
+// orden (FeedRanking) ni las fotos de la comunidad, y no se piden hasta que el
+// usuario toca el botón: el Home se pinta igual con la función apagada, sin
+// red o con Google caído.
+//
+// Contenido de Google: SOLO en memoria. Ni el modelo ni las imágenes se guardan
+// en disco ni pasan por ImageCache (los términos de Google no permiten
+// guardarlo). Atribución: autor de cada foto + "Google Maps" en el mismo
+// contenedor, y acceso a la ficha de origen en Google Maps.
+
+private let googleTextoGris = Color(red: 0x5E / 255, green: 0x5E / 255, blue: 0x5E / 255)   // #5E5E5E sobre blanco: 6,2:1
+
+private struct GoogleMapsPhotosChip: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: { Haptic.light(); action() }) {
+            // "Google Maps" es una marca: sin traducir, sin cambiar mayúsculas ni partirla.
+            (Text("Fotos de ") + Text(verbatim: "Google Maps"))
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(.ultraThinMaterial))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Ver fotos de Google Maps")
+    }
+}
+
+/// Una imagen de Google en memoria (ver APIClient.fetchGooglePhotoData).
+private struct GoogleMemoryImage: View {
+    let imagePath: String
+    @State private var image: UIImage?
+    @State private var fallo = false
+
+    var body: some View {
+        ZStack {
+            Color(white: 0.94)
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else if fallo {
+                Text("No se pudo cargar la foto")
+                    .font(.system(size: 13)).foregroundStyle(googleTextoGris)
+            } else {
+                ProgressView()
+            }
+        }
+        .task(id: imagePath) {
+            image = nil; fallo = false
+            do {
+                let data = try await APIClient.shared.fetchGooglePhotoData(imagePath: imagePath)
+                if let ui = UIImage(data: data) { image = ui } else { fallo = true }
+            } catch { fallo = true }
+        }
+    }
+}
+
+private struct GooglePlacePhotosSheet: View {
+    let place: APIPlaceCard
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    private enum Estado { case cargando, listo(APIGooglePlacePhotos), vacio, fallo }
+    @State private var estado: Estado = .cargando
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(place.name)
+                    .font(.system(size: 17, weight: .semibold))
+                    .lineLimit(1)
+                Spacer()
+                Button("Cerrar") { dismiss() }
+            }
+            .padding(16)
+
+            switch estado {
+            case .cargando:
+                Spacer(); ProgressView(); Spacer()
+            case .vacio:
+                mensaje("Este lugar no tiene fotos en Google Maps.")
+            case .fallo:
+                mensaje("No pudimos cargar las fotos de Google Maps ahora. Las fotos de la comunidad siguen en la tarjeta.")
+            case .listo(let datos):
+                contenido(datos)
+            }
+        }
+        .foregroundStyle(Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255))
+        .background(Color.white.ignoresSafeArea())
+        // Fondo claro fijo: el gris de la atribución (#5E5E5E) solo cumple el
+        // contraste de Google (4,5:1) sobre blanco.
+        .preferredColorScheme(.light)
+        .presentationDetents([.large])
+        .task { await cargar() }
+    }
+
+    private func mensaje(_ texto: String) -> some View {
+        VStack { Spacer()
+            Text(texto).font(.system(size: 14)).foregroundStyle(googleTextoGris)
+                .multilineTextAlignment(.center).padding(.horizontal, 32)
+            Spacer() }
+    }
+
+    private func contenido(_ datos: APIGooglePlacePhotos) -> some View {
+        VStack(spacing: 12) {
+            TabView {
+                ForEach(datos.photos) { foto in
+                    VStack(spacing: 8) {
+                        GoogleMemoryImage(imagePath: foto.imagePath)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 380)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        // Crédito pegado a SU foto + marca, en el mismo contenedor.
+                        HStack(alignment: .firstTextBaseline) {
+                            credito(foto.authors)
+                            Spacer(minLength: 8)
+                            Text(verbatim: "Google Maps")
+                                .font(.system(size: 13, weight: .regular))
+                                .foregroundStyle(googleTextoGris)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .accessibilityLabel("Google Maps")
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: datos.photos.count > 1 ? .automatic : .never))
+
+            // Foto de origen: la ficha del lugar en Google Maps.
+            if let url = GoogleMapsLink.openableURL(datos.googleMapsUrl) {
+                Button { openURL(url) } label: {
+                    (Text("Ver en ") + Text(verbatim: "Google Maps"))
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func credito(_ autores: [APIGooglePhotoAuthor]) -> some View {
+        if let linea = GooglePhotoSupport.creditLine(autores.map(\.name)) {
+            if let url = GooglePhotoSupport.openableAuthorURL(autores.first?.uri) {
+                Button { openURL(url) } label: {
+                    Text(linea).font(.system(size: 13)).underline().lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(googleTextoGris)
+            } else {
+                Text(linea).font(.system(size: 13)).foregroundStyle(googleTextoGris).lineLimit(1)
+            }
+        }
+    }
+
+    private func cargar() async {
+        do {
+            let datos = try await APIClient.shared.fetchGooglePlacePhotos(spotId: place.id)
+            // Solo rutas de descarga del backend: lo demás se descarta.
+            let validas = datos.photos.filter { GooglePhotoSupport.isValidImagePath($0.imagePath) }
+            estado = validas.isEmpty
+                ? .vacio
+                : .listo(APIGooglePlacePhotos(photos: validas, attribution: datos.attribution, googleMapsUrl: datos.googleMapsUrl))
+        } catch {
+            estado = .fallo
+        }
+    }
 }
 
 // MARK: – Conversación pendiente (antes de que exista un match)
@@ -2437,6 +2626,8 @@ private struct ExploreCarouselCard: View {
     /// Cafetería Rosal están a unos 40 m entre sí: con el radio aplicado a
     /// cada card por separado, las dos lo decían a la vez.
     var isNearest: Bool = false
+    /// Abre las fotos de Google Maps del lugar. nil = sin botón (tarjeta no activa).
+    var onGoogleFotos: (() -> Void)? = nil
     /// Observado para que la distancia cambie mientras caminas. Con la
     /// referencia estática la card solo se repintaba cuando el carrusel se
     /// reordenaba, así que los números se quedaban quietos.
@@ -2647,6 +2838,15 @@ private struct ExploreCarouselCard: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
             .allowsHitTesting(false)
+
+            // Solo si el lugar está vinculado a Google Maps y el servidor tiene la
+            // función encendida. Es un botón aparte: no toca el orden del feed ni
+            // las fotos de la comunidad, y no pide nada a Google hasta que se toca.
+            if place.googlePhotosAvailable == true, let abrir = onGoogleFotos {
+                GoogleMapsPhotosChip(action: abrir)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(10)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Sin esquinas redondeadas ni borde: la foto llega a los bordes y es
@@ -2661,6 +2861,9 @@ private struct ExploreCarouselCard: View {
         // propia navegación del sistema, así que la instrucción confundiría.
         // Pasar de recomendación se ofrece como ACCIÓN del rotor.
         .accessibilityHint("Toca para ver el lugar en el mapa.")
+        .accessibilityAction(named: "Fotos de Google Maps") {
+            if place.googlePhotosAvailable == true { onGoogleFotos?() }
+        }
     }
 }
 

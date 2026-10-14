@@ -102,7 +102,7 @@ mathematically impossible to satisfy) is written at the top of
 deterministic cases and runs without Xcode or a simulator:
 
 ```
-swiftc -O BuddyApp/Sources/Services/FeedRanking.swift Tools/main.swift -o /tmp/feedtests && /tmp/feedtests
+swiftc -O BuddyApp/Sources/Services/FeedRanking.swift BuddyApp/Sources/Models/Place.swift Tools/main.swift -o /tmp/feedtests && /tmp/feedtests
 ```
 
 Run it before changing anything in the feed. If a change needs an invariant to
