@@ -1319,16 +1319,6 @@ struct CategoryPickerView: View {
                 .clipped()
                 .layoutPriority(0)
 
-            consultCTA
-                .padding(.horizontal, Spacing.edge)
-                // Mismos 4/4 que el carrusel real (ver ahí el porqué): el
-                // esqueleto tiene que medir EXACTAMENTE lo mismo, si no el
-                // bloque entero salta al llegar las fotos.
-                .padding(.top, 4)
-                .padding(.bottom, 4)
-                .disabled(true)
-                .layoutPriority(1)
-                .redacted(reason: .placeholder)
         }
         // Solo el botón se redacta: el bloque de la foto ya es un esqueleto
         // dibujado a mano y redactarlo apagaba sus piezas.
@@ -1419,6 +1409,44 @@ struct CategoryPickerView: View {
             )
             return ExplorePhoto(id: "\(item.id)-0", url: foto.imagePath, place: card,
                                 authorName: nil, authorAvatarUrl: nil, google: item)
+        }
+    }
+
+    @Environment(\.openURL) private var openURL
+
+    /// La tarjeta que está a la vista (a la que se refieren las acciones del riel).
+    private var tarjetaActiva: ExplorePhoto? {
+        explorePhotos.first { $0.id == carouselCenterId } ?? explorePhotos.first
+    }
+
+    /// Lo que antes decía el botón "Consultar": con buddy asignado abre SU chat;
+    /// si no, empieza la consulta. Mismas dos acciones que consultCTA.
+    private var tituloBuddyRiel: String {
+        if activeBuddyName != nil { return activeBuddyHasUnread ? "Chat (nuevo)" : "Chat" }
+        if searchingCategoryKey != nil { return "Buscando" }
+        return "Pedir buddy"
+    }
+
+    /// Acciones de la tarjeta activa. Solo texto, sin iconos.
+    @ViewBuilder private var accionesRiel: some View {
+        if let t = tarjetaActiva {
+            VStack(alignment: .trailing, spacing: 8) {
+                // Perfil: el MISMO perfil del lugar (la guía con el mapa). Una tarjeta de
+                // Google no tiene destino: la hoja cae a un mapa con el punto.
+                if let abrir = onOpenPlace {
+                    AccionRielBoton(titulo: "Perfil") { Haptic.light(); abrir(t.place) }
+                }
+                AccionRielBoton(titulo: tituloBuddyRiel, destacado: true) {
+                    Haptic.medium()
+                    if activeBuddyName != nil { onOpenBuddyChat?() } else { onStartConversation?() }
+                }
+                // Único camino a Google Maps: una acción explícita, solo en lo de Google.
+                if let g = t.google, let url = GoogleMapsLink.openableURL(g.googleMapsUrl) {
+                    AccionRielBoton(titulo: "Google Maps") { Haptic.light(); openURL(url) }
+                }
+            }
+            .padding(.trailing, 12)
+            .padding(.bottom, 16)
         }
     }
 
@@ -1944,17 +1972,8 @@ struct CategoryPickerView: View {
                                     // gesto vs. el offset, después del
                                     // ZStack.
                                     .offset(y: CGFloat(pagina - feedPosicion) * paso)
-                                    // Solo la activa abre el lugar: las vecinas
-                                    // están fuera del visor o a medio entrar.
-                                    .onTapGesture {
-                                        guard esActiva else { return }
-                                        Haptic.medium()
-                                        // Un descubrimiento de Google NO es un Spot ni tiene
-                                        // destino: no pasa por PlaceGuideMapSheet sino por su
-                                        // propia hoja de detalle.
-                                        if let g = photo.google { googleHoja = .descubrimiento(g) }
-                                        else { onOpenPlace?(photo.place) }
-                                    }
+                                    // Tocar la foto NO abre nada: ni el mapa ni Google Maps. Las
+                                    // acciones están en el riel de la derecha.
                                     .allowsHitTesting(esActiva)
                                     .accessibilityHidden(!esActiva)
                             }
@@ -1996,11 +2015,14 @@ struct CategoryPickerView: View {
             .clipped()
             .layoutPriority(0)
             .environment(\.exploreCardPhotoHeightOverride, exploreCardPhoto)
+            // Riel de acciones de la tarjeta ACTIVA. Va FUERA de la pila que se
+            // desplaza y por encima del gesto de paginar: un deslizamiento que
+            // empieza sobre un botón lo recibe el botón, no el feed.
+            .overlay(alignment: .bottomTrailing) { accionesRiel }
             // Fotos de Google Maps de la tarjeta (bajo demanda, ver GooglePlacePhotosSheet).
             .sheet(item: $googleHoja) { hoja in
                 switch hoja {
                 case .fotos(let lugar): GooglePlacePhotosSheet(place: lugar)
-                case .descubrimiento(let item): GoogleDiscoverySheet(item: item)
                 }
             }
             // Descubrimiento con Google: DESPUÉS de pintar y sin bloquear nada.
@@ -2038,25 +2060,8 @@ struct CategoryPickerView: View {
             // la consulta, que es cuando el usuario quiere saber si hay alguien
             // al otro lado (ver PendingConversationView).
 
-            // Sin acción todavía — se conecta cuando el flujo de "consultar
-            // sobre este lugar" quede definido. Dice la CIUDAD del contexto, no
-            // la de la card centrada: la consulta es sobre el destino completo.
-            // Atarlo a la foto del medio haría que el texto cambiara al
-            // deslizar, y eso le enseñaría al usuario que las fotos SÍ son un
-            // selector — justo lo contrario de lo que el carrusel comunica.
-            consultCTA
-            .padding(.horizontal, Spacing.edge)
-            // 16→4: el aire de arriba y abajo del CTA era mas del que un
-            // boton necesita para respirar. Bajarlo a 4 (el minimo que
-            // sigue leyendose como separacion, no como pegado) le devuelve
-            // ~24pt a la foto de arriba sin tocar el boton mismo — su
-            // padding interno (10pt, en consultCTA) sigue igual.
-            .padding(.top, 4)
-            .padding(.bottom, showsExploreCarousel ? 4 : 0)
-            // El botón es la acción de la pantalla: reclama su alto antes que
-            // nada. Sin esto, una fila de fotos con alto intrínseco grande lo
-            // empujaba fuera de la pantalla (debajo de la tab bar).
-            .layoutPriority(1)
+            // Sin botón "Consultar": la acción vive ahora en el riel de la tarjeta
+            // activa (Perfil / Buddy / Google Maps), ver accionesRiel.
         }
     }
 }
@@ -2076,11 +2081,9 @@ private struct ExplorePhoto: Identifiable {
 /// Lo que puede abrir la hoja de Google del Inicio (una sola hoja con dos casos).
 private enum GoogleHoja: Identifiable {
     case fotos(APIPlaceCard)
-    case descubrimiento(APIDiscoverItem)
     var id: String {
         switch self {
         case .fotos(let l): return "fotos-\(l.id)"
-        case .descubrimiento(let d): return "desc-\(d.id)"
         }
     }
 }
@@ -2191,6 +2194,30 @@ private struct GoogleMemoryImage: View {
     }
 }
 
+/// Botón de texto del riel de acciones de la tarjeta.
+private struct AccionRielBoton: View {
+    let titulo: String
+    var destacado: Bool = false
+    let accion: () -> Void
+    var body: some View {
+        Button(action: accion) {
+            // verbatim: "Google Maps" es una marca (sin traducir ni cambiar mayúsculas).
+            Text(verbatim: titulo)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(destacado ? Color.white : Color.ink)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background {
+                    if destacado { Capsule().fill(Color.brand) }
+                    else { Capsule().fill(.ultraThinMaterial) }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 /// Logo OFICIAL de Google Maps (paquete "Google Maps attribution assets"), sin
 /// modificar: mismo archivo, misma proporción, a su tamaño nativo (@1x en puntos).
 ///   · sobreFoto   → versión con contorno oscuro (fondos con fotos)
@@ -2204,85 +2231,6 @@ private struct GoogleMapsLogo: View {
             .scaledToFit()
             .frame(width: variante == .sobreFoto ? 105 : 98, height: variante == .sobreFoto ? 22 : 18)
             .accessibilityLabel("Google Maps")
-    }
-}
-
-/// Detalle de un lugar descubierto con Google. NO es un Spot de BuddyApp (no hay
-/// guía ni destino): se dice claramente, se muestran las fotos con su autor y la
-/// marca de Google en el mismo contenedor, y se enlaza la ficha de origen.
-private struct GoogleDiscoverySheet: View {
-    let item: APIDiscoverItem
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
-
-    private var fotos: [APIGooglePhoto] { item.photos.filter { GooglePhotoSupport.isValidImagePath($0.imagePath) } }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(item.name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                Spacer()
-                Button("Cerrar") { dismiss() }
-            }
-            .padding(16)
-
-            if let cat = item.category, !cat.isEmpty {
-                Text(cat.capitalized)
-                    .font(.system(size: 13)).foregroundStyle(googleTextoGris)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.bottom, 8)
-            }
-
-            TabView {
-                ForEach(fotos) { foto in
-                    VStack(spacing: 6) {
-                        GoogleMemoryImage(imagePath: foto.imagePath)
-                            .frame(maxWidth: .infinity).frame(height: 360)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        HStack(alignment: .center) {
-                            credito(foto.authors)
-                            Spacer(minLength: 8)
-                            // Logo oficial; espacio libre: 10 pt a los lados y arriba, 5 abajo.
-                            GoogleMapsLogo(variante: .sobreBlanco)
-                                .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 5)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: fotos.count > 1 ? .automatic : .never))
-
-            Text("Sugerencia de Google Maps. No es una recomendación de la comunidad de BuddyApp.")
-                .font(.system(size: 12)).foregroundStyle(googleTextoGris)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24).padding(.bottom, 8)
-
-            if let url = GoogleMapsLink.openableURL(item.googleMapsUrl) {
-                Button { openURL(url) } label: {
-                    (Text("Ver en ") + Text(verbatim: "Google Maps"))
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal, 16).padding(.bottom, 12)
-            }
-        }
-        .foregroundStyle(Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255))
-        .background(Color.white.ignoresSafeArea())
-        .preferredColorScheme(.light)
-        .presentationDetents([.large])
-    }
-
-    @ViewBuilder
-    private func credito(_ autores: [APIGooglePhotoAuthor]) -> some View {
-        if let linea = GooglePhotoSupport.creditLine(autores.map(\.name)) {
-            if let url = GooglePhotoSupport.openableAuthorURL(autores.first?.uri) {
-                Button { openURL(url) } label: { Text(linea).font(.system(size: 13)).underline().lineLimit(1) }
-                    .buttonStyle(.plain).foregroundStyle(googleTextoGris)
-            } else {
-                Text(linea).font(.system(size: 13)).foregroundStyle(googleTextoGris).lineLimit(1)
-            }
-        }
     }
 }
 
@@ -3158,7 +3106,6 @@ private struct ExploreCarouselCard: View {
         // Sin "desliza hacia arriba": con VoiceOver activo ese gesto es de la
         // propia navegación del sistema, así que la instrucción confundiría.
         // Pasar de recomendación se ofrece como ACCIÓN del rotor.
-        .accessibilityHint(photo.esGoogle ? "Toca para ver los detalles del lugar sugerido." : "Toca para ver el lugar en el mapa.")
         .accessibilityAction(named: "Fotos de Google Maps") {
             if place.googlePhotosAvailable == true { onGoogleFotos?() }
         }
