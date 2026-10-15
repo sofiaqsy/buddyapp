@@ -428,6 +428,18 @@ final class APIClient {
         return res
     }
 
+    // MARK: – Descubrimiento con Google (después de pintar el Inicio)
+
+    /// Lugares de Google a ≤ 10 km. Lo pide el Inicio DESPUÉS de pintarse; si
+    /// falla (apagado, sin permiso, sin red, cuota), el Inicio sigue con la
+    /// comunidad. 404 = función apagada o usuario fuera de la lista de testers.
+    func fetchGoogleDiscover(lat: Double, lng: Double) async throws -> APIDiscoverResponse {
+        let path = "/feed/discover?lat=\(String(format: "%.5f", lat))&lng=\(String(format: "%.5f", lng))"
+        let res: APIDiscoverResponse = try await request(path: path)
+        dlog("🧭 [APIClient] discover → \(res.items.count)")
+        return res
+    }
+
     // MARK: – Fotos de Google (bajo demanda; nunca al cargar el Home)
 
     /// Fotos de Google de un lugar. Lanza si el servidor las tiene apagadas o

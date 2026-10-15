@@ -198,4 +198,127 @@ revisar("crédito de dos autores", GooglePhotoSupport.creditLine(["Ana", "Beto"]
 revisar("sin autores: sin línea de crédito", GooglePhotoSupport.creditLine([]) == nil)
 revisar("autores en blanco: sin línea de crédito", GooglePhotoSupport.creditLine(["  ", ""]) == nil)
 
+/// "L3" + "_" + foto → el lugar de una FotoFake (id "L31" = lugar L3, foto 1).
+func lugarDe(_ idFoto: String) -> String { String(idFoto.dropLast()) }
+
+// ── Mezcla comunidad + Google (FeedMix, Services/FeedRanking.swift) ──────────
+//
+// Verifica M1–M6 con casos fijos y un barrido exhaustivo de tamaños, y que las
+// invariantes I1–I5 de FeedRanking siguen valiendo para la comunidad.
+
+struct TarjetaFake { let id: String; let lugar: String; let placeId: String?; let esGoogle: Bool }
+
+func comunidadFake(_ n: Int) -> [TarjetaFake] { (0..<n).map { TarjetaFake(id: "C\($0)", lugar: "C\($0)", placeId: nil, esGoogle: false) } }
+func googleFake(_ n: Int) -> [TarjetaFake] { (0..<n).map { TarjetaFake(id: "G\($0)", lugar: "google:P\($0)", placeId: "P\($0)", esGoogle: true) } }
+func ids(_ xs: [TarjetaFake]) -> [String] { xs.map(\.id) }
+
+func revisarMezcla(_ caso: String, _ ok: Bool, _ detalle: @autoclosure () -> String = "") {
+    if !ok { fallos += 1 }
+    print("\(ok ? "OK  " : "FALLA") Mezcla — \(caso)\(ok ? "" : "  \(detalle())")")
+}
+
+revisarMezcla("M6 sin Google: el resultado es exactamente la comunidad", ids(FeedMix.mezclar(comunidad: comunidadFake(12), google: [])) == ids(comunidadFake(12)))
+revisarMezcla("sin comunidad: Google llena el feed", ids(FeedMix.mezclar(comunidad: [], google: googleFake(5))) == ["G0", "G1", "G2", "G3", "G4"])
+revisarMezcla("sin nada: vacío", FeedMix.mezclar(comunidad: [TarjetaFake](), google: []).isEmpty)
+revisarMezcla("12 de comunidad + 8 de Google: prefijo C0 C1 C2, luego G C C", ids(FeedMix.mezclar(comunidad: comunidadFake(12), google: googleFake(8))).prefix(9).elementsEqual(["C0", "C1", "C2", "G0", "C3", "C4", "G1", "C5", "C6"]))
+revisarMezcla("12 + 8: el tope de un tercio deja 6 de Google (18 en total)", { () -> Bool in
+    let r = FeedMix.mezclar(comunidad: comunidadFake(12), google: googleFake(8)); return r.count == 18 && r.filter(\.esGoogle).count == 6 }())
+revisarMezcla("12 + 8: ejemplo completo", ids(FeedMix.mezclar(comunidad: comunidadFake(12), google: googleFake(8))) == ["C0","C1","C2","G0","C3","C4","G1","C5","C6","G2","C7","C8","G3","C9","C10","G4","C11","G5"])
+revisarMezcla("3 de comunidad + 5 de Google: caben 1, al final", ids(FeedMix.mezclar(comunidad: comunidadFake(3), google: googleFake(5))) == ["C0", "C1", "C2", "G0"])
+revisarMezcla("2 de comunidad: caben 1 de Google, tras las 2", ids(FeedMix.mezclar(comunidad: comunidadFake(2), google: googleFake(4))) == ["C0", "C1", "G0"])
+revisarMezcla("1 de comunidad: Google no cabe (1/3 de 2 = 0)", ids(FeedMix.mezclar(comunidad: comunidadFake(1), google: googleFake(4))) == ["C0"])
+revisarMezcla("poca Google (2) con mucha comunidad (12): se usan las 2", ids(FeedMix.mezclar(comunidad: comunidadFake(12), google: googleFake(2))).filter { $0.hasPrefix("G") } == ["G0", "G1"])
+revisarMezcla("M5 determinista: dos corridas iguales", ids(FeedMix.mezclar(comunidad: comunidadFake(9), google: googleFake(7))) == ids(FeedMix.mezclar(comunidad: comunidadFake(9), google: googleFake(7))))
+revisarMezcla("no toca la entrada (la comunidad se pasa por valor)", { () -> Bool in
+    let c = comunidadFake(6); let g = googleFake(3); _ = FeedMix.mezclar(comunidad: c, google: g); return ids(c) == ids(comunidadFake(6)) && ids(g) == ids(googleFake(3)) }())
+
+// Barrido exhaustivo: comunidad 0…30 × Google 0…30.
+var barridoOk = true
+var barridoDetalle = ""
+for n in 0...30 {
+    for g in 0...30 {
+        let c = comunidadFake(n), go = googleFake(g)
+        let r = FeedMix.mezclar(comunidad: c, google: go)
+        let usadasG = r.filter(\.esGoogle)
+        let soloC = r.filter { !$0.esGoogle }
+        var motivo = ""
+        if ids(soloC) != ids(c) { motivo = "M2 comunidad alterada" }                                   // subsecuencia exacta y completa
+        else if n > 0 && !(ids(r.prefix(min(3, n)).map { $0 }) == ids(Array(c.prefix(min(3, n))))) { motivo = "M1 prefijo" }
+        else if n > 0 && usadasG.count * 3 > r.count { motivo = "M4 más de un tercio" }
+        else if n == 0 && ids(r) != ids(go) { motivo = "sin comunidad" }
+        else if ids(usadasG) != ids(Array(go.prefix(usadasG.count))) { motivo = "orden de Google alterado" }
+        else if n > 0 && usadasG.count != min(g, FeedMix.maximoDeGoogle(comunidad: n)) { motivo = "uso de Google distinto del esperado" }
+        else if Set(ids(r)).count != r.count { motivo = "tarjeta repetida" }
+        if !motivo.isEmpty && barridoOk { barridoOk = false; barridoDetalle = "n=\(n) g=\(g): \(motivo)" }
+    }
+}
+revisarMezcla("barrido 0…30 × 0…30: M1, M2, M4, orden de Google, sin repetidas", barridoOk, barridoDetalle)
+
+// FeedRanking + FeedMix: I1–I5 para la comunidad se conservan con Google en medio.
+func lugaresCercanos(_ n: Int, fotosPorLugar: Int) -> [[FotoFake]] { (0..<n).map { lugar("L\($0)", fotos: fotosPorLugar) } }
+var invariantesOk = true
+var invariantesDetalle = ""
+for lugares in 1...8 {
+    for fotos in 1...4 {
+        let base = secuencia(lugaresCercanos(lugares, fotosPorLugar: fotos))
+        let conLugar = base.map { TarjetaFake(id: $0, lugar: lugarDe($0), placeId: nil, esGoogle: false) }
+        let mezcla = FeedMix.mezclar(comunidad: conLugar, google: googleFake(8))
+        let soloC = mezcla.filter { !$0.esGoogle }
+        if ids(soloC) != ids(conLugar) { invariantesOk = false; invariantesDetalle = "lugares=\(lugares) fotos=\(fotos): orden de comunidad alterado"; break }
+        // I1: las primeras K son la primera foto de los K lugares más cercanos, en orden.
+        let k = min(3, lugares)
+        if ids(Array(mezcla.prefix(k))) != (0..<k).map({ "L\($0)1" }) { invariantesOk = false; invariantesDetalle = "lugares=\(lugares) fotos=\(fotos): I1 prefijo"; break }
+        // I5 entre tarjetas vecinas de la comunidad: un Google en medio no puede crear vecinos iguales.
+        for i in 1..<mezcla.count where mezcla[i].lugar == mezcla[i - 1].lugar && lugares > 1 && !base.isEmpty {
+            // solo es válido si el original ya los tenía juntos (excepción documentada de FeedRanking)
+            let a = mezcla[i - 1].id, b = mezcla[i].id
+            if let ia = base.firstIndex(of: a), let ib = base.firstIndex(of: b), ib != ia + 1 {
+                invariantesOk = false; invariantesDetalle = "lugares=\(lugares) fotos=\(fotos): vecinos del mismo lugar nuevos (\(a),\(b))"
+            }
+        }
+    }
+}
+revisarMezcla("FeedRanking + FeedMix: la comunidad conserva orden, prefijo I1 y no aparecen vecinos del mismo lugar", invariantesOk, invariantesDetalle)
+
+// Deduplicación por Place ID EXACTO.
+let googleConIds = [
+    TarjetaFake(id: "Ga", lugar: "google:PID1", placeId: "PID1", esGoogle: true),
+    TarjetaFake(id: "Gb", lugar: "google:PID2", placeId: "PID2", esGoogle: true),
+    TarjetaFake(id: "Gc", lugar: "google:PID3", placeId: "PID3", esGoogle: true),
+    TarjetaFake(id: "Gd", lugar: "google:PID1", placeId: "PID1", esGoogle: true),   // repetida de Google
+    TarjetaFake(id: "Ge", lugar: "google:", placeId: "", esGoogle: true),             // sin Place ID
+]
+let sinRepetidos = FeedMix.descartandoRepetidos(google: googleConIds, placeId: { $0.placeId ?? "" }, enComunidad: ["PID2"])
+revisarMezcla("dedup: el Place ID que ya está en la comunidad se quita (PID2)", !ids(sinRepetidos).contains("Gb"))
+revisarMezcla("dedup: los demás se quedan, en su orden, sin repetidas de Google ni ids vacíos", ids(sinRepetidos) == ["Ga", "Gc"])
+let mismoNombre = [TarjetaFake(id: "G1", lugar: "google:PIDA", placeId: "PIDA", esGoogle: true)]
+revisarMezcla("dedup: mismo nombre, distinto Place ID → NO se descarta (nunca por nombre)", ids(FeedMix.descartandoRepetidos(google: mismoNombre, placeId: { $0.placeId ?? "" }, enComunidad: ["PIDB"])) == ["G1"])
+revisarMezcla("dedup: sin Place ID en la comunidad no descarta nada", ids(FeedMix.descartandoRepetidos(google: googleConIds, placeId: { $0.placeId ?? "" }, enComunidad: [])) == ["Ga", "Gb", "Gc"])
+
+// ── Descubrimiento con Google (GoogleDiscoverSupport, Models/Place.swift) ─────
+
+let t0 = Date(timeIntervalSince1970: 1_000_000)
+revisar("primera vez: hay que buscar", GoogleDiscoverSupport.debeBuscar(ultima: nil, lat: -12.0464, lng: -77.0428, ahora: t0))
+let ult = (lat: -12.0464, lng: -77.0428, fecha: t0)
+revisar("misma zona y reciente (30 s): NO se vuelve a pedir", GoogleDiscoverSupport.debeBuscar(ultima: ult, lat: -12.0465, lng: -77.0429, ahora: t0.addingTimeInterval(30)), esperado: false)
+revisar("misma zona a los 9 min: todavía no", GoogleDiscoverSupport.debeBuscar(ultima: ult, lat: -12.0464, lng: -77.0428, ahora: t0.addingTimeInterval(540)), esperado: false)
+revisar("misma zona a los 10 min: sí", GoogleDiscoverSupport.debeBuscar(ultima: ult, lat: -12.0464, lng: -77.0428, ahora: t0.addingTimeInterval(601)))
+revisar("se movió ~2 km (reciente): sí", GoogleDiscoverSupport.debeBuscar(ultima: ult, lat: -12.0644, lng: -77.0428, ahora: t0.addingTimeInterval(20)))
+revisar("se movió ~500 m (reciente): no", GoogleDiscoverSupport.debeBuscar(ultima: ult, lat: -12.0509, lng: -77.0428, ahora: t0.addingTimeInterval(20)), esperado: false)
+
+let rutaOk = "/v1/places/google/photo-media?token=abc.def_ghi-1"
+revisar("tarjeta válida", GoogleDiscoverSupport.esValida(id: "google:ChIJabc", name: "Café", primeraRuta: rutaOk, distanciaMetros: 800))
+revisar("sin prefijo google: se descarta", GoogleDiscoverSupport.esValida(id: "ChIJabc", name: "Café", primeraRuta: rutaOk, distanciaMetros: 800), esperado: false)
+revisar("id vacío tras el prefijo: se descarta", GoogleDiscoverSupport.esValida(id: "google:", name: "Café", primeraRuta: rutaOk, distanciaMetros: 800), esperado: false)
+revisar("nombre en blanco: se descarta", GoogleDiscoverSupport.esValida(id: "google:ChIJabc", name: "  ", primeraRuta: rutaOk, distanciaMetros: 800), esperado: false)
+revisar("sin foto: se descarta", GoogleDiscoverSupport.esValida(id: "google:ChIJabc", name: "Café", primeraRuta: nil, distanciaMetros: 800), esperado: false)
+revisar("foto con URL ajena (no del backend): se descarta", GoogleDiscoverSupport.esValida(id: "google:ChIJabc", name: "Café", primeraRuta: "https://lh3.googleusercontent.com/x", distanciaMetros: 800), esperado: false)
+revisar("a 10.000 m: entra (límite inclusivo)", GoogleDiscoverSupport.esValida(id: "google:ChIJabc", name: "Café", primeraRuta: rutaOk, distanciaMetros: 10_000))
+revisar("a 10.001 m: se descarta", GoogleDiscoverSupport.esValida(id: "google:ChIJabc", name: "Café", primeraRuta: rutaOk, distanciaMetros: 10_001), esperado: false)
+revisar("sin distancia: entra (el servidor ya filtró)", GoogleDiscoverSupport.esValida(id: "google:ChIJabc", name: "Café", primeraRuta: rutaOk, distanciaMetros: nil))
+revisar("segunda línea: categoría y crédito", GoogleDiscoverSupport.segundaLinea(categoria: "Cafetería", autores: ["Ana"]) == "Cafetería · Foto: Ana")
+revisar("segunda línea: solo categoría", GoogleDiscoverSupport.segundaLinea(categoria: "Cafetería", autores: []) == "Cafetería")
+revisar("segunda línea: solo crédito", GoogleDiscoverSupport.segundaLinea(categoria: nil, autores: ["Ana", "Beto"]) == "Foto: Ana y Beto")
+revisar("segunda línea: nada", GoogleDiscoverSupport.segundaLinea(categoria: " ", autores: []) == "")
+
 print(fallos == 0 ? "\nTODO OK" : "\n\(fallos) FALLA(S)")

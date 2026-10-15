@@ -220,3 +220,95 @@ final class FeedMemoria {
         if fotos.count > Self.capacidad { fotos.removeFirst(fotos.count - Self.capacidad) }
     }
 }
+
+// MARK: – FeedMix
+//
+// Mezcla las tarjetas de Google (descubrimiento) con la secuencia de la
+// comunidad. Es un paso POSTERIOR a FeedRanking: la secuencia de la comunidad
+// llega ya ordenada y no se toca ni se reordena. Las tarjetas de Google solo se
+// INTERCALAN en huecos fijos; por eso las invariantes I1–I5 de FeedRanking se
+// siguen cumpliendo para la comunidad (las verifica Tools/main.swift).
+//
+// ESPECIFICACIÓN
+//
+//   Dados
+//     C   la secuencia de la comunidad (salida de FeedRanking.secuencia), |C| = n
+//     G   las tarjetas de Google YA deduplicadas (ver descartandoRepetidos), en
+//         el orden de Google (popularidad); cada una es un lugar distinto
+//     K   min(3, n)
+//
+//   M1 — PREFIJO PROTEGIDO
+//        Las primeras K tarjetas son las K primeras de C: Google nunca adelanta a
+//        los tres lugares más cercanos de la comunidad.
+//   M2 — LA COMUNIDAD CONSERVA SU ORDEN Y SU COBERTURA
+//        C aparece completa, cada tarjeta una vez, en su orden (es una
+//        subsecuencia del resultado). Ninguna se descarta ni se reordena.
+//   M3 — PATRÓN 2:1
+//        Tras el prefijo se intercala una de Google antes de cada dos de la
+//        comunidad: [K de C] G C C G C C G C C … Cuando se acaba la comunidad,
+//        las de Google que quepan en el tope van al final.
+//   M4 — TOPE DE UN TERCIO
+//        Google ≤ un tercio del total (|Google| ≤ ⌊n / 2⌋). Con n = 0 no hay
+//        comunidad a la que ceder: Google llena el feed (una ciudad sin
+//        recomendaciones sigue teniendo qué mostrar).
+//   M5 — DETERMINISTA
+//        Misma entrada, misma salida; sin aleatoriedad ni reloj.
+//   M6 — SIN GOOGLE, NADA CAMBIA
+//        Con G vacío el resultado es exactamente C.
+//
+//   COMPROMISO. El tope y el prefijo protegen la identidad del Inicio ("lo que
+//   recomiendan los buddies a tu alrededor"), a costa de que Google se vea poco
+//   donde la comunidad ya tiene mucho. Donde la comunidad es escasa, Google rellena.
+enum FeedMix {
+
+    /// Cuántas tarjetas de la comunidad van primero, intactas.
+    static let prefijoProtegido = 3
+
+    /// Cuántas de Google caben junto a `comunidad` tarjetas de la comunidad: un
+    /// tercio del total, es decir ⌊n/2⌋. Sin comunidad no hay tope.
+    static func maximoDeGoogle(comunidad n: Int) -> Int {
+        n == 0 ? Int.max : n / 2
+    }
+
+    /// Quita de Google lo que la comunidad YA representa, comparando SOLO por
+    /// Place ID exacto. Nunca por nombre: dos sitios con el mismo nombre y distinto
+    /// Place ID son lugares distintos y se quedan los dos.
+    static func descartandoRepetidos<G>(
+        google: [G],
+        placeId: (G) -> String,
+        enComunidad: Set<String>
+    ) -> [G] {
+        var vistos = Set<String>()
+        return google.filter { g in
+            let id = placeId(g)
+            guard !id.isEmpty, !enComunidad.contains(id), vistos.insert(id).inserted else { return false }
+            return true
+        }
+    }
+
+    static func mezclar<Foto>(comunidad: [Foto], google: [Foto]) -> [Foto] {
+        if google.isEmpty { return comunidad }
+        if comunidad.isEmpty { return google }
+
+        let n = comunidad.count
+        let permitidas = Array(google.prefix(maximoDeGoogle(comunidad: n)))
+        if permitidas.isEmpty { return comunidad }
+
+        let k = min(prefijoProtegido, n)
+        var resultado = Array(comunidad.prefix(k))
+        var siguienteGoogle = 0
+        var i = k
+        while i < n {
+            if siguienteGoogle < permitidas.count {
+                resultado.append(permitidas[siguienteGoogle]); siguienteGoogle += 1
+            }
+            resultado.append(comunidad[i]); i += 1
+            if i < n { resultado.append(comunidad[i]); i += 1 }
+        }
+        // La comunidad se acabó: las de Google que sigan dentro del tope, al final.
+        while siguienteGoogle < permitidas.count {
+            resultado.append(permitidas[siguienteGoogle]); siguienteGoogle += 1
+        }
+        return resultado
+    }
+}

@@ -704,6 +704,10 @@ struct CategoryPickerView: View {
     /// grilla de categorías por el carrusel "Explora {ciudad}". El botón
     /// "Consultar sobre este lugar" todavía no dispara ninguna acción.
     var placeCards: [APIPlaceCard] = []
+    /// Ubicación para el descubrimiento con Google (GET /feed/discover). nil = no
+    /// se pide. La petición sale DESPUÉS de pintar el Inicio y nunca lo bloquea.
+    var discoverLat: Double? = nil
+    var discoverLng: Double? = nil
     /// True while InicioView is still loading data. Renders this exact component
     /// redacted instead of a hand-built skeleton, so there is zero visual jump when
     /// real data arrives — same layout, padding, radius, just real content
@@ -822,7 +826,14 @@ struct CategoryPickerView: View {
     @State private var feedSecuencia: [ExplorePhoto] = []
     /// Lugar cuyas fotos de Google se están viendo. Vive aquí y no en la tarjeta:
     /// las tarjetas se recrean al paginar y la hoja se cerraría sola.
-    @State private var googleFotosLugar: APIPlaceCard?
+    @State private var googleHoja: GoogleHoja?
+    /// Lugares descubiertos con Google. SOLO en memoria: no entran a SpotsStore (que
+    /// persiste a disco), ni a ImageCache, ni a ningún archivo.
+    @State private var descubrimiento: [APIDiscoverItem] = []
+    /// true tras un 404: función apagada o usuario fuera de la lista de testers.
+    /// Se deja de preguntar mientras dure la sesión de la app.
+    @State private var descubrimientoApagado = false
+    @State private var descubrimientoUltima: (lat: Double, lng: Double, fecha: Date)?
     /// Cuánto hay que correr la página para leer la secuencia. Lo mueve solo
     /// reconstruirFeed, para que la tarjeta visible siga siendo la misma
     /// cuando el orden cambia debajo.
@@ -875,7 +886,7 @@ struct CategoryPickerView: View {
     /// desde el primer frame: lo que se promete y lo que llega deben ocupar el
     /// mismo espacio.
     private var showsExploreCarousel: Bool {
-        !placeCards.isEmpty || (isSkeleton && hidesCategoryGrid)
+        !placeCards.isEmpty || !descubrimiento.isEmpty || (isSkeleton && hidesCategoryGrid)
     }
 
     private var subtitleAttributed: AttributedString {
@@ -1026,7 +1037,7 @@ struct CategoryPickerView: View {
                 // después ocupa exactamente el lugar que ya estaba reservado.
                 exploreSkeleton
                     .padding(.top, exploreTopOffset)
-            } else if !placeCards.isEmpty {
+            } else if !placeCards.isEmpty || !descubrimiento.isEmpty {
                 // Más abajo que el título: el carrusel queda en la zona del
                 // pulgar y deslizar las cards no obliga a estirar la mano.
                 exploreCarousel
@@ -1367,6 +1378,64 @@ struct CategoryPickerView: View {
     private var feedContexto: String {
         placeCards.map { "\($0.id):\(($0.coverPhotos?.count ?? $0.coverUrls?.count ?? 1))" }
             .joined(separator: "|")
+            // Llegan lugares de Google (o se renuevan): hay que rehacer la mezcla.
+            + "|g:" + descubrimiento.map(\.id).joined(separator: ",")
+    }
+
+    /// Una tarjeta por lugar de Google (su primera foto; las demás se ven en la
+    /// hoja de detalle). El "lugar" es el id con prefijo google:, que no puede
+    /// chocar con el de un Spot.
+    private var fotosGoogle: [ExplorePhoto] {
+        descubrimiento.compactMap { item in
+            guard let foto = item.photos.first else { return nil }
+            let card = APIPlaceCard(
+                id: item.id, name: item.name, destinationId: nil, destinationName: nil,
+                lat: item.lat, lng: item.lng, distanceMeters: item.distanceMeters,
+                coverUrl: nil, coverUrls: nil, coverPhotos: nil,
+                coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+                category: item.category, photoCount: 0, isNew: false, buddyCount: 0, buddies: [],
+                googlePlaceId: item.placeId
+            )
+            return ExplorePhoto(id: "\(item.id)-0", url: foto.imagePath, place: card,
+                                authorName: nil, authorAvatarUrl: nil, google: item)
+        }
+    }
+
+    private var claveDescubrimiento: String {
+        guard let la = discoverLat, let lo = discoverLng else { return "sin-ubicacion" }
+        return String(format: "%.2f,%.2f", la, lo)
+    }
+
+    /// Pide los lugares de Google. Cualquier fallo se ignora: el Inicio sigue con
+    /// la comunidad exactamente como antes.
+    private func cargarDescubrimiento() async {
+        guard !descubrimientoApagado, let lat = discoverLat, let lng = discoverLng else { return }
+        // Primero que se pinte el Inicio: Google nunca compite con el arranque.
+        try? await Task.sleep(nanoseconds: UInt64(GoogleDiscoverSupport.esperaTrasPintarSegundos * 1_000_000_000))
+        guard !Task.isCancelled else { return }
+        let ahora = Date()
+        guard GoogleDiscoverSupport.debeBuscar(ultima: descubrimientoUltima, lat: lat, lng: lng, ahora: ahora) else { return }
+
+        // Con lo que quedó de otra zona: fuera lo que ya no está a ≤ 10 km de aquí.
+        let aqui = CLLocation(latitude: lat, longitude: lng)
+        descubrimiento = descubrimiento.filter {
+            CLLocation(latitude: $0.lat, longitude: $0.lng).distance(from: aqui) <= Double(GoogleDiscoverSupport.radioMetros)
+        }
+        do {
+            let r = try await APIClient.shared.fetchGoogleDiscover(lat: lat, lng: lng)
+            let validos = r.items.filter {
+                GoogleDiscoverSupport.esValida(id: $0.id, name: $0.name,
+                                               primeraRuta: $0.photos.first?.imagePath,
+                                               distanciaMetros: $0.distanceMeters)
+            }
+            descubrimientoUltima = (lat, lng, ahora)
+            descubrimiento = validos
+        } catch APIError.server(let codigo, _) where codigo == 404 {
+            descubrimientoApagado = true
+            descubrimiento = []
+        } catch {
+            // Sin red, cuota, 5xx…: se conserva lo que hubiera y se sigue.
+        }
     }
 
     /// Rehace la secuencia y la deja calzada con lo que se está viendo: la
@@ -1379,12 +1448,22 @@ struct CategoryPickerView: View {
     ///   del orden nuevo, que por la memoria de vistas no es la de recién.
     private func reconstruirFeed(manteniendoVisible: Bool = true) {
         let tRank = Date()
-        let nueva = FeedRanking.secuencia(
+        // 1) La comunidad, con SU ranking (FeedRanking, invariantes I1–I5 intactas).
+        let comunidad = FeedRanking.secuencia(
             porLugar: fotosPorLugar,
             id: { $0.id },
             lugar: { $0.place.id },
             recientes: FeedMemoria.shared.recientes,
         )
+        // 2) Google, sin lo que la comunidad ya representa (Place ID EXACTO).
+        let yaEnComunidad = Set(placeCards.compactMap(\.googlePlaceId))
+        let google = FeedMix.descartandoRepetidos(
+            google: fotosGoogle,
+            placeId: { $0.google?.placeId ?? "" },
+            enComunidad: yaEnComunidad
+        )
+        // 3) Mezcla determinista: 3 de la comunidad primero, luego 2:1, Google ≤ 1/3.
+        let nueva = FeedMix.mezclar(comunidad: comunidad, google: google)
         guard !nueva.isEmpty else {
             feedSecuencia = []
             carouselCenterId = nil
@@ -1409,7 +1488,7 @@ struct CategoryPickerView: View {
         // La tarjeta que queda a la vista también cuenta como vista: si no, la
         // primera del feed (que nadie "asienta", ya está ahí) sería la única
         // que podría repetirse de una al rehacer el orden.
-        if let visible = feedFoto(en: feedPosicion) {
+        if let visible = feedFoto(en: feedPosicion), !visible.esGoogle {
             FeedMemoria.shared.registrar(fotoId: visible.id)
         }
         dlog("⏱️ [tiempo] ranking \(Cronometro.ms(desde: tRank))ms → \(nueva.count) fotos")
@@ -1750,8 +1829,8 @@ struct CategoryPickerView: View {
         guard !explorePhotos.isEmpty else { return }
         let pagina = feedPosicion
         ImagePrefetcher.prefetch([0, 1, -1, 2, -2].map {
-            explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)].url
-        })
+            explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)]
+        }.filter { !$0.esGoogle }.map(\.url))   // las de Google NO van a disco
     }
 
     /// Al asentarse en una recomendación: se fija la activa y se piden
@@ -1766,11 +1845,14 @@ struct CategoryPickerView: View {
         }
         // Solo lo que el usuario vio DE VERDAD (página asentada) cuenta como
         // visto; cruzar el visor no basta.
-        FeedMemoria.shared.registrar(fotoId: foto.id)
+        if !foto.esGoogle { FeedMemoria.shared.registrar(fotoId: foto.id) }
 
+        // Solo fotos de la comunidad: ImagePrefetcher escribe a DISCO y el
+        // contenido de Google no puede guardarse. Las de Google se bajan a
+        // memoria cuando su tarjeta entra en la ventana de páginas.
         ImagePrefetcher.prefetch([1, -1, 2, -2].map {
-            explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)].url
-        })
+            explorePhotos[feedIndexWrapped(pagina + feedDesfase + $0)]
+        }.filter { !$0.esGoogle }.map(\.url))
     }
 
     private var exploreCarousel: some View {
@@ -1815,7 +1897,7 @@ struct CategoryPickerView: View {
                                 ExploreCarouselCard(
                                     photo: photo,
                                     isNearest: photo.place.id == spotsStore.nearestId,
-                                    onGoogleFotos: esActiva ? { googleFotosLugar = photo.place } : nil
+                                    onGoogleFotos: esActiva ? { googleHoja = .fotos(photo.place) } : nil
                                 )
                                     // Identidad por FOTO: sin esto el estado
                                     // interno de la tarjeta (distancia, "Estás
@@ -1846,7 +1928,11 @@ struct CategoryPickerView: View {
                                     .onTapGesture {
                                         guard esActiva else { return }
                                         Haptic.medium()
-                                        onOpenPlace?(photo.place)
+                                        // Un descubrimiento de Google NO es un Spot ni tiene
+                                        // destino: no pasa por PlaceGuideMapSheet sino por su
+                                        // propia hoja de detalle.
+                                        if let g = photo.google { googleHoja = .descubrimiento(g) }
+                                        else { onOpenPlace?(photo.place) }
                                     }
                                     .allowsHitTesting(esActiva)
                                     .accessibilityHidden(!esActiva)
@@ -1890,9 +1976,15 @@ struct CategoryPickerView: View {
             .layoutPriority(0)
             .environment(\.exploreCardPhotoHeightOverride, exploreCardPhoto)
             // Fotos de Google Maps de la tarjeta (bajo demanda, ver GooglePlacePhotosSheet).
-            .sheet(item: $googleFotosLugar) { lugar in
-                GooglePlacePhotosSheet(place: lugar)
+            .sheet(item: $googleHoja) { hoja in
+                switch hoja {
+                case .fotos(let lugar): GooglePlacePhotosSheet(place: lugar)
+                case .descubrimiento(let item): GoogleDiscoverySheet(item: item)
+                }
             }
+            // Descubrimiento con Google: DESPUÉS de pintar y sin bloquear nada.
+            // Cambia la clave solo al moverse ~1 km, no con cada fix del GPS.
+            .task(id: claveDescubrimiento) { await cargarDescubrimiento() }
             // Quién está al frente, para el resto de la pantalla (el CTA lee el
             // lugar centrado). initial: true lo deja resuelto desde el primer
             // layout, sin una ventana en la que nadie es el centro.
@@ -1955,8 +2047,22 @@ private struct ExplorePhoto: Identifiable {
     /// Quién aportó ESTA foto — no el autor de la tarjeta del lugar.
     let authorName: String?
     let authorAvatarUrl: String?
+    /// Presente solo en las tarjetas de descubrimiento con Google.
+    var google: APIDiscoverItem? = nil
+    var esGoogle: Bool { google != nil }
 }
 
+/// Lo que puede abrir la hoja de Google del Inicio (una sola hoja con dos casos).
+private enum GoogleHoja: Identifiable {
+    case fotos(APIPlaceCard)
+    case descubrimiento(APIDiscoverItem)
+    var id: String {
+        switch self {
+        case .fotos(let l): return "fotos-\(l.id)"
+        case .descubrimiento(let d): return "desc-\(d.id)"
+        }
+    }
+}
 
 // MARK: – Fotos de Google Maps (Home)
 //
@@ -1994,6 +2100,8 @@ private struct GoogleMapsPhotosChip: View {
 /// Una imagen de Google en memoria (ver APIClient.fetchGooglePhotoData).
 private struct GoogleMemoryImage: View {
     let imagePath: String
+    /// true = llena el marco (tarjeta del feed); false = se ve entera (hoja).
+    var llenar: Bool = false
     @State private var image: UIImage?
     @State private var fallo = false
 
@@ -2001,7 +2109,7 @@ private struct GoogleMemoryImage: View {
         ZStack {
             Color(white: 0.94)
             if let image {
-                Image(uiImage: image).resizable().scaledToFit()
+                Image(uiImage: image).resizable().aspectRatio(contentMode: llenar ? .fill : .fit)
             } else if fallo {
                 Text("No se pudo cargar la foto")
                     .font(.system(size: 13)).foregroundStyle(googleTextoGris)
@@ -2015,6 +2123,101 @@ private struct GoogleMemoryImage: View {
                 let data = try await APIClient.shared.fetchGooglePhotoData(imagePath: imagePath)
                 if let ui = UIImage(data: data) { image = ui } else { fallo = true }
             } catch { fallo = true }
+        }
+    }
+}
+
+/// Logo OFICIAL de Google Maps (paquete "Google Maps attribution assets"), sin
+/// modificar: mismo archivo, misma proporción, a su tamaño nativo (@1x en puntos).
+///   · sobreFoto   → versión con contorno oscuro (fondos con fotos)
+///   · sobreBlanco → versión gris oscuro (fondo liso blanco)
+private struct GoogleMapsLogo: View {
+    enum Variante { case sobreFoto, sobreBlanco }
+    let variante: Variante
+    var body: some View {
+        Image(variante == .sobreFoto ? "GoogleMapsLogoOnPhoto" : "GoogleMapsLogoOnWhite")
+            .resizable()
+            .scaledToFit()
+            .frame(width: variante == .sobreFoto ? 105 : 98, height: variante == .sobreFoto ? 22 : 18)
+            .accessibilityLabel("Google Maps")
+    }
+}
+
+/// Detalle de un lugar descubierto con Google. NO es un Spot de BuddyApp (no hay
+/// guía ni destino): se dice claramente, se muestran las fotos con su autor y la
+/// marca de Google en el mismo contenedor, y se enlaza la ficha de origen.
+private struct GoogleDiscoverySheet: View {
+    let item: APIDiscoverItem
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    private var fotos: [APIGooglePhoto] { item.photos.filter { GooglePhotoSupport.isValidImagePath($0.imagePath) } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(item.name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                Spacer()
+                Button("Cerrar") { dismiss() }
+            }
+            .padding(16)
+
+            if let cat = item.category, !cat.isEmpty {
+                Text(cat.capitalized)
+                    .font(.system(size: 13)).foregroundStyle(googleTextoGris)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.bottom, 8)
+            }
+
+            TabView {
+                ForEach(fotos) { foto in
+                    VStack(spacing: 6) {
+                        GoogleMemoryImage(imagePath: foto.imagePath)
+                            .frame(maxWidth: .infinity).frame(height: 360)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        HStack(alignment: .center) {
+                            credito(foto.authors)
+                            Spacer(minLength: 8)
+                            // Logo oficial; espacio libre: 10 pt a los lados y arriba, 5 abajo.
+                            GoogleMapsLogo(variante: .sobreBlanco)
+                                .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 5)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: fotos.count > 1 ? .automatic : .never))
+
+            Text("Sugerencia de Google Maps. No es una recomendación de la comunidad de BuddyApp.")
+                .font(.system(size: 12)).foregroundStyle(googleTextoGris)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24).padding(.bottom, 8)
+
+            if let url = GoogleMapsLink.openableURL(item.googleMapsUrl) {
+                Button { openURL(url) } label: {
+                    (Text("Ver en ") + Text(verbatim: "Google Maps"))
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity).padding(.vertical, 12)
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, 16).padding(.bottom, 12)
+            }
+        }
+        .foregroundStyle(Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255))
+        .background(Color.white.ignoresSafeArea())
+        .preferredColorScheme(.light)
+        .presentationDetents([.large])
+    }
+
+    @ViewBuilder
+    private func credito(_ autores: [APIGooglePhotoAuthor]) -> some View {
+        if let linea = GooglePhotoSupport.creditLine(autores.map(\.name)) {
+            if let url = GooglePhotoSupport.openableAuthorURL(autores.first?.uri) {
+                Button { openURL(url) } label: { Text(linea).font(.system(size: 13)).underline().lineLimit(1) }
+                    .buttonStyle(.plain).foregroundStyle(googleTextoGris)
+            } else {
+                Text(linea).font(.system(size: 13)).foregroundStyle(googleTextoGris).lineLimit(1)
+            }
         }
     }
 }
@@ -2668,7 +2871,8 @@ private struct ExploreCarouselCard: View {
     private var etiquetaAccesible: String {
         var partes = [place.name]
         if let category = place.category, !category.isEmpty { partes.append(category.capitalized) }
-        if let author = authorFirstName { partes.append("Recomendado por \(author)") }
+        if photo.esGoogle { partes.append("Sugerido por Google Maps") }
+        else if let author = authorFirstName { partes.append("Recomendado por \(author)") }
         else { partes.append("Recomendado por la comunidad") }
         if let d = etiquetaDistancia { partes.append(d) }
         return partes.joined(separator: ", ")
@@ -2694,10 +2898,17 @@ private struct ExploreCarouselCard: View {
         // vez de robarle una banda de 70pt. Un ZStack para que el degradado y
         // el texto se apoyen en el borde inferior de la imagen.
         ZStack(alignment: .bottomLeading) {
-            CachedImage(urlString: photo.url) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                Rectangle().fill(Color.sandLight)
+            Group {
+                if photo.esGoogle {
+                    // Google: SOLO memoria (sin ImageCache, que escribe a disco).
+                    GoogleMemoryImage(imagePath: photo.url, llenar: true)
+                } else {
+                    CachedImage(urlString: photo.url) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        Rectangle().fill(Color.sandLight)
+                    }
+                }
             }
             .scaleEffect(zoom, anchor: zoomAnchor)
             // Ancho EXPLÍCITO (la misma proporción 3:4 que usa el carrusel) y
@@ -2794,6 +3005,17 @@ private struct ExploreCarouselCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
 
+                if let g = photo.google {
+                    // Descubrimiento: categoría y crédito del autor de la foto. La
+                    // marca de Google va en el logo, arriba a la derecha.
+                    Text(GoogleDiscoverSupport.segundaLinea(
+                        categoria: g.category?.capitalized,
+                        autores: g.photos.first?.authors.map(\.name) ?? []))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                } else {
                 HStack(spacing: 5) {
                     if let category = place.category, !category.isEmpty {
                         Text(category.capitalized)
@@ -2834,6 +3056,7 @@ private struct ExploreCarouselCard: View {
                 .foregroundStyle(.white.opacity(0.88))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
@@ -2842,6 +3065,17 @@ private struct ExploreCarouselCard: View {
             // Solo si el lugar está vinculado a Google Maps y el servidor tiene la
             // función encendida. Es un botón aparte: no toca el orden del feed ni
             // las fotos de la comunidad, y no pide nada a Google hasta que se toca.
+            // Marca de Google obligatoria al mostrar sus datos fuera de un mapa de
+            // Google: logo OFICIAL con contorno (para fondos de foto), sin tocar.
+            // Espacio libre ≥ 10 pt a la derecha y arriba.
+            if photo.esGoogle {
+                GoogleMapsLogo(variante: .sobreFoto)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 10)
+                    .padding(.trailing, 10)
+                    .allowsHitTesting(false)
+            }
+
             if place.googlePhotosAvailable == true, let abrir = onGoogleFotos {
                 GoogleMapsPhotosChip(action: abrir)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -2860,7 +3094,7 @@ private struct ExploreCarouselCard: View {
         // Sin "desliza hacia arriba": con VoiceOver activo ese gesto es de la
         // propia navegación del sistema, así que la instrucción confundiría.
         // Pasar de recomendación se ofrece como ACCIÓN del rotor.
-        .accessibilityHint("Toca para ver el lugar en el mapa.")
+        .accessibilityHint(photo.esGoogle ? "Toca para ver los detalles del lugar sugerido." : "Toca para ver el lugar en el mapa.")
         .accessibilityAction(named: "Fotos de Google Maps") {
             if place.googlePhotosAvailable == true { onGoogleFotos?() }
         }

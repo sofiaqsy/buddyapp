@@ -154,3 +154,46 @@ enum GooglePhotoSupport {
         return "Foto: " + limpios.joined(separator: " y ")
     }
 }
+
+/// Reglas del descubrimiento con Google que no dependen de SwiftUI ni de la red.
+enum GoogleDiscoverSupport {
+    /// Radio de descubrimiento acordado (metros). El servidor ya lo impone; la app
+    /// lo comprueba otra vez por si llegara algo fuera.
+    static let radioMetros = 10_000
+    /// Cuánto hay que moverse, o esperar, para volver a pedir.
+    static let minMetrosParaRepetir = 1_000.0
+    static let minSegundosParaRepetir = 600.0
+    /// Espera tras pintar el Inicio antes de la primera petición: Google nunca
+    /// compite con el arranque.
+    static let esperaTrasPintarSegundos = 1.2
+
+    /// ¿Hay que (volver a) pedir? Misma zona (< 1 km) y reciente (< 10 min) → no.
+    /// Solo vive en memoria: no se persiste nada del descubrimiento.
+    static func debeBuscar(
+        ultima: (lat: Double, lng: Double, fecha: Date)?,
+        lat: Double, lng: Double, ahora: Date
+    ) -> Bool {
+        guard let ultima else { return true }
+        let metros = CLLocation(latitude: ultima.lat, longitude: ultima.lng)
+            .distance(from: CLLocation(latitude: lat, longitude: lng))
+        return metros >= minMetrosParaRepetir || ahora.timeIntervalSince(ultima.fecha) >= minSegundosParaRepetir
+    }
+
+    /// ¿Esta tarjeta de Google sirve? id con prefijo, nombre, ruta de foto del
+    /// backend y dentro del radio. Lo que no cumpla se descarta sin ruido.
+    static func esValida(id: String, name: String, primeraRuta: String?, distanciaMetros: Int?) -> Bool {
+        guard id.hasPrefix("google:"), id.count > "google:".count,
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              GooglePhotoSupport.isValidImagePath(primeraRuta) else { return false }
+        if let d = distanciaMetros, d > radioMetros { return false }
+        return true
+    }
+
+    /// "Cafetería · Foto: Ana" — segunda línea de la tarjeta de Google.
+    static func segundaLinea(categoria: String?, autores: [String]) -> String {
+        var partes: [String] = []
+        if let c = categoria?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty { partes.append(c) }
+        if let credito = GooglePhotoSupport.creditLine(autores) { partes.append(credito) }
+        return partes.joined(separator: " · ")
+    }
+}

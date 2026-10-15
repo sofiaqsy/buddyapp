@@ -468,6 +468,27 @@ struct APIGooglePlacePhotos: Decodable {
     let googleMapsUrl: String?
 }
 
+/// Un lugar descubierto con Google (GET /feed/discover). NO es un Spot de BuddyApp:
+/// no tiene destino ni guía. Vive solo en memoria mientras el Inicio está abierto;
+/// nada de esto se guarda en el dispositivo (ni en SpotsStore ni en ImageCache).
+struct APIDiscoverItem: Decodable, Identifiable, Hashable {
+    let id: String            // "google:<placeId>"
+    let placeId: String
+    let name: String
+    let lat: Double
+    let lng: Double
+    let distanceMeters: Int?
+    let category: String?
+    let photos: [APIGooglePhoto]
+    /// Ficha del lugar en Google Maps (la "foto de origen").
+    let googleMapsUrl: String?
+}
+
+struct APIDiscoverResponse: Decodable {
+    let radiusM: Int?
+    let items: [APIDiscoverItem]
+}
+
 struct APIPlaceCard: Codable, Identifiable, Hashable {
     static func == (lhs: APIPlaceCard, rhs: APIPlaceCard) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -512,6 +533,10 @@ struct APIPlaceCard: Codable, Identifiable, Hashable {
     /// de Google encendidas. Solo habilita un botón: no cambia ni el orden ni las
     /// fotos de la comunidad. nil/false en cache viejo y con la función apagada.
     var googlePhotosAvailable: Bool? = nil
+    /// Place ID de Google del lugar, si está vinculado. Solo llega con el
+    /// descubrimiento disponible. Sirve para UNA cosa: descartar, por coincidencia
+    /// EXACTA, la tarjeta de Google que esta tarjeta de la comunidad ya representa.
+    var googlePlaceId: String? = nil
 
     var photoLabel: String { "\(photoCount) foto\(photoCount == 1 ? "" : "s")" }
 
