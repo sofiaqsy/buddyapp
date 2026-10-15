@@ -1378,8 +1378,29 @@ struct CategoryPickerView: View {
     private var feedContexto: String {
         placeCards.map { "\($0.id):\(($0.coverPhotos?.count ?? $0.coverUrls?.count ?? 1))" }
             .joined(separator: "|")
+            // Con Google activo, qué lugares de la comunidad cuentan como "cerca".
+            + "|c:" + (descubrimiento.isEmpty ? "" : placeCards.filter(estaCercaDelUsuario).map(\.id).joined(separator: ","))
             // Llegan lugares de Google (o se renuevan): hay que rehacer la mezcla.
             + "|g:" + descubrimiento.map(\.id).joined(separator: ",")
+    }
+
+    /// Distancia REAL del lugar a donde está el usuario ahora (la que mandó el
+    /// servidor puede ser de otra ubicación si se movió).
+    private func estaCercaDelUsuario(_ p: APIPlaceCard) -> Bool {
+        if let la = discoverLat, let lo = discoverLng, let pla = p.lat, let plo = p.lng {
+            let metros = CLLocation(latitude: la, longitude: lo).distance(from: CLLocation(latitude: pla, longitude: plo))
+            return GoogleDiscoverSupport.estaCerca(distanciaMetros: Int(metros))
+        }
+        return GoogleDiscoverSupport.estaCerca(distanciaMetros: p.distanceMeters)
+    }
+
+    /// Con descubrimiento de Google activo, el Inicio enseña lo que hay POR AQUÍ:
+    /// se quitan las recomendaciones de la comunidad a más de 10 km (un café a 409 km
+    /// no es "cerca"). Si no queda ninguna, Google llena el feed. Sin Google (apagado,
+    /// no tester, fallo) NO se filtra nada: el Inicio es exactamente el de siempre.
+    private func comunidadCercana(_ porLugar: [[ExplorePhoto]]) -> [[ExplorePhoto]] {
+        guard !descubrimiento.isEmpty else { return porLugar }
+        return porLugar.filter { grupo in grupo.first.map { estaCercaDelUsuario($0.place) } ?? false }
     }
 
     /// Una tarjeta por lugar de Google (su primera foto; las demás se ven en la
@@ -1450,7 +1471,7 @@ struct CategoryPickerView: View {
         let tRank = Date()
         // 1) La comunidad, con SU ranking (FeedRanking, invariantes I1–I5 intactas).
         let comunidad = FeedRanking.secuencia(
-            porLugar: fotosPorLugar,
+            porLugar: comunidadCercana(fotosPorLugar),
             id: { $0.id },
             lugar: { $0.place.id },
             recientes: FeedMemoria.shared.recientes,

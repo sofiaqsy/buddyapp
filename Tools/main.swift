@@ -321,4 +321,11 @@ revisar("segunda línea: solo categoría", GoogleDiscoverSupport.segundaLinea(ca
 revisar("segunda línea: solo crédito", GoogleDiscoverSupport.segundaLinea(categoria: nil, autores: ["Ana", "Beto"]) == "Foto: Ana y Beto")
 revisar("segunda línea: nada", GoogleDiscoverSupport.segundaLinea(categoria: " ", autores: []) == "")
 
+revisar("comunidad a 800 m: cerca", GoogleDiscoverSupport.estaCerca(distanciaMetros: 800))
+revisar("comunidad a 10.000 m: cerca (límite inclusivo)", GoogleDiscoverSupport.estaCerca(distanciaMetros: 10_000))
+revisar("comunidad a 10.001 m: lejos", GoogleDiscoverSupport.estaCerca(distanciaMetros: 10_001), esperado: false)
+revisar("comunidad a 409 km: lejos", GoogleDiscoverSupport.estaCerca(distanciaMetros: 409_555), esperado: false)
+revisar("comunidad a 7.265 km: lejos", GoogleDiscoverSupport.estaCerca(distanciaMetros: 7_265_000), esperado: false)
+revisar("comunidad sin distancia: se conserva", GoogleDiscoverSupport.estaCerca(distanciaMetros: nil))
+
 print(fallos == 0 ? "\nTODO OK" : "\n\(fallos) FALLA(S)")

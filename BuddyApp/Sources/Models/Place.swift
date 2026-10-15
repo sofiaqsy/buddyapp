@@ -179,6 +179,15 @@ enum GoogleDiscoverSupport {
         return metros >= minMetrosParaRepetir || ahora.timeIntervalSince(ultima.fecha) >= minSegundosParaRepetir
     }
 
+    /// ¿Una tarjeta de la comunidad está "cerca" (≤ radio)? Se usa SOLO cuando hay
+    /// descubrimiento con Google: ahí el Inicio muestra lo de por aquí y no
+    /// recomendaciones a cientos de kilómetros. Sin distancia conocida no se
+    /// puede afirmar que esté lejos: se conserva.
+    static func estaCerca(distanciaMetros: Int?) -> Bool {
+        guard let d = distanciaMetros else { return true }
+        return d <= radioMetros
+    }
+
     /// ¿Esta tarjeta de Google sirve? id con prefijo, nombre, ruta de foto del
     /// backend y dentro del radio. Lo que no cumpla se descarta sin ruido.
     static func esValida(id: String, name: String, primeraRuta: String?, distanciaMetros: Int?) -> Bool {
