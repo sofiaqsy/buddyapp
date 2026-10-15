@@ -2097,6 +2097,38 @@ private struct GoogleMapsPhotosChip: View {
     }
 }
 
+/// Memoria de imágenes de Google, SOLO RAM y de vida corta (10 min): al volver a
+/// una tarjeta por la que ya se pasó, o abrir la hoja de una foto que la tarjeta
+/// ya bajó, no se vuelve a pedir (cada descarga se factura). Nunca va a disco, no
+/// pasa por ImageCache y el sistema la vacía solo si falta memoria. Se pierde al
+/// cerrar la app.
+private final class GoogleImageMemory {
+    static let shared = GoogleImageMemory()
+    static let vidaSegundos: TimeInterval = 600
+
+    private final class Entrada {
+        let imagen: UIImage
+        let fecha: Date
+        init(_ imagen: UIImage, _ fecha: Date) { self.imagen = imagen; self.fecha = fecha }
+    }
+    private let cache = NSCache<NSString, Entrada>()
+    private init() { cache.countLimit = 30 }
+
+    func imagen(para ruta: String, ahora: Date = Date()) -> UIImage? {
+        let clave = ruta as NSString
+        guard let e = cache.object(forKey: clave) else { return nil }
+        guard ahora.timeIntervalSince(e.fecha) < Self.vidaSegundos else {
+            cache.removeObject(forKey: clave)
+            return nil
+        }
+        return e.imagen
+    }
+
+    func guardar(_ imagen: UIImage, para ruta: String) {
+        cache.setObject(Entrada(imagen, Date()), forKey: ruta as NSString)
+    }
+}
+
 /// Una imagen de Google en memoria (ver APIClient.fetchGooglePhotoData).
 private struct GoogleMemoryImage: View {
     let imagePath: String
@@ -2104,6 +2136,13 @@ private struct GoogleMemoryImage: View {
     var llenar: Bool = false
     @State private var image: UIImage?
     @State private var fallo = false
+
+    init(imagePath: String, llenar: Bool = false) {
+        self.imagePath = imagePath
+        self.llenar = llenar
+        // Si ya se bajó hace poco, aparece al instante y sin pedir nada.
+        _image = State(initialValue: GoogleImageMemory.shared.imagen(para: imagePath))
+    }
 
     var body: some View {
         ZStack {
@@ -2118,10 +2157,14 @@ private struct GoogleMemoryImage: View {
             }
         }
         .task(id: imagePath) {
+            if let hit = GoogleImageMemory.shared.imagen(para: imagePath) { image = hit; fallo = false; return }
             image = nil; fallo = false
             do {
                 let data = try await APIClient.shared.fetchGooglePhotoData(imagePath: imagePath)
-                if let ui = UIImage(data: data) { image = ui } else { fallo = true }
+                if let ui = UIImage(data: data) {
+                    GoogleImageMemory.shared.guardar(ui, para: imagePath)
+                    image = ui
+                } else { fallo = true }
             } catch { fallo = true }
         }
     }
