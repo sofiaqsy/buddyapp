@@ -4,44 +4,45 @@ import UIKit
 // MARK: – COLOR TOKENS
 // Single source of truth. All views consume ONLY these tokens — never hardcoded hex.
 //
-// Buddy Brown (#6E3B2D) is the primary brand color.
-// It replaces the old teal/sand system entirely.
-// Soft sage green (#6F9885) is the only allowed accent (availability / success).
+// Buddy: Villa Rica palette (Forest & Terracotta, approved 18-19 Nov 2026).
+// Deep Forest #2F4A3E is the brand: primary buttons, active states, titles.
+// Screens stay mostly white; terracotta #C87950 only for shapes, never small text.
+// Full rules: .claude/skills/villarica-ux-ui.
 
 extension Color {
     // ── Backgrounds ────────────────────────────────────────────────
-    static let canvas        = Color(hex: "F8F4EE")   // App background — warm off-white
+    static let canvas        = Color(hex: "F5F5F0")   // App background — soft white
     static let surface       = Color(hex: "FFFFFF")   // Cards — pure white
-    static let surfaceRaised = Color(hex: "F3EEE8")   // Secondary bg / grouped rows
-    static let groupedBg     = Color(hex: "ECE4DB")   // Sections, pickers
+    static let surfaceRaised = Color(hex: "EEF0EA")   // Secondary bg / grouped rows
+    static let groupedBg     = Color(hex: "E4E2DC")   // Sections, pickers, photo placeholders
 
     // ── Text ────────────────────────────────────────────────────────
-    static let ink           = Color(hex: "2B1C18")   // Primary text — dark brown, never black
-    static let inkMuted      = Color(hex: "6F625D")   // Secondary text
-    static let inkFaint      = Color(hex: "B8AEA8")   // Placeholders / hints
+    static let ink           = Color(hex: "263029")   // Primary text — near-black green-grey
+    static let inkMuted      = Color(hex: "5B6159")   // Secondary text (4.5:1+ on canvas)
+    static let inkFaint      = Color(hex: "A9AEA5")   // Placeholders / hints
     static let inkInverse    = Color(hex: "FFFFFF")   // Text on dark (CTAs)
 
     // ── Brand ───────────────────────────────────────────────────────
-    /// Buddy Brown — primary brand. CTAs, icons, active states, links.
-    static let brand         = Color(hex: "6E3B2D")
+    /// Deep Forest — primary brand. CTAs, icons, active states, links.
+    static let brand         = Color(hex: "2F4A3E")
     /// Pressed / hover state.
-    static let brandHover    = Color(hex: "7B4435")
-    /// Dark brown — dark backgrounds, deepest text.
-    static let brandDeep     = Color(hex: "2B1C18")
+    static let brandHover    = Color(hex: "3B5C4D")
+    /// Darkest forest — dark backgrounds, deepest text.
+    static let brandDeep     = Color(hex: "1F3229")
     /// Disabled state.
-    static let brandDisabled = Color(hex: "CFC6BF")
+    static let brandDisabled = Color(hex: "C9CEC5")
 
     // Legacy aliases so existing call-sites compile without renaming.
     // teal → brand,  tealDeep → brandDeep gradient anchor,  sand → brand,  sandLight → groupedBg
     static let teal          = Color.brand
-    static let tealDeep      = Color(hex: "4A2820")   // dark end of brand gradient
+    static let tealDeep      = Color(hex: "24392F")   // dark end of brand gradient
     static let sand          = Color.brand
     static let sandLight     = Color.groupedBg
 
     // ── Accent ──────────────────────────────────────────────────────
     /// Soft sage — only for: available, success, location, buddy online.
     /// Never use for CTAs.
-    static let accent        = Color(hex: "6F9885")
+    static let accent        = Color(hex: "6F8F6A")
     /// Legacy alias
     static let onlineGreen   = Color.accent
 
@@ -50,12 +51,19 @@ extension Color {
     static let errorRed      = Color(hex: "B65B55")
 
     // ── Borders / Lines ─────────────────────────────────────────────
-    static let border        = Color(hex: "E6DDD5")
-    static let hairline      = Color(hex: "EFE8E2")
+    static let border        = Color(hex: "D9DED5")
+    static let hairline      = Color(hex: "E6E9E2")
 
     // ── Tab Bar ─────────────────────────────────────────────────────
-    static let tabBarBg      = Color(hex: "FBF8F4")
-    static let tabBarInactive = Color(hex: "8A7D76")
+    static let tabBarBg      = Color(hex: "FFFFFF")
+    static let tabBarInactive = Color(hex: "5B6159")
+
+    // ── Villa Rica accents ──────────────────────────────────────────
+    /// Burnt terracotta — shapes only (active marks, selected pin, dots).
+    /// Never small text: 3.0:1 on white.
+    static let terracotta    = Color(hex: "C87950")
+    static let sage          = Color(hex: "A8B69B")
+    static let paleSage      = Color(hex: "E6ECE1")
 
     // ── Init ────────────────────────────────────────────────────────
     init(hex: String) {

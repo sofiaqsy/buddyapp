@@ -83,6 +83,8 @@ struct InicioView: View {
     /// Buddy cuyo perfil se está mirando desde "Comunidad viva".
     @State private var pulseProfileTarget: PulseProfileTarget? = nil
     @State private var destinations: [APIDestination] = []
+    /// El destino resuelto completo (portada y eslogan), pedido por id.
+    @State private var heroDestination: APIDestination? = nil
     @State private var pendingJourney: APIJourney? = nil
     @State private var activeJourney: APIJourney? = nil
     @State private var liveJourneys: [APIJourney] = []   // active + planning, para swipe
@@ -481,7 +483,7 @@ struct InicioView: View {
         let displayCity = resolvedLocation?.destinationName ?? locationService.currentCity
         if let city = displayCity {
             HStack(spacing: 5) {
-                Image(systemName: "location.fill")
+                Image(systemName: "mappin")
                     .font(.system(size: 11, weight: .semibold))
                 Text("Estás en \(city)")
                     .font(BT.caption1.weight(.semibold))
@@ -682,6 +684,19 @@ struct InicioView: View {
                 .navigationDestination(for: DestinationMapRoute.self) { route in
                     PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
                 }
+                .navigationDestination(for: HomeCategoryRoute.self) { route in
+                    HomeCategoryListView(
+                        name: route.name,
+                        cards: route.name == HomeRowsView.nearbyRoute
+                            ? exploreCards
+                                .filter { ($0.distanceMeters ?? .max) <= HomeRowsView.localRadiusMeters }
+                                .sorted { ($0.distanceMeters ?? .max) < ($1.distanceMeters ?? .max) }
+                            : exploreCards.filter {
+                                HomeRowsView.categoryName($0) == route.name
+                                    && ($0.distanceMeters ?? 0) <= HomeRowsView.localRadiusMeters
+                            }
+                    )
+                }
                 .navigationDestination(for: String.self) { route in
                     stringDestination(route: route)
                 }
@@ -752,14 +767,8 @@ struct InicioView: View {
                     navPath = NavigationPath()
                     Task { await loadData(force: true, reason: "cancelado") }
                 }
-                .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        Image("BuddyLogo")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(height: 30)
-                    }
-                }
+                // El logo vive ahora dentro de la portada del Home.
+                .toolbar(.hidden, for: .navigationBar)
                 .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
                     guard note.object as? Int == AppTab.inicio.rawValue else { return }
                     if !navPath.isEmpty { navPath = NavigationPath() }
@@ -824,14 +833,14 @@ struct InicioView: View {
                         // misma animación de ida y vuelta, y el bloque de la
                         // foto se encogía y crecía desde una esquina. Un
                         // esqueleto quieto también se lee mejor.
-                        CategoryPickerView(isSkeleton: true, hidesCategoryGrid: true) { _, _ in }
+                        HomeRowsSkeleton()
                             .padding(.horizontal, -Spacing.edge)
                     } else {
                         homeComposer
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
-                .padding(.top, mostrandoEsqueleto || homeComposerHasHeaderRow ? Spacing.md : 0)
+                .padding(.top, mostrandoEsqueleto ? Spacing.md : 0)
                 // El composer ocupa el alto libre: dentro, el carrusel es lo
                 // único elástico, así que el sobrante va a la foto y el botón
                 // se queda donde debe.
@@ -927,71 +936,48 @@ struct InicioView: View {
             ?? ChatStore.ConnectionItem(match: match, lastMessage: nil, unreadCount: 0)
     }
 
-    @ViewBuilder private var homeComposer: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            if let activeJrn = effectiveTripJourney {
-                let activeDest = activeJrn.destination?.name ?? activeJrn.place?.name
-                CategoryPickerView(
-                    buddyCount: homeBuddyCount,
-                    destinationName: activeDest,
-                    onDestinationTap: { navPath.append(activeJrn) },
-                    activeBuddyName: activeBuddyFirstName,
-                    activeBuddyAvatarUrl: activeBuddyAvatarUrl,
-                    communityContext: homeCommunityContext,
-                    placeCards: exploreCards,
-                    discoverLat: feedLat,
-                    discoverLng: feedLng,
-                    hidesCategoryGrid: true,
-                    activeBuddySubtitle: activeBuddyLastMessage,
-                    activeBuddyHasUnread: activeBuddyHasUnread,
-                    searchingCategoryKey: openRequest?.category,
-                    onOpenBuddyChat: openAssignedBuddyChat,
-                    onOpenPlace: { navPath.append($0) },
-                    isLoading: isFindingBuddy,
-                    onStartConversation: startConversationFromHome,
-                    reshuffleToken: reshuffleToken
-                ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
-                .padding(.horizontal, -Spacing.edge)
-                .opacity(isFindingBuddy ? 0.5 : 1)
-                .disabled(isFindingBuddy)
+    /// Home Villa Rica (19 Nov 2026): filas horizontales por categoría, con
+    /// la paleta Forest & Terracotta. Inspiración: filas tipo catálogo, pero
+    /// SIN rankings, sin "Top 10" y sin "porque viste": dentro de cada fila el
+    /// orden rota (reshuffleToken). "Cerca de ti" sí va por distancia, que es
+    /// un dato, no una preferencia.
+    /// Portada del Home: la foto del destino resuelto (Villa Rica ya tiene la
+    /// suya en la base). Si no hay, la foto del lugar más cercano.
+    /// Nunca la foto de un negocio: si el destino no tiene portada, la
+    /// portada es el verde de la marca.
+    private var heroImageUrl: String? {
+        guard let id = resolvedLocation?.destinationId else { return nil }
+        if let url = heroDestination?.coverUrl, !url.isEmpty { return url }
+        if let url = destinations.first(where: { $0.id == id })?.coverUrl, !url.isEmpty { return url }
+        return nil
+    }
 
-                // La card de buddy asignado es del trip ACTIVO con match — si el
-                // trip elegido en el selector es otro (ej: Villa Rica, planning,
-                // sin match), no aplica acá.
-                // "¿Vas a viajar?" solo aplica sin trip — se omite en este contexto.
-            } else {
-                if effectiveHomeContext == nil {
-                    // Case 4: ni GPS ni trip — flujo de permisos/registro existente.
-                    locationContext
-                }
-                CategoryPickerView(
-                    buddyCount: homeBuddyCount,
-                    destinationName: resolvedLocation?.destinationName ?? locationService.currentCity,
-                    onDestinationTap: resolvedLocation == nil ? nil : openResolvedDestinationMap,
-                    activeBuddyName: activeBuddyFirstName,
-                    activeBuddyAvatarUrl: activeBuddyAvatarUrl,
-                    communityContext: homeCommunityContext,
-                    placeCards: exploreCards,
-                    discoverLat: feedLat,
-                    discoverLng: feedLng,
-                    pioneerRequiresCategory: homeCommunityContext?.totalBuddies == 0,
-                    hidesCategoryGrid: true,
-                    activeBuddySubtitle: activeBuddyLastMessage,
-                    activeBuddyHasUnread: activeBuddyHasUnread,
-                    searchingCategoryKey: openRequest?.category,
-                    onOpenBuddyChat: openAssignedBuddyChat,
-                    onOpenPlace: { navPath.append($0) },
-                    isLoading: isFindingBuddy,
-                    onStartConversation: startConversationFromHome,
-                    reshuffleToken: reshuffleToken
-                ) { cat, desc in handleComposerRequest(category: cat, description: desc) }
-                .padding(.horizontal, -Spacing.edge)
-                .opacity(isFindingBuddy ? 0.5 : 1)
-                .disabled(isFindingBuddy)
-
-                // "¿Vas a viajar?" oculto por ahora en todos los casos.
-            }
+    /// Trae el destino resuelto por id: la lista corta (fetchDestinations, 5)
+    /// no siempre lo incluye y no trae el eslogan.
+    private func loadHeroCover() async {
+        guard let id = resolvedLocation?.destinationId, heroDestination?.id != id else { return }
+        if let dest = try? await APIClient.shared.fetchDestination(id: id) {
+            heroDestination = dest
         }
+    }
+
+    @ViewBuilder private var homeComposer: some View {
+        HomeRowsView(
+            cards: exploreCards,
+            placeName: resolvedLocation?.destinationName ?? locationService.currentCity,
+            reshuffleToken: reshuffleToken,
+            showsLocationPrompt: effectiveTripJourney == nil && effectiveHomeContext == nil,
+            locationPrompt: AnyView(locationContext),
+            activeBuddyName: activeBuddyFirstName,
+            activeBuddyHasUnread: activeBuddyHasUnread,
+            onOpenBuddyChat: openAssignedBuddyChat,
+            onOpenPlace: { navPath.append($0) },
+            onOpenCategory: { navPath.append(HomeCategoryRoute(name: $0)) },
+            heroImageUrl: heroImageUrl,
+            heroSlogan: heroDestination?.slogan
+        )
+        .padding(.horizontal, -Spacing.edge)
+        .task(id: resolvedLocation?.destinationId) { await loadHeroCover() }
     }
 
     @ViewBuilder private func stringDestination(route: String) -> some View {
@@ -3401,5 +3387,647 @@ struct RegisterTripSheet: View {
                 }
             }
         }
+    }
+}
+
+
+// MARK: – HOME VILLA RICA (filas)
+
+struct HomeCategoryRoute: Hashable {
+    let name: String
+}
+
+/// Inicio en filas horizontales. Reglas (villarica-ux-ui, villarica-ios):
+/// fondo blanco, verde solo en títulos y acción principal, etiquetas
+/// factuales, una fila por categoría SOLO con 3 o más lugares (las chicas se
+/// juntan en "Más para descubrir"), rotación neutral dentro de cada fila.
+struct HomeRowsView: View {
+    let cards: [APIPlaceCard]
+    let placeName: String?
+    let reshuffleToken: Int
+    let showsLocationPrompt: Bool
+    let locationPrompt: AnyView
+    let activeBuddyName: String?
+    let activeBuddyHasUnread: Bool
+    let onOpenBuddyChat: () -> Void
+    let onOpenPlace: (APIPlaceCard) -> Void
+    let onOpenCategory: (String) -> Void
+    /// Foto de portada del destino (la de Villa Rica que ya está en la base).
+    var heroImageUrl: String? = nil
+    /// Eslogan del destino (destination.slogan). Sin eslogan no hay frase.
+    var heroSlogan: String? = nil
+
+    @State private var query = ""
+    /// Cuánto subió la portada. Cuando la foto ya pasó, una franja tapa la
+    /// zona de la hora para que el contenido no se lea debajo de ella.
+    @State private var heroScroll: CGFloat = 0
+
+    /// Una fila por cada categoría con al menos un lugar en la zona (Keyla,
+    /// 19 Nov 2026: "Restaurantes y la lista de restaurantes, Tiendas y las
+    /// tiendas"). Antes la fila pedía 3 o más.
+    static let minRowItems = 1
+    /// Ruta de "Ver todos" en Cerca de ti (no es una categoría real).
+    static let nearbyRoute = "Cerca de ti"
+
+    /// Título de la fila en plural: "Restaurantes", "Tiendas".
+    static func rowTitle(_ category: String) -> String {
+        let n = category.lowercased()
+        switch n {
+        case "otro", "otros": return "Otros lugares"
+        case "hospedaje", "alojamiento", "naturaleza", "cultura", "transporte": return category
+        default: break
+        }
+        if n.hasSuffix("s") { return category }
+        if let last = n.last, "aeiouáéíóú".contains(last) { return category + "s" }
+        return category + "es"
+    }
+
+    private var searchResults: [APIPlaceCard] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return [] }
+        return local.filter {
+            $0.name.lowercased().contains(q) || ($0.category ?? "").lowercased().contains(q)
+        }
+    }
+
+    static func categoryName(_ card: APIPlaceCard) -> String {
+        let c = card.category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return c.isEmpty ? "Otros lugares" : c
+    }
+
+    /// Orden neutral: estable mientras no cambie el token, distinto en cada
+    /// re-tap de Inicio. No usa popularidad ni historial.
+    private func rotated(_ items: [APIPlaceCard]) -> [APIPlaceCard] {
+        items.sorted { a, b in
+            var ha = Hasher(); ha.combine(a.id); ha.combine(reshuffleToken)
+            var hb = Hasher(); hb.combine(b.id); hb.combine(reshuffleToken)
+            return ha.finalize() < hb.finalize()
+        }
+    }
+
+    /// Radio del Home: los lugares de otra ciudad (p. ej. Lima a 240 km) no
+    /// son "para descubrir" aquí. Sin distancia conocida se conservan.
+    static let localRadiusMeters = 30_000
+
+    /// Lugares de la zona. Si no hay ninguno cerca (otra ciudad, sin GPS), se
+    /// muestra todo para no dejar el Home vacío.
+    private var local: [APIPlaceCard] {
+        let near = cards.filter { ($0.distanceMeters ?? 0) <= Self.localRadiusMeters }
+        return near.isEmpty ? cards : near
+    }
+
+    private var nearby: [APIPlaceCard] {
+        Array(local.filter { $0.distanceMeters != nil }
+            .sorted { ($0.distanceMeters ?? .max) < ($1.distanceMeters ?? .max) }
+            .prefix(10))
+    }
+
+    private var groups: [(name: String, items: [APIPlaceCard])] {
+        let dict = Dictionary(grouping: local, by: Self.categoryName)
+        return dict.map { (name: $0.key, items: $0.value) }
+            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    private var bigGroups: [(name: String, items: [APIPlaceCard])] {
+        // "Otro" no es una categoría que alguien busque: sus lugares van al
+        // final, en "Más para descubrir" (Keyla, 19 Nov 2026).
+        groups.filter {
+            $0.items.count >= Self.minRowItems
+                && !["otro", "otros", "otros lugares"].contains($0.name.lowercased())
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    hero(topInset: geo.safeAreaInsets.top, width: geo.size.width)
+
+                    if !query.isEmpty {
+                        searchSection
+                    } else {
+                        if showsLocationPrompt {
+                            locationPrompt.padding(.horizontal, Spacing.edge)
+                        }
+                        if let name = activeBuddyName {
+                            buddyRow(name)
+                        }
+                        if cards.isEmpty {
+                            emptyState
+                        } else {
+                            if groups.count > 1 { quickCategories }
+                            if !nearby.isEmpty {
+                                row(title: "Cerca de ti", subtitle: "Lugares a pocos minutos",
+                                    items: nearby, large: true, category: Self.nearbyRoute, capsuleAction: true)
+                            }
+                            ForEach(bigGroups, id: \.name) { g in
+                                row(title: Self.rowTitle(g.name), subtitle: Self.rowSubtitle(g.name), items: rotated(g.items),
+                                    large: false, category: g.name, icon: CategoryIcon.symbol(for: g.name))
+                            }
+                            // Siempre al final: una mezcla de todos los lugares de
+                            // la zona, en orden rotativo.
+                            row(title: "Más para descubrir", subtitle: "Una selección de lugares de Villa Rica",
+                                items: rotated(local), large: false, category: nil)
+                        }
+                    }
+                }
+                .padding(.bottom, Spacing.lg)
+            }
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.immediately)
+            // La foto llega hasta arriba (detrás de la hora y la isla).
+            .ignoresSafeArea(edges: .top)
+            .overlay(alignment: .top) {
+                Color.canvas
+                    .frame(height: geo.safeAreaInsets.top)
+                    .ignoresSafeArea(edges: .top)
+                    .opacity(heroScroll < -200 ? 1 : 0)
+                    .animation(.easeOut(duration: 0.15), value: heroScroll < -200)
+                    .allowsHitTesting(false)
+            }
+            // El área segura que reserva ContentView para la barra flotante no
+            // llega a este ScrollView (probado en el simulador: el último lugar
+            // quedaba debajo), así que el Home reserva el alto de la barra aquí.
+            .contentMargins(.bottom, 96, for: .scrollContent)
+        }
+        .background(Color.canvas)
+    }
+
+    // ── Piezas ─────────────────────────────────────────────────────
+
+    /// Portada: foto de Villa Rica de borde a borde, logo, perfil, título y
+    /// el buscador montado sobre el borde inferior de la foto.
+    private func hero(topInset: CGFloat, width: CGFloat) -> some View {
+        let photoHeight: CGFloat = topInset + 190
+        return ZStack(alignment: .bottom) {
+            ZStack(alignment: .topLeading) {
+                Group {
+                    if let heroImageUrl {
+                        CachedImage(urlString: heroImageUrl) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: { Color.brand }
+                    } else {
+                        Color.brand
+                    }
+                }
+                // Ancho FIJO de la pantalla: con scaledToFill y maxWidth la foto
+                // empujaba el buscador y el botón de perfil fuera del borde.
+                .frame(width: width, height: photoHeight)
+                .clipped()
+                // Velo para que el texto blanco se lea sobre cualquier foto.
+                .overlay(Color.black.opacity(0.28))
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Image("BuddyLogoWhite")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 26)
+                            .accessibilityLabel("Buddy")
+                        Spacer()
+                    }
+                    Spacer(minLength: 0)
+                    Text(placeName ?? "Descubre")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    if let heroSlogan, !heroSlogan.isEmpty {
+                        Text(heroSlogan)
+                            .font(.system(.callout).weight(.medium))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .lineLimit(2)
+                            .padding(.top, 2)
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, topInset + 4)
+                .padding(.bottom, 46)
+                .frame(width: width, height: photoHeight)
+            }
+
+            searchField
+                .padding(.horizontal, Spacing.edge)
+                .frame(width: width)
+                .offset(y: 26)
+        }
+        .frame(width: width)
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in
+            heroScroll = y
+        }
+        .padding(.bottom, 26)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(Color.inkMuted)
+                .accessibilityHidden(true)
+            TextField("¿Qué quieres descubrir?", text: $query)
+                .font(BT.body)
+                .foregroundStyle(Color.ink)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Color.inkFaint)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Borrar búsqueda")
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+        .background(Color.surface, in: Capsule())
+        .shadow(color: .black.opacity(0.10), radius: 12, y: 4)
+    }
+
+    @ViewBuilder private var searchSection: some View {
+        if searchResults.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Sin resultados para \"\(query)\"")
+                    .font(BT.headline)
+                    .foregroundStyle(Color.ink)
+                Text("Prueba con otra palabra, como café o restaurante.")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            .padding(.horizontal, Spacing.edge)
+        } else {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
+                ForEach(searchResults) { card in
+                    Button { onOpenPlace(card) } label: {
+                        HomePlaceCard(card: card, large: false)
+                    }
+                    .buttonStyle(.pressable)
+                }
+            }
+            .padding(.horizontal, Spacing.edge)
+        }
+    }
+
+    /// "Explora por categoría": una tarjeta compacta (80 pt) por categoría que
+    /// existe en la zona. Sin sombra: superficie blanca sobre el fondo cálido.
+    private var quickCategories: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            rowHeader("Explora por categoría", category: nil)
+            ScrollView(.horizontal) {
+                HStack(spacing: 10) {
+                    ForEach(groups, id: \.name) { g in
+                        Button { onOpenCategory(g.name) } label: {
+                            VStack(spacing: 5) {
+                                CategoryIconBadge(category: g.name, diameter: 38)
+                                Text(g.name)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Color.ink)
+                                    .lineLimit(1)
+                            }
+                            .frame(minWidth: 80)
+                            .frame(height: 70)
+                            .padding(.horizontal, 8)
+                            .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.sm))
+                        }
+                        .buttonStyle(.pressable)
+                        .accessibilityLabel("Categoría \(g.name), \(g.items.count) lugares")
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    private func buddyRow(_ name: String) -> some View {
+        Button(action: onOpenBuddyChat) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tu buddy: \(name)")
+                        .font(BT.headline)
+                        .foregroundStyle(Color.ink)
+                    Text(activeBuddyHasUnread ? "Tienes un mensaje nuevo" : "Abrir conversación")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                if activeBuddyHasUnread {
+                    Circle().fill(Color.terracotta).frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted)
+                    .accessibilityHidden(true)
+            }
+            .padding(Spacing.md)
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.sm))
+            .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+        }
+        .buttonStyle(.pressable)
+        .padding(.horizontal, Spacing.edge)
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Todavía no hay lugares cerca")
+                .font(BT.headline)
+                .foregroundStyle(Color.ink)
+            Text("Cuando los negocios y lugares de la zona estén aprobados, aparecerán aquí.")
+                .font(BT.footnote)
+                .foregroundStyle(Color.inkMuted)
+        }
+        .padding(.horizontal, Spacing.edge)
+    }
+
+    /// Encabezado de sección. Con `icon`, una insignia cuadrada pale sage a la
+    /// izquierda; la acción "ver todo" es un círculo con flecha (filas de
+    /// categoría) o una cápsula "Ver todos" (Cerca de ti).
+    private func rowHeader(_ title: String, subtitle: String? = nil, category: String?,
+                           icon: String? = nil, capsuleAction: Bool = false) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 40, height: 40)
+                    .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(.title3).weight(.bold))
+                    .foregroundStyle(Color.ink)
+                    .accessibilityAddTraits(.isHeader)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if let category {
+                if capsuleAction {
+                    Button { onOpenCategory(category) } label: {
+                        HStack(spacing: 4) {
+                            Text("Ver todos")
+                            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+                        }
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.brand)
+                        .padding(.horizontal, 14)
+                        .frame(height: 34)
+                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                } else {
+                    Button { onOpenCategory(category) } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 36, height: 36)
+                            .background(Color.paleSage, in: Circle())
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                    .accessibilityLabel("Ver todo: \(title)")
+                }
+            }
+        }
+        .padding(.horizontal, Spacing.edge)
+    }
+
+    /// Subtítulo neutral por categoría (sin "los mejores": no hay rankings).
+    static func rowSubtitle(_ category: String) -> String? {
+        let n = category.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .init(identifier: "es"))
+        if n.contains("cafe") { return "Cafés para descubrir en Villa Rica" }
+        if n.contains("restaur") || n.contains("comida") { return "Gastronomía local cerca de ti" }
+        if n.contains("tienda") || n.contains("producto") { return "Productos de la zona" }
+        if n.contains("hosped") || n.contains("aloja") { return "Dónde quedarte" }
+        if n.contains("natur") { return "Paisajes y aire libre" }
+        if n.contains("cultur") { return "Historia y tradición" }
+        return nil
+    }
+
+    private func row(title: String, subtitle: String? = nil, items: [APIPlaceCard], large: Bool, category: String?,
+                     icon: String? = nil, capsuleAction: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            rowHeader(title, subtitle: subtitle, category: category, icon: icon, capsuleAction: capsuleAction)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 12) {
+                    ForEach(items) { card in
+                        Button { onOpenPlace(card) } label: {
+                            HomePlaceCard(card: card, large: large)
+                        }
+                        .buttonStyle(.pressable)
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+}
+
+/// Tarjeta con foto primero. Etiqueta factual (categoría) en blanco con texto
+/// gris; nombre en tinta; distancia solo en km (sin tiempos inventados).
+struct HomePlaceCard: View {
+    let card: APIPlaceCard
+    let large: Bool
+
+    /// Siempre 4:3: las filas se leen parejas aunque las fotos varíen.
+    private var width: CGFloat { large ? 264 : 168 }
+    private var height: CGFloat { width * 3 / 4 }
+
+    private var distanceText: String? {
+        guard let m = card.distanceMeters else { return nil }
+        if m < 1000 { return "A \(m) m" }
+        let km = Double(m) / 1000
+        return "A " + km.formatted(.number.precision(.fractionLength(1))) + " km"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CachedImage(urlString: card.coverUrl) { img in
+                img.resizable().scaledToFill()
+            }
+            .frame(width: width, height: height)
+            .clipped()
+            .overlay(alignment: .topLeading) {
+                // Distancia solo en "Cerca de ti" (las tarjetas grandes).
+                if large, let d = distanceText {
+                    HStack(spacing: 5) {
+                        LocationPinShape()
+                            .fill(Color.brand, style: FillStyle(eoFill: true))
+                            .frame(width: 11, height: 14)
+                            .accessibilityHidden(true)
+                        Text(d.replacingOccurrences(of: "A ", with: ""))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.ink)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color.surface, in: Capsule())
+                    .padding(10)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(card.name)
+                    .font(BT.headline)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                if let cat = card.category, !cat.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: CategoryIcon.symbol(for: cat))
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 16)
+                            .accessibilityHidden(true)
+                        Text(cat)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(width: width, alignment: .leading)
+        }
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+        .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// "Ver todo" de una categoría: lista vertical con las mismas tarjetas.
+struct HomeCategoryListView: View {
+    let name: String
+    let cards: [APIPlaceCard]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 18) {
+                ForEach(cards) { card in
+                    NavigationLink(value: card) {
+                        HomePlaceCard(card: card, large: false)
+                    }
+                    .buttonStyle(.pressable)
+                }
+            }
+            .padding(Spacing.edge)
+        }
+        .background(Color.canvas)
+        .navigationTitle(name)
+        .navigationBarTitleDisplayMode(.large)
+    }
+}
+
+/// Esqueleto del Home en filas: la misma silueta que el estado cargado
+/// (título, fila grande, fila de categorías) para que no salte al llegar.
+struct HomeRowsSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 6).frame(width: 160, height: 28)
+                RoundedRectangle(cornerRadius: 4).frame(width: 200, height: 14)
+            }
+            .padding(.horizontal, Spacing.edge)
+            ForEach(0..<2, id: \.self) { i in
+                VStack(alignment: .leading, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 4).frame(width: 120, height: 18)
+                        .padding(.horizontal, Spacing.edge)
+                    HStack(spacing: 12) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: Radius.sm)
+                                .frame(width: i == 0 ? 264 : 168, height: i == 0 ? 198 : 126)
+                        }
+                    }
+                    .padding(.horizontal, Spacing.edge)
+                }
+            }
+        }
+        .foregroundStyle(Color.groupedBg)
+        .padding(.top, Spacing.sm)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+        .accessibilityLabel("Cargando lugares")
+    }
+}
+
+// MARK: – ICONOS DE CATEGORÍA
+// Un solo sistema (19 Nov 2026): SF Symbols de contorno, mismo peso y mismo
+// tamaño óptico, forest sobre pale sage en un círculo de 44 pt. Ningún pin
+// genérico: cada símbolo dice qué ES el lugar. Mapa central: CategoryIcon.
+
+enum CategoryIcon {
+    /// Símbolo para un nombre de categoría (de la base o de Catálogo V1.0).
+    /// El orden importa: "Fincas cafetaleras" y "Tostadurías" se resuelven
+    /// antes que "Café".
+    static func symbol(for category: String) -> String {
+        let n = category.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .init(identifier: "es"))
+        let rules: [(keys: [String], symbol: String)] = [
+            (["finca"], "tree"),
+            (["tostad"], "flame"),
+            (["cafe"], "cup.and.saucer"),
+            (["restaur", "comida"], "fork.knife"),
+            (["hosped", "aloja", "hotel", "hostal"], "bed.double"),
+            (["tienda", "producto"], "bag"),
+            (["transport", "taxi", "alquiler", "vehicul"], "car"),
+            (["actividad", "guia", "tour", "aventura"], "figure.hiking"),
+            (["natur", "lago", "laguna", "catarat", "mirador", "sendero"], "leaf"),
+            (["cultur", "artes", "plaza", "comunidad", "museo"], "building.columns"),
+        ]
+        return rules.first { r in r.keys.contains { n.contains($0) } }?.symbol ?? "ellipsis"
+    }
+}
+
+/// Insignia de categoría: círculo pale sage de 44 pt con el símbolo en forest.
+/// Decorativa para VoiceOver: el botón que la contiene lleva la etiqueta.
+struct CategoryIconBadge: View {
+    let category: String
+    var diameter: CGFloat = 44
+
+    var body: some View {
+        Image(systemName: CategoryIcon.symbol(for: category))
+            .symbolRenderingMode(.monochrome)
+            .font(.system(size: diameter * 0.4, weight: .regular))
+            .imageScale(.medium)
+            .foregroundStyle(Color.brand)
+            .frame(width: diameter * 0.6, height: diameter * 0.6)
+            .frame(width: diameter, height: diameter)
+            .background(Color.paleSage, in: Circle())
+            .accessibilityHidden(true)
+    }
+}
+
+/// Pin de ubicación en gota (el de los mapas): SF Symbols no trae esta forma
+/// rellena con hueco, así que se dibuja. Se rellena con eoFill para el hueco.
+struct LocationPinShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let w = rect.width, h = rect.height
+        let r = w / 2
+        let center = CGPoint(x: rect.midX, y: rect.minY + r)
+        // Gota: arco superior y dos tangentes hasta la punta inferior.
+        p.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        p.addCurve(to: CGPoint(x: rect.minX, y: center.y),
+                   control1: CGPoint(x: rect.midX - w * 0.18, y: rect.maxY - h * 0.2),
+                   control2: CGPoint(x: rect.minX, y: center.y + r * 0.75))
+        p.addArc(center: center, radius: r, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
+        p.addCurve(to: CGPoint(x: rect.midX, y: rect.maxY),
+                   control1: CGPoint(x: rect.maxX, y: center.y + r * 0.75),
+                   control2: CGPoint(x: rect.midX + w * 0.18, y: rect.maxY - h * 0.2))
+        p.closeSubpath()
+        // Hueco central.
+        p.addEllipse(in: CGRect(x: center.x - r * 0.42, y: center.y - r * 0.42, width: r * 0.84, height: r * 0.84))
+        return p
     }
 }

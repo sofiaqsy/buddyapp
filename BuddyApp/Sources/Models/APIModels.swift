@@ -151,6 +151,8 @@ struct APIDestination: Decodable, Identifiable {
     let lng: Double
     let radiusMeters: Int?
     let coverUrl: String?
+    /// Frase corta del destino para el Inicio (migración 025). nil = sin frase.
+    var slogan: String? = nil
     let active: Bool
     let places: [APIPlace]?
     let howToGetThere: String?

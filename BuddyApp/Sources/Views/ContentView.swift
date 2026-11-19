@@ -6,20 +6,22 @@ import CoreLocation
 enum AppTab: Int, CaseIterable {
     case inicio, trips, conexiones, yo
 
+    // Iconos de la barra (19 Nov 2026): una sola familia SF Symbols que dice
+    // la función de cada tab — descubrir, viajes, conversaciones, perfil.
     var icon: String {
         switch self {
-        case .inicio:     return "house"
-        case .trips:      return "map"
-        case .conexiones: return "person.2"
-        case .yo:         return "person.crop.circle"
+        case .inicio:     return "safari"
+        case .trips:      return "suitcase"
+        case .conexiones: return "bubble.left.and.bubble.right"
+        case .yo:         return "person"
         }
     }
     var activeIcon: String {
         switch self {
-        case .inicio:     return "house.fill"
-        case .trips:      return "map.fill"
-        case .conexiones: return "person.2.fill"
-        case .yo:         return "person.crop.circle.fill"
+        case .inicio:     return "safari.fill"
+        case .trips:      return "suitcase.fill"
+        case .conexiones: return "bubble.left.and.bubble.right.fill"
+        case .yo:         return "person.fill"
         }
     }
     var label: String {
@@ -43,30 +45,22 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        // La barra de tabs es HERMANA del contenido, no una capa encima. Antes
-        // era un ZStack: el contenido ocupaba toda la pantalla y la barra se
-        // dibujaba sobre él, con un safeAreaInset fijo de 70 que intentaba
-        // compensar. La barra mide más que eso (suma el inset del indicador de
-        // inicio), así que tapaba el final de cada pantalla; con scroll se
-        // disimulaba y en una Home estática dejaba "Consultar a buddies"
-        // debajo. En un VStack la barra OCUPA su espacio y el contenido recibe
-        // exactamente lo que queda: sin números, lo reparte el layout.
-        VStack(spacing: 0) {
-            // Tab content — keep all views alive to preserve scroll/nav state
-            TabView(selection: $router.selectedTab) {
-                InicioView().tag(AppTab.inicio)
-                TripsView().tag(AppTab.trips)
-                ConexionesView().environmentObject(chatStore).tag(AppTab.conexiones)
-                YoView().environmentObject(authState).environmentObject(routeStore).tag(AppTab.yo)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Custom Liquid Glass tab bar
-            GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread)
+        // Barra FLOTANTE propia (aprobada por Keyla, 19 Nov 2026): cápsula
+        // sobre el contenido. El TabView no pasa un safeAreaInset a sus
+        // páginas, así que cada tab reserva el alto de la barra con
+        // safeAreaPadding y el último elemento nunca queda tapado.
+        TabView(selection: $router.selectedTab) {
+            InicioView().floatingTabBarSpace().tag(AppTab.inicio)
+            TripsView().floatingTabBarSpace().tag(AppTab.trips)
+            ConexionesView().environmentObject(chatStore).floatingTabBarSpace().tag(AppTab.conexiones)
+            YoView().environmentObject(authState).environmentObject(routeStore).floatingTabBarSpace().tag(AppTab.yo)
         }
-        // Solo el borde inferior: la barra dibuja su propio fondo sobre la zona
-        // del indicador de inicio (ya lleva ese inset en su padding).
-        .ignoresSafeArea(edges: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottom) {
+            GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread)
+                .padding(.horizontal, Spacing.edge)
+                .padding(.bottom, 4)
+        }
         // Sesión de cuenta verificada expirada (p. ej. tras reinstalar): pedir
         // login con la misma cuenta en vez de seguir como guest nuevo.
         .sheet(isPresented: $authState.sessionNeedsReauth) {
@@ -186,21 +180,19 @@ private struct RootViewEvents: ViewModifier {
     }
 }
 
+
+
 // MARK: – GLASS TAB BAR
-// Full-width Liquid Glass surface. Active tab: teal filled icon + label.
-// Inactive: muted icon, no label — keeps the bar quiet.
+// Floating capsule (Villa Rica, approved by Keyla 19 Nov 2026). Every tab
+// shows icon + label. The active tab sits on a soft forest pill.
+// Liquid Glass on iOS 26+, regular material before.
 
 struct GlassTabBar: View {
     @Binding var selection: AppTab
     var unreadChats: Int = 0
 
-    private var bottomInset: CGFloat {
-        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
-            .windows.first?.safeAreaInsets.bottom ?? 0
-    }
-
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             ForEach(AppTab.allCases, id: \.rawValue) { tab in
                 let active = selection == tab
                 let badge  = tab == .conexiones ? unreadChats : 0
@@ -213,17 +205,15 @@ struct GlassTabBar: View {
                         return
                     }
                     Haptic.select()
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                         selection = tab
                     }
                 } label: {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 3) {
                         ZStack(alignment: .topTrailing) {
                             Image(systemName: active ? tab.activeIcon : tab.icon)
-                                .font(.system(size: 20, weight: active ? .semibold : .regular))
-                                .foregroundStyle(active ? Color.brand : Color.tabBarInactive)
-                                .scaleEffect(active ? 1.05 : 1)
-                                .animation(.spring(response: 0.3, dampingFraction: 0.65), value: active)
+                                .font(.system(size: 19, weight: active ? .semibold : .regular))
+                                .frame(height: 22)
                                 .padding(.trailing, badge > 0 ? 10 : 0)
 
                             if badge > 0 {
@@ -237,15 +227,19 @@ struct GlassTabBar: View {
                                     .offset(x: 8, y: -5)
                             }
                         }
-
                         Text(tab.label)
-                            .font(BT.caption2)
-                            .foregroundStyle(active ? Color.teal : Color.inkMuted)
+                            .font(.system(size: 11, weight: active ? .semibold : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 8)
-                    .padding(.bottom, bottomInset + 2)
-                    .contentShape(Rectangle())
+                    .foregroundStyle(active ? Color.brand : Color.tabBarInactive)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background {
+                        if active {
+                            Capsule().fill(Color.brand.opacity(0.10))
+                        }
+                    }
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
@@ -254,6 +248,29 @@ struct GlassTabBar: View {
                 .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
             }
         }
-        .glassTabBar()
+        .padding(6)
+        .floatingTabBarSurface()
     }
+}
+
+private struct FloatingTabBarSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.glassEffect(.regular, in: Capsule())
+        } else {
+            content
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.border, lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.10), radius: 14, y: 6)
+        }
+    }
+}
+
+private extension View {
+    func floatingTabBarSurface() -> some View { modifier(FloatingTabBarSurface()) }
+}
+
+extension View {
+    /// Alto que ocupa la barra flotante (cápsula 62 + margen 4 + aire 10).
+    func floatingTabBarSpace() -> some View { safeAreaPadding(.bottom, 76) }
 }
