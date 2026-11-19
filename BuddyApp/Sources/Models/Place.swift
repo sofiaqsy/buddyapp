@@ -17,6 +17,9 @@ struct Place: Identifiable, Codable {
     /// que casi siempre llega vacío y caía en .culture: por eso todos los pines
     /// del mapa salían con el mismo icono de columnas.
     var categoryIcon: String? = nil
+    /// Nombre de la categoría (spot_category.name, Catálogo V1.0): lo usa la
+    /// ficha para el ícono y la línea "categoría" igual que en Inicio.
+    var categoryName: String? = nil
     let latitude: Double
     let longitude: Double
     let radiusMeters: Double

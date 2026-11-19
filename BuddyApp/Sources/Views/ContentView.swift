@@ -59,7 +59,9 @@ struct RootView: View {
         .overlay(alignment: .bottom) {
             GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread)
                 .padding(.horizontal, Spacing.edge)
-                .padding(.bottom, 4)
+                // Un poco más abajo, dentro de la zona del indicador de inicio
+                // (Keyla, 19 Nov 2026); el indicador sigue visible debajo.
+                .offset(y: 16)
         }
         // Sesión de cuenta verificada expirada (p. ej. tras reinstalar): pedir
         // login con la misma cuenta en vez de seguir como guest nuevo.

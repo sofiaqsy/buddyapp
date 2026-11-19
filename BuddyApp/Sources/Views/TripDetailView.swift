@@ -15,6 +15,11 @@ struct TripDetailView: View {
     /// tarjeta que abrió este mapa. Sin esto, se entra al mapa completo del
     /// destino sin foco, y hay que buscar el pin entre todos los demás.
     var focusPlaceId: String? = nil
+    /// Abierto desde una categoría de Inicio ("Productos locales"): el mapa y
+    /// el carril muestran solo esos lugares. El usuario puede quitar el filtro.
+    var categoryFilter: String? = nil
+    @State private var filterCleared = false
+    private var activeFilter: String? { filterCleared ? nil : categoryFilter }
     @EnvironmentObject var locationService: LocationService
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var router: AppRouter
@@ -44,7 +49,8 @@ struct TripDetailView: View {
     /// de un área ya cargada no necesita red: los lugares ya están en memoria.
     @State private var fetchedBounds: SpotBounds? = nil
 
-    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil, focusPlaceId: String? = nil) {
+    init(route: Route, match: APIMatch? = nil, journey: APIJourney? = nil, unreadCount: Int = 0, destinationId: String? = nil, focusPlaceId: String? = nil, categoryFilter: String? = nil) {
+        self.categoryFilter = categoryFilter
         self.route = route
         self.match = match
         self.journey = journey
@@ -87,7 +93,9 @@ struct TripDetailView: View {
     private var livePlaces: [Place] {
         let propios = routeStore.route.places
         let ids = Set(propios.map(\.id))
-        return propios + boundsPlaces.filter { !ids.contains($0.id) }
+        let todos = propios + boundsPlaces.filter { !ids.contains($0.id) }
+        guard let filtro = activeFilter else { return todos }
+        return todos.filter { $0.categoryName == filtro }
     }
     /// Orden: favoritos primero, luego featured, luego alfabético
     private var sortedPlaces: [Place] {
@@ -184,19 +192,30 @@ struct TripDetailView: View {
         }
     }
 
-    private let sheetHeight: CGFloat = 265
+    /// Alto del panel con la lista: título + carril de tarjetas, sin franja
+    /// vacía debajo (antes 265 dejaba un hueco blanco al cerrar un lugar).
+    private let sheetHeight: CGFloat = 210
     /// Alto del panel con el detalle de un lugar. Menos que sheetHeight porque
     /// ahí no hay tarjetas: nombre, presencia, pestañas y una fila de fotos.
     /// Es el alto de ese contenido, medido en pantalla; las pestañas más largas
     /// (Info, Buddies) se desplazan por dentro, como ya hacían.
     private let detalleHeight: CGFloat = 246
     private let contentHeight: CGFloat = 160
-    /// Antes la tab bar FLOTABA sobre el contenido, así que el panel se
-    /// extendía por debajo de ella para que no asomara el mapa. Desde que la
-    /// barra ocupa su propio espacio en el layout (ver RootView), el panel ya
-    /// termina justo encima: ese colchón solo dejaba una franja vacía debajo
-    /// de las fotos.
-    private let bottomClearance: CGFloat = 0
+    /// La tab bar vuelve a FLOTAR sobre el contenido (cápsula, 19 Nov 2026):
+    /// el panel se extiende por debajo de ella para que las fotos queden por
+    /// encima de la cápsula y no tapadas.
+    private let bottomClearance: CGFloat = 76
+    /// Ya se mostró el lugar con el que se abrió el mapa (focusPlaceId). Al
+    /// cerrarlo, el panel pasa al alto de la lista; sin esto se quedaba con el
+    /// alto del detalle y dejaba una franja blanca bajo las tarjetas.
+    @State private var focusHandled = false
+
+    /// Alto actual del panel (lista o detalle). Lo usan el panel y el botón de
+    /// "mi ubicación", que debe quedar siempre por encima del panel.
+    private var panelHeight: CGFloat {
+        (selectedPlace != nil || (focusPlaceId != nil && !focusHandled)
+            ? detalleHeight : sheetHeight) + bottomClearance
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -305,6 +324,9 @@ struct TripDetailView: View {
                 // buddyActive solo true cuando hay confirmación explícita (buddyCount > 0, match activo o mensajes sin leer).
                 // Mientras buddyCount es nil (cargando) → deshabilitado por defecto para evitar tap prematuro.
                 let buddyActive = (buddyCount ?? 0) > 0 || match != nil || unreadCount > 0
+                // Villa Rica V1: solo "mi ubicación". Buddy y QR quedan en el
+                // código, ocultos, hasta que vuelvan a tener sentido.
+                if HomeRowsView.showsBuddyTools {
                 VStack(spacing: 0) {
                     ZStack(alignment: .topTrailing) {
                         MapIconButton(icon: "person.wave.2.fill") {
@@ -334,10 +356,12 @@ struct TripDetailView: View {
                 .frame(width: 44)
                 .glassRounded(14)
                 .mapControlShadow()
+                }
             }
             .frame(width: 44)
             .padding(.trailing, 16)
-            .padding(.bottom, sheetHeight + bottomClearance + 42)
+            .padding(.bottom, panelHeight + 52)
+            .animation(.easeInOut(duration: 0.25), value: panelHeight)
         }
     }
 
@@ -511,7 +535,7 @@ struct TripDetailView: View {
                 )
             } else {
             // Presencia humana — el corazón de Buddy, antes que los lugares
-            if let presence = buddyPresenceText {
+            if HomeRowsView.showsBuddyTools, let presence = buddyPresenceText {
                 HStack(spacing: 7) {
                     Circle().fill(Color.onlineGreen).frame(width: 7, height: 7)
                     Text(presence)
@@ -543,7 +567,8 @@ struct TripDetailView: View {
                         .padding(.horizontal, 20)
                         .padding(.top, 14)
 
-                    // — Fila accionable estilo Apple Maps
+                    // — Fila accionable estilo Apple Maps (herramienta de buddies)
+                    if HomeRowsView.showsBuddyTools {
                     Button {
                         router.switchTo(.yo)
                     } label: {
@@ -574,15 +599,54 @@ struct TripDetailView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    }
                 }
             } else {
-                Text("Recomendado por buddies")
-                    .font(BT.title2)
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 6)
-                    .padding(.bottom, 8)
+                // Mismo encabezado que las secciones de Inicio.
+                HStack(alignment: .center, spacing: 12) {
+                    if let filtro = activeFilter {
+                        Image(systemName: CategoryIcon.symbol(for: filtro))
+                            .font(.system(size: 17))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 38, height: 38)
+                            .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 11))
+                            .accessibilityHidden(true)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(activeFilter ?? "Lugares en esta zona")
+                            .font(.system(.title3).weight(.bold))
+                            .foregroundStyle(Color.ink)
+                            .lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
+                        Text(activeFilter == nil
+                             ? "Toca uno para ver fotos e información"
+                             : (livePlaces.count == 1 ? "1 lugar en el mapa" : "\(livePlaces.count) lugares en el mapa"))
+                            .font(BT.footnote)
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    Spacer(minLength: 8)
+                    if activeFilter != nil {
+                        Button {
+                            Haptic.select()
+                            withAnimation(.easeInOut(duration: 0.2)) { filterCleared = true }
+                        } label: {
+                            Text("Ver todos")
+                                .font(BT.footnoteBold)
+                                .foregroundStyle(Color.brand)
+                                .padding(.horizontal, 12)
+                                .frame(height: 32)
+                                .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.pressable)
+                        .accessibilityLabel("Ver todos los lugares")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 10)
             }
 
             cardScroll
@@ -602,12 +666,21 @@ struct TripDetailView: View {
         // segundo después bajaba a su sitio.
         .frame(
             width: geo.size.width,
-            height: selectedPlace == nil && focusPlaceId == nil
-                ? sheetHeight + bottomClearance : detalleHeight,
+            height: panelHeight,
             alignment: .top,
         )
-        .glassPanel()
+        // Superficie blanca sólida con esquinas superiores redondeadas, como las
+        // tarjetas de Inicio: el mapa ya no se transparenta detrás del texto.
+        .background(
+            UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22)
+                .fill(Color.surface)
+                .shadow(color: .black.opacity(0.08), radius: 12, y: -2)
+                .ignoresSafeArea(edges: .bottom)
+        )
         .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
+        .onChange(of: selectedPlace?.id) { _, id in
+            if id != nil { focusHandled = true }
+        }
     }
 
     // MARK: – Card scroll
@@ -830,7 +903,10 @@ struct RecommendationPin: View {
     /// El icono de su categoría cuando el lugar lo trae; si no, el genérico de
     /// la categoría gruesa. Sin esto todos los pines eran el mismo: place_type
     /// casi nunca llega y todo caía en "cultura" (las columnas).
-    private var glyph: String { place.categoryIcon ?? place.category.symbol }
+    private var glyph: String {
+        if let n = place.categoryName { return CategoryIcon.symbol(for: n) }
+        return place.categoryIcon ?? place.category.symbol
+    }
 
     var body: some View {
         if place.featured {
@@ -872,12 +948,12 @@ struct RecommendationPin: View {
                 Circle()
                     .fill(Color.surface)
                     .frame(width: isSelected ? 40 : 33, height: isSelected ? 40 : 33)
-                    .overlay(Circle().strokeBorder(Color.teal.opacity(isSelected ? 0.9 : 0.3),
-                                                   lineWidth: isSelected ? 2 : 1.25))
+                    .overlay(Circle().strokeBorder(isSelected ? Color.terracotta : Color.brand.opacity(0.3),
+                                                   lineWidth: isSelected ? 2.5 : 1.25))
                     .shadow(color: .black.opacity(0.18), radius: isSelected ? 8 : 3, y: 1.5)
                 Image(systemName: glyph)
-                    .font(.system(size: isSelected ? 17 : 14, weight: .semibold))
-                    .foregroundStyle(Color.teal)
+                    .font(.system(size: isSelected ? 17 : 14, weight: .regular))
+                    .foregroundStyle(Color.brand)
             }
             .overlay(alignment: .topTrailing) { if place.isCollected { collectedBadge } }
 
@@ -930,56 +1006,43 @@ struct PlacePhotoCard: View {
         [Color(hex: "5C3E1A"), Color(hex: "8B6428")],
     ]
 
+    /// Mismo estilo que las tarjetas de Inicio (HomePlaceCard): foto 4:3,
+    /// nombre y la categoría con su ícono en un pie blanco. Sin "Top": no hay
+    /// rankings en Villa Rica.
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .bottom) {
-                // Photo or gradient fallback
-                CachedImage(urlString: place.coverUrl) { img in
-                    img.resizable().scaledToFill()
-                        .frame(width: 145, height: fotoAlto)
-                        .clipped()
-                } placeholder: {
-                    gradientFallback
-                        .frame(width: 145, height: fotoAlto)
-                }
-                .frame(width: 145, height: fotoAlto)
-                .clipped()
+            CachedImage(urlString: place.coverUrl) { img in
+                img.resizable().scaledToFill()
+            } placeholder: { Color.groupedBg }
+            .frame(width: 150, height: 112)
+            .clipped()
 
-                // Scrim + emoji overlay
-                LinearGradient(colors: [.clear, .black.opacity(0.4)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 40)
-
-                if place.isCollected {
-                    Color.teal.opacity(0.7).frame(height: 2).frame(maxHeight: .infinity, alignment: .bottom)
-                }
-
-                // Top de la comunidad — mismo eje que el marker featured
-                if place.featured {
-                    HStack(spacing: 3) {
-                        Image(systemName: "star.fill").font(.system(size: 8, weight: .bold))
-                        Text("Top").font(.system(size: 9, weight: .bold))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(place.name)
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(1)
+                if let cat = place.categoryName {
+                    HStack(spacing: 5) {
+                        Image(systemName: CategoryIcon.symbol(for: cat))
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.brand)
+                            .accessibilityHidden(true)
+                        Text(cat)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
                     }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(Capsule().fill(Color.teal))
-                    .padding(6)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-
             }
-            .frame(height: fotoAlto)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(place.name).font(.system(size: 12, weight: .bold)).foregroundStyle(.primary)
-                Text(place.description).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(width: 150, alignment: .leading)
         }
-        .frame(width: 145)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .glassRounded(14)
-        .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+        .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
+        .accessibilityElement(children: .combine)
     }
 
     private var gradientFallback: some View {
@@ -1039,7 +1102,9 @@ struct PlaceGuideDetailSheet: View {
     let onClose: () -> Void
 
     private enum Tab: String, CaseIterable {
-        case fotos = "Fotos", info = "Info", buddies = "Buddies"
+        case fotos = "Fotos", info = "Información", buddies = "Buddies"
+        /// Pestañas visibles: Buddies queda oculta en Villa Rica V1.
+        static var visible: [Tab] { HomeRowsView.showsBuddyTools ? allCases : [.fotos, .info] }
         var icon: String {
             switch self {
             case .fotos:   return "photo.on.rectangle"
@@ -1123,16 +1188,19 @@ struct PlaceGuideDetailSheet: View {
         // aquí puede darse el lujo de respirar como en una hoja aparte.
         VStack(alignment: .leading, spacing: 0) {
             header
-            if let buddyPresenceText {
+            if let cat = place.categoryName {
                 HStack(spacing: 6) {
-                    Circle().fill(Color.onlineGreen).frame(width: 6, height: 6)
-                    Text(buddyPresenceText)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.primary)
+                    Image(systemName: CategoryIcon.symbol(for: cat))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.brand)
+                        .accessibilityHidden(true)
+                    Text(cat)
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 3)
+                .padding(.top, 4)
             }
 
             tabBar
@@ -1225,32 +1293,44 @@ struct PlaceGuideDetailSheet: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
             Text(place.name)
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+                .font(.system(.title3).weight(.bold))
+                .foregroundStyle(Color.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
 
             Button {
                 Haptic.light()
                 onNavigate()
             } label: {
-                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.inkInverse)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.brand))
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.turn.up.right.circle")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Cómo llegar")
+                        .font(BT.footnoteBold)
+                }
+                .foregroundStyle(Color.inkInverse)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(Capsule().fill(Color.brand))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
             .accessibilityLabel("Cómo llegar a \(place.name)")
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.secondary.opacity(0.12)))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.paleSage))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
+            .accessibilityLabel("Cerrar")
         }
         .padding(.horizontal, 20)
     }
@@ -1262,7 +1342,7 @@ struct PlaceGuideDetailSheet: View {
     // de cada pestaña, no compitiendo aquí arriba.
     private var tabBar: some View {
         HStack(spacing: 0) {
-            ForEach(Tab.allCases, id: \.self) { t in
+            ForEach(Tab.visible, id: \.self) { t in
                 Button {
                     Haptic.select()
                     tab = t
@@ -1425,9 +1505,25 @@ struct PlaceGuideDetailSheet: View {
 
     private var infoTab: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(place.category.label, systemImage: place.category.symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.brand)
+            ForEach([("Horario", "clock"), ("Precios", "tag"), ("Contacto", "phone")], id: \.0) { row in
+                HStack(spacing: 10) {
+                    Image(systemName: row.1)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.brand)
+                        .frame(width: 30, height: 30)
+                        .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 9))
+                        .accessibilityHidden(true)
+                    Text(row.0)
+                        .font(BT.footnoteBold)
+                        .foregroundStyle(Color.ink)
+                    Spacer()
+                    // Sin datos del negocio todavía: nunca se inventan.
+                    Text("Por confirmar")
+                        .font(BT.caption1)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                .accessibilityElement(children: .combine)
+            }
 
             if !place.description.isEmpty {
                 Text(place.description)
@@ -1437,12 +1533,14 @@ struct PlaceGuideDetailSheet: View {
 
             Divider()
 
+            if HomeRowsView.showsBuddyTools {
             if place.isCollected {
                 Label("Ya desbloqueaste el recuerdo de este lugar", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.teal)
             } else {
                 Label("Aquí desbloqueas un recuerdo", systemImage: "sparkles")
                     .font(.system(size: 13)).foregroundStyle(Color.sand)
+            }
             }
         }
         .padding(.horizontal, 20)

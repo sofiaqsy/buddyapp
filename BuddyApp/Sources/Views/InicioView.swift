@@ -685,17 +685,22 @@ struct InicioView: View {
                     PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
                 }
                 .navigationDestination(for: HomeCategoryRoute.self) { route in
-                    HomeCategoryListView(
-                        name: route.name,
-                        cards: route.name == HomeRowsView.nearbyRoute
-                            ? exploreCards
-                                .filter { ($0.distanceMeters ?? .max) <= HomeRowsView.localRadiusMeters }
-                                .sorted { ($0.distanceMeters ?? .max) < ($1.distanceMeters ?? .max) }
-                            : exploreCards.filter {
-                                HomeRowsView.categoryName($0) == route.name
+                    // Categorías y "Cerca de ti → Ver todos" abren el MAPA
+                    // (Keyla, 19 Nov 2026): con filtro de categoría, o todos
+                    // los lugares de la zona para Cerca de ti.
+                    if let destId = resolvedLocation?.destinationId {
+                        PlaceGuideMapSheet(destinationId: destId,
+                                           name: route.name,
+                                           categoryFilter: route.name == HomeRowsView.nearbyRoute ? nil : route.name)
+                    } else {
+                        HomeCategoryListView(
+                            name: route.name,
+                            cards: exploreCards.filter {
+                                (route.name == HomeRowsView.nearbyRoute || HomeRowsView.categoryName($0) == route.name)
                                     && ($0.distanceMeters ?? 0) <= HomeRowsView.localRadiusMeters
                             }
-                    )
+                        )
+                    }
                 }
                 .navigationDestination(for: String.self) { route in
                     stringDestination(route: route)
@@ -2512,8 +2517,11 @@ struct PlaceGuideMapSheet: View {
     /// true en una vista EMPUJADA, así que no distingue los dos casos —ese
     /// intento dejó la X exactamente donde estaba.
     let muestraCerrar: Bool
+    /// Solo los lugares de esta categoría (abierto desde Inicio).
+    var categoryFilter: String? = nil
 
-    init(destinationId: String?, focusPlaceId: String? = nil, name: String, lat: Double? = nil, lng: Double? = nil, muestraCerrar: Bool = false) {
+    init(destinationId: String?, focusPlaceId: String? = nil, name: String, lat: Double? = nil, lng: Double? = nil, muestraCerrar: Bool = false, categoryFilter: String? = nil) {
+        self.categoryFilter = categoryFilter
         self.destinationId = destinationId
         self.focusPlaceId  = focusPlaceId
         self.name          = name
@@ -2541,7 +2549,8 @@ struct PlaceGuideMapSheet: View {
             case .guideAvailable:
                 // TripDetailView ya trae su propio botón de volver (chevron
                 // flotante sobre el mapa) — no hace falta agregar otro.
-                TripDetailView(route: routeStore.route, destinationId: destinationId, focusPlaceId: focusPlaceId)
+                TripDetailView(route: routeStore.route, destinationId: destinationId, focusPlaceId: focusPlaceId,
+                               categoryFilter: categoryFilter)
                     .environmentObject(routeStore)
             case .noGuide(let lat, let lng):
                 MapPinView(name: name, lat: lat, lng: lng, span: 0.003)
@@ -3426,6 +3435,9 @@ struct HomeRowsView: View {
     /// 19 Nov 2026: "Restaurantes y la lista de restaurantes, Tiendas y las
     /// tiendas"). Antes la fila pedía 3 o más.
     static let minRowItems = 1
+    /// Herramientas de BuddyApp (buddies, QR, recuerdos) que Villa Rica V1 no
+    /// muestra. Un solo interruptor para volver a encenderlas.
+    static let showsBuddyTools = false
     /// Ruta de "Ver todos" en Cerca de ti (no es una categoría real).
     static let nearbyRoute = "Cerca de ti"
 
