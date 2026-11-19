@@ -3437,7 +3437,7 @@ struct HomeRowsView: View {
         case "hospedaje", "alojamiento", "naturaleza", "cultura", "transporte": return category
         default: break
         }
-        if n.hasSuffix("s") { return category }
+        if n.hasSuffix("s") || n.contains(" y ") { return category }
         if let last = n.last, "aeiouáéíóú".contains(last) { return category + "s" }
         return category + "es"
     }
@@ -3983,6 +3983,10 @@ enum CategoryIcon {
             (["transport", "taxi", "alquiler", "vehicul"], "car"),
             (["actividad", "guia", "tour", "aventura"], "figure.hiking"),
             (["natur", "lago", "laguna", "catarat", "mirador", "sendero"], "leaf"),
+            (["recreat", "jardin", "parque"], "sun.max"),
+            (["industria", "maquin"], "gearshape"),
+            (["alquiler"], "key"),
+            (["evento", "festiv"], "calendar"),
             (["cultur", "artes", "plaza", "comunidad", "museo"], "building.columns"),
         ]
         return rules.first { r in r.keys.contains { n.contains($0) } }?.symbol ?? "ellipsis"
