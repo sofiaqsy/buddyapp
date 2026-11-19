@@ -128,7 +128,7 @@ struct TripConfirmView: View {
                         if isActivating {
                             ProgressView().tint(.black).scaleEffect(0.8)
                         } else {
-                            Image(systemName: "mappin.circle.fill")
+                            LocationPin(size: 18)
                                 .font(.system(size: 16))
                         }
                         Text("Ya llegué")
@@ -174,7 +174,7 @@ struct TripConfirmView: View {
     @ViewBuilder
     private func glassChip(icon: String, text: String) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: icon)
+            AppIcon(name: icon, size: 11)
                 .font(.system(size: 11))
             Text(text)
                 .font(BT.caption1)
@@ -189,7 +189,7 @@ struct TripConfirmView: View {
     @ViewBuilder
     private func glassStep(icon: String, text: String) -> some View {
         HStack(spacing: Spacing.md) {
-            Image(systemName: icon)
+            AppIcon(name: icon, size: 14)
                 .font(.system(size: 14))
                 .foregroundStyle(.white.opacity(0.6))
                 .frame(width: 24)

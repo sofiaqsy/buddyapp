@@ -649,7 +649,7 @@ struct ContactarBuddyView: View {
                 // Si es un flujo pioneer (desde home sin buddies), navegar a Tu trip
                 if initialRequest != nil {
                     dismiss()
-                    await MainActor.run { router.switchTo(.trips) }
+                    await MainActor.run { router.openMyTrips() }
                 } else {
                     phase = .error("No encontramos un buddy disponible en este momento. Intenta de nuevo en unos minutos.")
                 }
@@ -2430,7 +2430,7 @@ struct CategoryCardBubble: View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.brand.opacity(0.12))
+                    .fill(Color.paleSage)
                     .frame(width: 42, height: 42)
                 Image(systemName: info.icon)
                     .font(.system(size: 17, weight: .medium))
@@ -2451,8 +2451,8 @@ struct CategoryCardBubble: View {
         }
         .padding(14)
         .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
         .frame(maxWidth: 260, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(isMe ? "Pedí ayuda con" : "Pide ayuda con") \(info.label): \(info.subtitle)")
@@ -3348,7 +3348,7 @@ struct BuddyChatView: View {
         // no: "Tortuga Azul" funciona como nombre propio y en minúscula se lee
         // como una cosa, no como alguien.
         if let real = person?.fullName?.trimmingCharacters(in: .whitespacesAndNewlines), !real.isEmpty {
-            return real.components(separatedBy: " ").first?.lowercased() ?? real
+            return real.components(separatedBy: " ").first?.capitalized ?? real
         }
         return TravelerAlias.alias(for: otherPersonId)
     }
@@ -3463,13 +3463,14 @@ struct BuddyChatView: View {
                  ? "Estás acompañando a \(buddyName). Respóndele con calma; cuando todo esté resuelto, cierra el apoyo."
                  : "\(buddyName) está dedicado solo a ti. Cierra el ciclo cuando termines para que pueda ayudar a otro viajero.")
                 .font(BT.caption1)
-                .foregroundStyle(Color.inkMuted)
+                .foregroundStyle(Color.brand)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Spacing.edge)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.canvas)
-                .overlay(alignment: .bottom) { Divider().opacity(0.5) }
+                .background(Color.sageTint, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, Spacing.edge)
+                .padding(.top, 10)
 
             // ── Messages ─────────────────────────────────────────────
             ScrollViewReader { proxy in
@@ -3589,7 +3590,7 @@ struct BuddyChatView: View {
                             .foregroundStyle(Color.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(Color.accentColor, in: Capsule())
+                            .background(Color.brand, in: Capsule())
                             .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
                         }
                         .padding(.bottom, 12)
@@ -3905,10 +3906,10 @@ struct BuddyChatView: View {
     private var closedBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(Color.teal)
-                .font(.system(size: 16))
-            Text("Conexión cerrada · gracias por usar buddy")
-                .font(BT.footnote)
+                .foregroundStyle(Color.brand)
+                .font(.system(size: 15))
+            Text("Conexión cerrada · gracias por usar Buddy")
+                .font(BT.subhead)
                 .foregroundStyle(Color.inkMuted)
         }
         .frame(maxWidth: .infinity)
@@ -4157,19 +4158,19 @@ struct BuddyChatView: View {
                 .padding(.bottom, Spacing.md)
 
             HStack(spacing: 0) {
-                attachOption(icon: "photo.fill", label: "Fotos", color: .purple) {
+                attachOption(icon: "photo", label: "Fotos", color: .brand) {
                     activeSheet = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showPhotoPicker = true }
                 }
-                attachOption(icon: "camera.fill", label: "Cámara", color: .brand) {
+                attachOption(icon: "camera", label: "Cámara", color: .brand) {
                     activeSheet = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activeSheet = .camera }
                 }
-                attachOption(icon: "location.fill", label: "Ubicación", color: .teal) {
+                attachOption(icon: "location", label: "Ubicación", color: .brand) {
                     activeSheet = nil
                     Task { await sendLocation() }
                 }
-                attachOption(icon: "map.fill", label: "Locaciones", color: .orange) {
+                attachOption(icon: "map", label: "Locaciones", color: .brand) {
                     activeSheet = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activeSheet = .placePicker }
                 }
@@ -4183,11 +4184,12 @@ struct BuddyChatView: View {
         Button(action: action) {
             VStack(spacing: 8) {
                 ZStack {
+                    // Misma insignia que Inicio: pale sage, ícono forest.
                     RoundedRectangle(cornerRadius: 16)
-                        .fill(color.opacity(0.15))
+                        .fill(Color.paleSage)
                         .frame(width: 58, height: 58)
                     Image(systemName: icon)
-                        .font(.system(size: 22, weight: .medium))
+                        .font(.system(size: 22, weight: .regular))
                         .foregroundStyle(color)
                 }
                 Text(label)
@@ -4277,7 +4279,7 @@ struct BuddyChatView: View {
         let prevSame = i > 0 && messages[i-1].senderId == msg.senderId
         BuddyMessageBubble(message: msg, isMe: isMe, onDismissSheet: { dismiss() })
             .equatable()  // skips body re-eval when message.id + isMe are unchanged
-            .padding(.bottom, prevSame ? 2 : 6)
+            .padding(.bottom, prevSame ? 4 : 12)
             .onAppear {
                 #if DEBUG
                 BuddyMessageBubble._appears += 1
@@ -4626,7 +4628,7 @@ struct BuddyMessageBubble: View {
                         imageBubble(url: url)
                         if let t = timeStr {
                             Text(t)
-                                .font(.system(size: 10, weight: .medium))
+                                .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(Color.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
@@ -4639,17 +4641,17 @@ struct BuddyMessageBubble: View {
                     categoryCard(content: content, isMe: isMe)
                     // Cards keep time below (compact)
                     if let t = timeStr {
-                        Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
+                        Text(t).font(.system(size: 11)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
                     }
                 } else if isPlace, let content = message.content {
                     placeCard(content: content)
                     if let t = timeStr {
-                        Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
+                        Text(t).font(.system(size: 11)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
                     }
                 } else if isLocation, let content = message.content {
                     locationCard(content: content)
                     if let t = timeStr {
-                        Text(t).font(.system(size: 10)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
+                        Text(t).font(.system(size: 11)).foregroundStyle(Color.inkMuted).padding(.horizontal, 2)
                     }
                 } else {
                     // Text bubble: time embedded inside, bottom-right
@@ -4662,45 +4664,37 @@ struct BuddyMessageBubble: View {
     }
 
     private func textBubble(timeStr: String?) -> some View {
-        // Time is injected as a trailing zero-width spacer trick:
-        // append invisible spacer = width of time label so the last text line
-        // never overlaps the time.
-        // +6 extra chars = ~4pt gap between last word and time label
-        let timeSpacer = timeStr.map { String(repeating: " ", count: $0.count + 6) } ?? ""
-        // .body real (17pt) y no BT.body (=16, alias de .callout): WhatsApp
-        // usa 17pt para el texto del mensaje y a ese lado se notaba chico.
-        // Solo acá, sin tocar BT.body: otras pantallas SÍ quieren 16.
-        let textoBurbuja = Font.system(.body)
-        return ZStack(alignment: .bottomTrailing) {
-            (Text(linkedText(message.content ?? ""))
-                .font(textoBurbuja)
-                .foregroundStyle(isMe ? Color.white : Color.ink)
-             + Text(timeSpacer).font(textoBurbuja))
-                .tint(isMe ? Color.white.opacity(0.85) : Color.teal)
-                .environment(\.openURL, OpenURLAction { url in
-                    UIApplication.shared.open(url)
-                    return .handled
-                })
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let t = timeStr {
-                Text(t)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(isMe ? Color.white.opacity(0.65) : Color.inkMuted)
-                    .padding(.bottom, 1)
+        // Restyle 19 Nov 2026 (Keyla): 16pt como el resto de la app, y la hora
+        // nunca se monta sobre el texto: si cabe va al lado, si no, debajo.
+        let fuente = Font.system(.callout)
+        let texto = Text(linkedText(message.content ?? ""))
+            .font(fuente)
+            .foregroundStyle(isMe ? Color.white : Color.ink)
+            .tint(isMe ? Color.white.opacity(0.85) : Color.brand)
+            .environment(\.openURL, OpenURLAction { url in
+                UIApplication.shared.open(url)
+                return .handled
+            })
+            .fixedSize(horizontal: false, vertical: true)
+        let hora = Text(timeStr ?? "")
+            .font(.system(size: 11))
+            .foregroundStyle(isMe ? Color.white.opacity(0.7) : Color.inkMuted)
+            .fixedSize()
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .lastTextBaseline, spacing: 8) {
+                texto.fixedSize()
+                if timeStr != nil { hora }
+            }
+            VStack(alignment: .trailing, spacing: 2) {
+                texto.frame(maxWidth: .infinity, alignment: .leading)
+                if timeStr != nil { hora }
             }
         }
-        // Un poco más de aire que antes (12/8/6 → 14/9/7), a la medida de
-        // WhatsApp: con el texto ya más grande, el margen viejo quedaba justo.
         .padding(.horizontal, 14)
-        .padding(.top, 9)
-        .padding(.bottom, 7)
-        .background(isMe ? Color.teal : Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(isMe ? Color.clear : Color.border, lineWidth: 1)
-        )
+        .padding(.vertical, 9)
+        .background(isMe ? Color.brand : Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(isMe ? 0 : 0.05), radius: 3, y: 1)
     }
 
     private func imageBubble(url: String) -> some View {
@@ -4717,49 +4711,8 @@ struct BuddyMessageBubble: View {
     }
 
     private func categoryCard(content: String, isMe: Bool = false) -> some View {
-        let key = String(content.dropFirst("category_card:".count))
-        let info: (icon: String, label: String, subtitle: String) = {
-            switch key {
-            case "transport":     return ("car.fill",            "Transporte",     "Rutas y movilidad")
-            case "food":          return ("cup.and.saucer.fill", "Comer",          "Restaurantes y sabores locales")
-            case "shopping":      return ("bag.fill",            "Compras",        "Productos locales")
-            case "translation":   return ("bubble.left.fill",    "Traducir",       "Frases, señales y más")
-            case "activities":    return ("figure.hiking",       "Actividades",    "Tours y experiencias")
-            case "accommodation": return ("bed.double.fill",     "Alojamiento",    "Hoteles y hospedajes")
-            case "emergency":     return ("shield.fill",         "Seguridad",      "Emergencias y consejos")
-            case "recommendations": return ("lightbulb.fill",    "Consejos","Recomendaciones y ayuda")
-            default:              return ("questionmark",        key,              "Solicitud de ayuda")
-            }
-        }()
-        return HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.brand.opacity(0.12))
-                    .frame(width: 42, height: 42)
-                Image(systemName: info.icon)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color.brand)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(isMe ? "Necesito ayuda con" : "Necesita ayuda con")
-                    .font(BT.caption1)
-                    .foregroundStyle(Color.inkMuted)
-                Text(info.label)
-                    .font(BT.footnoteBold)
-                    .foregroundStyle(Color.ink)
-                Text(info.subtitle)
-                    .font(BT.caption1)
-                    .foregroundStyle(Color.inkMuted)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(14)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
-        .frame(maxWidth: 260, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(isMe ? "Pedí ayuda con" : "Pide ayuda con") \(info.label): \(info.subtitle)")
+        // Reusa la misma tarjeta de la espera (CategoryCardBubble): un solo diseño.
+        CategoryCardBubble(key: String(content.dropFirst("category_card:".count)), isMe: isMe)
     }
 
     private func placeCard(content: String) -> some View {
@@ -4779,7 +4732,7 @@ struct BuddyMessageBubble: View {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color.teal.opacity(0.12))
                         .frame(width: 42, height: 42)
-                    Image(systemName: "mappin.circle.fill")
+                    LocationPin(size: 21)
                         .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(Color.teal)
                 }
@@ -4846,7 +4799,7 @@ struct BuddyMessageBubble: View {
                         .foregroundStyle(Color.ink)
                     Spacer()
                     Image(systemName: "arrow.up.right")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.inkMuted)
                 }
                 .padding(.horizontal, 12)
@@ -5244,7 +5197,7 @@ struct AudioPlayerBubble: View {
                     if let t = timeStr {
                         Spacer(minLength: 8)
                         Text(t)
-                            .font(.system(size: 10, weight: .regular))
+                            .font(.system(size: 11, weight: .regular))
                             .foregroundStyle(metaFg)
                     }
                 }

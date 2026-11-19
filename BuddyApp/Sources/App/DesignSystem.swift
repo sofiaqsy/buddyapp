@@ -17,7 +17,7 @@ extension Color {
     static let groupedBg     = Color(hex: "E4E2DC")   // Sections, pickers, photo placeholders
 
     // ── Text ────────────────────────────────────────────────────────
-    static let ink           = Color(hex: "263029")   // Primary text — near-black green-grey
+    static let ink           = Color(hex: "2E302E")   // Primary text — charcoal (not pure black)
     static let inkMuted      = Color(hex: "5B6159")   // Secondary text (4.5:1+ on canvas)
     static let inkFaint      = Color(hex: "A9AEA5")   // Placeholders / hints
     static let inkInverse    = Color(hex: "FFFFFF")   // Text on dark (CTAs)
@@ -37,7 +37,7 @@ extension Color {
     static let teal          = Color.brand
     static let tealDeep      = Color(hex: "24392F")   // dark end of brand gradient
     static let sand          = Color.brand
-    static let sandLight     = Color.groupedBg
+    static let sandLight     = Color.paleSage   // tintes suaves: pale sage (Villa Rica)
 
     // ── Accent ──────────────────────────────────────────────────────
     /// Soft sage — only for: available, success, location, buddy online.
@@ -63,7 +63,13 @@ extension Color {
     /// Never small text: 3.0:1 on white.
     static let terracotta    = Color(hex: "C87950")
     static let sage          = Color(hex: "A8B69B")
-    static let paleSage      = Color(hex: "E6ECE1")
+    /// Paleta aprobada (Keyla, 19 Nov 2026): Forest + Warm Ivory + Sage +
+    /// Coffee Beige; terracota solo como acento ocasional.
+    /// paleSage guarda el BEIGE café: círculos/cuadros de categoría e icono.
+    static let paleSage      = Color(hex: "E3EADD")   // sage suave (Keyla eligió la versión verde, 19 Nov 2026)
+    static let sandWarm      = Color(hex: "EFE6DA")
+    /// Sage suave: pestaña activa y acciones secundarias (texto forest encima).
+    static let sageTint      = Color(hex: "E3EADD")
 
     // ── Init ────────────────────────────────────────────────────────
     init(hex: String) {
@@ -231,4 +237,37 @@ enum BuddyGradient {
     static let taupe      = LinearGradient(colors: [Color(hex: "4A3D35"), Color(hex: "7A6558")], startPoint: .topLeading, endPoint: .bottomTrailing)
     /// Warm amber — golden accent
     static let amber      = LinearGradient(colors: [Color(hex: "5C3E1A"), Color(hex: "8B6428")], startPoint: .topLeading, endPoint: .bottomTrailing)
+}
+
+
+// MARK: – SECTION TITLE (Villa Rica, 19 Nov 2026)
+/// Encabezado de sección como en Inicio: oración (no MAYÚSCULAS), title3 bold
+/// y el número en una pastilla pale sage. Recibe el texto tal cual o en
+/// mayúsculas y lo pasa a oración.
+struct SectionTitle: View {
+    let title: String
+    var count: Int? = nil
+
+    private var sentence: String {
+        let t = title.lowercased()
+        return t.prefix(1).uppercased() + t.dropFirst()
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(sentence)
+                .font(.system(.title3).weight(.bold))
+                .foregroundStyle(Color.brand)
+                .accessibilityAddTraits(.isHeader)
+            if let count, count > 0 {
+                Text("\(count)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Color.paleSage, in: Capsule())
+            }
+            Spacer(minLength: 0)
+        }
+    }
 }

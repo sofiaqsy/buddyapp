@@ -983,11 +983,14 @@ final class APIClient {
 
     /// Publicaciones del perfil AGRUPADAS por viaje (una por trip, con momentos
     /// y lugares agregados). Devuelve una página cursor-based (max 12 por página).
-    func fetchUserTrips(travelerId: String, cursor: String? = nil) async throws -> FeedPage {
+    func fetchUserTrips(travelerId: String, cursor: String? = nil, limit: Int? = nil) async throws -> FeedPage {
         var path = "/users/\(travelerId)/trips"
+        var q: [String] = []
         if let cursor, let encoded = cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
-            path += "?cursor=\(encoded)"
+            q.append("cursor=\(encoded)")
         }
+        if let limit { q.append("limit=\(limit)") }
+        if !q.isEmpty { path += "?" + q.joined(separator: "&") }
         return try await request(path: path)
     }
 

@@ -215,7 +215,7 @@ private struct PlaceListEmptyState: View {
             if let onAddFirstSpot {
                 Button(action: onAddFirstSpot) {
                     HStack(spacing: Spacing.sm) {
-                        Image(systemName: "mappin.and.ellipse")
+                        LocationPin(size: 17)
                             .font(.system(size: 15, weight: .semibold))
                         Text("Agregar el primer sitio")
                             .font(BT.footnoteBold)

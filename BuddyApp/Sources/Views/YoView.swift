@@ -79,12 +79,11 @@ struct YoView: View {
                             // Apertura editorial
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                        Text("Tu")
-                                            .font(BT.title1).foregroundStyle(Color.ink)
-                                        Text("historia.")
-                                            .font(BT.displayLarge).foregroundStyle(Color.sand)
-                                    }
+                                    // Mismo encabezado que Trips y Conexiones.
+                                    Text("Tu perfil")
+                                        .font(.system(.largeTitle).weight(.bold))
+                                        .foregroundStyle(Color.brand)
+                                        .accessibilityAddTraits(.isHeader)
                                 }
                                 Spacer()
                                 Menu {
@@ -122,10 +121,16 @@ struct YoView: View {
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.md)
 
+                            // Mis trips: el registro y el trip en curso viven aquí
+                            // (Keyla, 19 Nov 2026), no en la pestaña Comunidad.
+                            MyTripsEntryCard()
+                                .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.lg)
+
                             // 3 — Rol buddy (fila nav o CTA), antes de la colección
                             buddyRow
                                 .padding(.horizontal, Spacing.edge)
-                                .padding(.top, Spacing.xl)
+                                .padding(.top, Spacing.sm)
 
                             if buddyMe?.isBuddy != true {
                                 if unattendedCount > 0 {
@@ -159,7 +164,7 @@ struct YoView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             // Detalle de la publicación — mismo visor que en Home
-            .sheet(item: $selectedStory) { journey in
+            .fullScreenCover(item: $selectedStory) { journey in
                 StoryViewerSheet(journey: journey)
             }
             .confirmationDialog(
@@ -237,6 +242,17 @@ struct YoView: View {
             } message: {
                 Text("Tu foto de perfil no se actualizó. Verifica tu conexión e inténtalo de nuevo.")
             }
+            .onChange(of: router.pendingMyTrips, initial: true) { _, pending in
+                guard pending else { return }
+                router.pendingMyTrips = false
+                navPath = NavigationPath()
+                navPath.append(MyTripsRoute())
+            }
+            .navigationDestination(for: MyTripsRoute.self) { _ in
+                TripsView(embedded: true, externalPath: $navPath)
+                    .environmentObject(authState)
+                    .environmentObject(routeStore)
+            }
             .navigationDestination(for: APIPlaceCard.self) { place in
                 PlaceGuideMapSheet(place: place)
             }
@@ -303,7 +319,7 @@ struct YoView: View {
             PhotosPicker(selection: $avatarItem, matching: .images) {
                 ZStack(alignment: .bottomTrailing) {
                     Circle()
-                        .fill(Color.sandLight)
+                        .fill(Color.paleSage)
                         .frame(width: 88, height: 88)
                     CachedImage(urlString: user?.avatarUrl) { img in
                         img.resizable().scaledToFill()
@@ -312,7 +328,7 @@ struct YoView: View {
                     } placeholder: {
                         Image(systemName: "person.fill")
                             .font(.system(size: 36, weight: .light))
-                            .foregroundStyle(Color.sand)
+                            .foregroundStyle(Color.brand)
                             .frame(width: 88, height: 88) // ancla el placeholder al mismo tamaño
                     }
                     if isUploadingAvatar {
@@ -321,7 +337,8 @@ struct YoView: View {
                     }
                     // Badge editar
                     ZStack {
-                        Circle().fill(Color.ink).frame(width: 26, height: 26)
+                        Circle().fill(Color.brand).frame(width: 28, height: 28)
+                            .overlay(Circle().stroke(Color.canvas, lineWidth: 2))
                         Image(systemName: "camera.fill")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(Color.inkInverse)
@@ -340,13 +357,11 @@ struct YoView: View {
             // Identidad — el nombre lidera, luego la narrativa
             VStack(alignment: .leading, spacing: 3) {
                 Text(user?.fullName ?? "Tú")
-                    .font(BT.title3)
+                    .font(.system(.title2).weight(.bold))
                     .foregroundStyle(Color.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                Text(metaLine)
-                    .font(BT.subhead)
-                    .foregroundStyle(Color.inkMuted)
+                ProfileStatPills(items: statPills)
                 if let since = user?.memberSince {
                     Text("Viajando desde \(memberSinceLabel(date: since))")
                         .font(BT.caption1)
@@ -355,6 +370,10 @@ struct YoView: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    private var statPills: [String] {
+        ProfileStatPills.make(trips: journeys.count, places: shares.count, helps: buddyMe?.profile?.totalHelps)
     }
 
     private var metaLine: String {
@@ -376,7 +395,7 @@ struct YoView: View {
                         .padding(Spacing.sm)
                         .background(Color.surface)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
-                        .overlay(RoundedRectangle(cornerRadius: Radius.sm).strokeBorder(Color.sand, lineWidth: 1.5))
+                        .overlay(RoundedRectangle(cornerRadius: Radius.sm).strokeBorder(Color.brand, lineWidth: 1.5))
 
                     HStack(spacing: Spacing.sm) {
                         Button("Cancelar") {
@@ -400,7 +419,7 @@ struct YoView: View {
                         }
                         .padding(.horizontal, Spacing.md)
                         .padding(.vertical, 7)
-                        .background(Color.ink)
+                        .background(Color.brand)
                         .foregroundStyle(Color.inkInverse)
                         .clipShape(Capsule())
                         .disabled(isSavingBio)
@@ -425,10 +444,16 @@ struct YoView: View {
                         }
                         Spacer()
                         Image(systemName: "pencil")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.inkMuted)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 32, height: 32)
+                            .background(Color.sageTint, in: Circle())
                     }
-                    .frame(minHeight: 44)
+                    .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 8)
+                    .frame(minHeight: 52)
+                    .background(Color.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -460,23 +485,35 @@ struct YoView: View {
         Button {
             showBecomeBuddyConfirm = true
         } label: {
-            HStack(spacing: 10) {
-                Text("Ser Buddy en mi ciudad")
-                    .font(BT.footnote)
-                    .foregroundStyle(Color.inkMuted)
-                Spacer()
+            HStack(spacing: 12) {
+                Image(systemName: "hand.raised")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 44, height: 44)
+                    .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ser Buddy en mi ciudad")
+                        .font(.system(.headline).weight(.bold))
+                        .foregroundStyle(Color.brand)
+                    Text("Ayuda a quien llega por primera vez")
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer(minLength: 4)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.inkMuted.opacity(0.5))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 32, height: 32)
+                    .background(Color.sageTint, in: Circle())
             }
-            .padding(.vertical, Spacing.sm)
+            .padding(14)
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+            .cardShadow()
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .disabled(isBecomingBuddy)
-        .overlay(alignment: .top) {
-            Divider()
-        }
     }
 
     // MARK: – CTA con demanda real — reemplaza a becomeBuddyCTA cuando hay
@@ -588,18 +625,8 @@ struct YoView: View {
 
     @ViewBuilder
     private func sectionHeader(_ title: String, count: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(BT.eyebrow)
-                .tracking(1.5)
-                .foregroundStyle(Color.ink)
-            if count > 0 {
-                Text("· \(count)")
-                    .font(BT.eyebrow)
-                    .foregroundStyle(Color.inkMuted)
-            }
-        }
-        .padding(.horizontal, Spacing.edge)
+        SectionTitle(title: title, count: count)
+            .padding(.horizontal, Spacing.edge)
     }
 
     // MARK: – Contribuciones como buddy (carrusel)
@@ -625,7 +652,7 @@ struct YoView: View {
                 // una separación distinta en un único hueco se lee como error de
                 // maquetado, no como intención. Con el mismo valor las dos
                 // secciones del perfil se leen como una sola colección.
-                HStack(spacing: 3) {
+                HStack(spacing: 12) {
                     // Siempre primero: es la acción, no un elemento más de la
                     // colección. Al final habría que arrastrar toda la lista
                     // para encontrarla, y crece con cada lugar que se suma.
@@ -654,18 +681,20 @@ struct YoView: View {
         } label: {
             VStack(spacing: 8) {
                 Image(systemName: "plus")
-                    .font(.system(size: 22, weight: .light))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Color.brand)
+                    .frame(width: 44, height: 44)
+                    .background(Color.sageTint, in: Circle())
                 Text("Añadir lugar")
-                    .font(BT.caption1)
-                    .foregroundStyle(Color.inkMuted)
+                    .font(BT.footnoteBold)
+                    .foregroundStyle(Color.brand)
             }
             .frame(width: 132, height: 158)
             .background(Color.surface)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    .strokeBorder(Color.border, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                    .strokeBorder(Color.sage, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
             )
             .contentShape(Rectangle())
         }
@@ -676,78 +705,43 @@ struct YoView: View {
 
     private var tripsSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("TRIPS", count: journeys.count)
+            sectionHeader("Trips publicados", count: journeys.count)
 
             if journeys.isEmpty {
                 // Empty state — invita a la acción, no lamenta el vacío
                 Button {
-                    router.switchTo(.trips)
+                    router.openMyTrips()
                 } label: {
                     VStack(spacing: Spacing.sm) {
-                        Image(systemName: "plus.circle")
-                            .font(.system(size: 32, weight: .light))
-                            .foregroundStyle(Color.inkMuted)
+                        Image(systemName: "plus")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 48, height: 48)
+                            .background(Color.paleSage, in: Circle())
                         Text("Tu primer trip te espera")
-                            .font(BT.callout)
-                            .foregroundStyle(Color.inkMuted)
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(Color.ink)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Spacing.xl)
                     .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, Spacing.edge)
             } else {
-                let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
-                // Sin celda de alta: con trips publicados, el grid es la
-                // vitrina de lo hecho y crear vive en su propio tab. El vacío ya
-                // tiene su invitación arriba, que es donde hace falta.
-                LazyVGrid(columns: columns, spacing: 3) {
-                    ForEach(journeys, id: \.id) { journey in
-                        TripGridCell(journey: journey)
-                            .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
-                            .onTapGesture {
-                                Haptic.light()
-                                selectedStory = journey
-                            }
-                            // Long-press del dueño → eliminar la publicación
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    deletePublicationTarget = journey
-                                } label: {
-                                    Label("Eliminar publicación", systemImage: "trash")
-                                }
-                            }
-                    }
-                }
-                .padding(.horizontal, Spacing.edge)
-
-                // Cargar más páginas cuando hay resultados adicionales en el servidor
-                if tripsHasMore {
-                    Button {
-                        Haptic.light()
+                ProfileTripsGrid(
+                    journeys: journeys,
+                    hasMore: tripsHasMore,
+                    onTap: { selectedStory = $0 },
+                    onDelete: { deletePublicationTarget = $0 },
+                    onReachEnd: {
+                        guard !isLoadingMoreTrips else { return }
                         Task { await loadMoreTrips() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if isLoadingMoreTrips {
-                                ProgressView().scaleEffect(0.8)
-                            }
-                            Text(isLoadingMoreTrips ? "Cargando…" : "Ver más trips")
-                                .font(BT.footnoteBold)
-                                .foregroundStyle(Color.ink)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Spacing.md)
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, Spacing.edge)
-                    .disabled(isLoadingMoreTrips)
-                }
+                )
             }
         }
     }
@@ -796,12 +790,13 @@ struct YoView: View {
                 // Header
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text("Tu")
-                                .font(BT.title1).foregroundStyle(Color.ink)
-                            Text("historia.")
-                                .font(BT.displayLarge).foregroundStyle(Color.sand)
-                        }
+                        Text("Tu perfil")
+                            .font(.system(.largeTitle).weight(.bold))
+                            .foregroundStyle(Color.brand)
+                            .accessibilityAddTraits(.isHeader)
+                        Text("Tu perfil, tus viajes y tus momentos")
+                            .font(BT.footnote)
+                            .foregroundStyle(Color.inkMuted)
                     }
                     Spacer()
                 }
@@ -814,14 +809,12 @@ struct YoView: View {
 
                     // Encabezado de tarjeta
                     HStack(alignment: .top, spacing: 14) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.sandLight)
-                                .frame(width: 44, height: 44)
-                            Image(systemName: "figure.walk.arrival")
-                                .font(.system(size: 18, weight: .light))
-                                .foregroundStyle(Color.sand)
-                        }
+                        Image(systemName: "person")
+                            .font(.system(size: 18))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 44, height: 44)
+                            .background(Color.paleSage, in: Circle())
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Tu historia viaja contigo")
                                 .font(BT.footnoteBold)
@@ -839,15 +832,12 @@ struct YoView: View {
 
                     // Beneficios
                     VStack(alignment: .leading, spacing: Spacing.md) {
-                        anonymousBenefit(icon: "mappin",
+                        anonymousBenefit(icon: "suitcase",
                                          title: "Tus viajes",
                                          subtitle: "Cada destino pasa a ser parte de tu historia.")
                         anonymousBenefit(icon: "camera",
                                          title: "Tus momentos",
                                          subtitle: "Las fotos y recuerdos que guardaste te siguen a donde vayas.")
-                        anonymousBenefit(icon: "sparkles",
-                                         title: "Tus stickers",
-                                         subtitle: "Recuerdos de los lugares que te recibieron.")
                         anonymousBenefit(icon: "person.2",
                                          title: "Tu perfil de Buddy",
                                          subtitle: "Si decides ayudar a otros viajeros, puedes configurarlo desde aquí.")
@@ -910,8 +900,8 @@ struct YoView: View {
                 }
                 .padding(Spacing.lg)
                 .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-                .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+                .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
                 .padding(.horizontal, Spacing.edge)
             }
         }
@@ -1007,14 +997,13 @@ struct YoView: View {
 
     private func anonymousBenefit(icon: String, title: String, subtitle: String) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.canvas)
-                    .frame(width: 30, height: 30)
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.sand)
-            }
+            // Insignia de Inicio: forest sobre pale sage.
+            Image(systemName: icon)
+                .font(.system(size: 15))
+                .foregroundStyle(Color.brand)
+                .frame(width: 36, height: 36)
+                .background(Color.paleSage, in: Circle())
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(BT.footnoteBold)
@@ -1193,10 +1182,21 @@ struct YoView: View {
         dlog("👤 [YoView] loadMoreTrips — cursor=\(tripsNextCursor ?? "nil")")
         isLoadingMoreTrips = true
         defer { isLoadingMoreTrips = false }
-        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: userId, cursor: tripsNextCursor) else { return }
-        journeys        += page.items
+        // Con carga automática el indicador no puede quedar girando para
+        // siempre: si falla o llega vacía, se deja de pedir.
+        // El cursor del servidor (fecha del último journey) repite trips que
+        // tienen varios lugares, así que la 2.ª página volvía solo repetidos y
+        // nunca cargaba más. Se pide la lista desde el inicio con un límite
+        // mayor (máx. 50 en el servidor) y se suman solo los nuevos.
+        let siguienteLimite = min(journeys.count + 12, 50)
+        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: userId, cursor: nil, limit: siguienteLimite) else {
+            tripsHasMore = false
+            return
+        }
+        let nuevos = page.items.filter { n in !journeys.contains { $0.id == n.id } }
+        journeys        += nuevos
         tripsNextCursor  = page.nextCursor
-        tripsHasMore     = page.hasMore
+        tripsHasMore     = page.hasMore && !nuevos.isEmpty && siguienteLimite < 50
         dlog("👤 [YoView] loadMoreTrips ✅ — +\(page.items.count) trips totalNow=\(journeys.count)")
     }
 
@@ -1388,7 +1388,7 @@ private struct BuddyNavRow: View {
     }
     private var badgeColor: Color {
         switch profile.verificationStatus {
-        case "approved": return Color.teal
+        case "approved": return Color.brand
         case "pending":  return Color.warningAmber
         default:         return Color.inkMuted
         }
@@ -1406,35 +1406,40 @@ private struct BuddyNavRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Perfil de Buddy")
-                    .font(BT.callout)
-                    .foregroundStyle(Color.ink)
+        // Mismo patrón que "Mis trips": icono en sage, título forest, flecha sage.
+        HStack(spacing: 12) {
+            Image(systemName: "hand.raised")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.brand)
+                .frame(width: 44, height: 44)
+                .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Perfil de Buddy")
+                        .font(.system(.headline).weight(.bold))
+                        .foregroundStyle(Color.brand)
+                    Text(badgeLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(badgeColor)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(badgeColor.opacity(0.12), in: Capsule())
+                }
                 Text(sublabel)
-                    .font(BT.caption1)
+                    .font(BT.footnote)
                     .foregroundStyle(Color.inkMuted)
                     .lineLimit(1)
             }
-
-            Spacer(minLength: 0)
-
-            // Badge de estado
-            Text(badgeLabel)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(badgeColor)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(badgeColor.opacity(0.1))
-                .clipShape(Capsule())
-
+            Spacer(minLength: 4)
             Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.inkMuted.opacity(0.5))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.brand)
+                .frame(width: 32, height: 32)
+                .background(Color.sageTint, in: Circle())
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
+        .padding(14)
         .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+        .cardShadow()
         .onAppear { resolveZone() }
     }
 
@@ -1478,7 +1483,7 @@ private struct BuddyStatusCard: View {
 
     private var verificationColor: Color {
         switch profile.verificationStatus {
-        case "approved": return Color.teal
+        case "approved": return Color.brand
         case "pending":  return Color.warningAmber
         default:         return Color.inkMuted
         }
@@ -1804,3 +1809,73 @@ struct DestinationPickerSheet: View {
 }
 
 
+
+
+// MARK: – Piezas compartidas del perfil (Yo y perfil de otro viajero)
+// Keyla, 19 Nov 2026: el perfil que se abre desde Comunidad debe verse igual
+// que Yo. Mismas piezas en los dos lados.
+
+/// Cifras del perfil en pastillas sage ("12 trips", "12 lugares", "9 ayudas").
+struct ProfileStatPills: View {
+    let items: [String]
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(items, id: \.self) { t in
+                Text(t)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color.paleSage, in: Capsule())
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    static func make(trips: Int, places: Int, helps: Int?) -> [String] {
+        var out = [trips == 1 ? "1 trip" : "\(trips) trips"]
+        if places > 0 { out.append(places == 1 ? "1 lugar" : "\(places) lugares") }
+        if let helps, helps > 0 { out.append(helps == 1 ? "1 ayuda" : "\(helps) ayudas") }
+        return out
+    }
+}
+
+/// Grilla de trips publicados (3 columnas, 8 pt, esquinas 14). Carga más sola
+/// al llegar al final si `onReachEnd` no es nil.
+struct ProfileTripsGrid: View {
+    let journeys: [APIJourney]
+    var hasMore: Bool = false
+    var onTap: (APIJourney) -> Void
+    var onDelete: ((APIJourney) -> Void)? = nil
+    var onReachEnd: (() -> Void)? = nil
+
+    var body: some View {
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+        VStack(spacing: 0) {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(journeys, id: \.id) { journey in
+                    TripGridCell(journey: journey)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .contentShape(Rectangle())
+                        .onTapGesture { Haptic.light(); onTap(journey) }
+                        .contextMenu {
+                            if let onDelete {
+                                Button(role: .destructive) { onDelete(journey) } label: {
+                                    Label("Eliminar publicación", systemImage: "trash")
+                                }
+                            }
+                        }
+                }
+            }
+            if hasMore, let onReachEnd {
+                ProgressView()
+                    .tint(Color.brand)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .onAppear { onReachEnd() }
+            }
+        }
+        .padding(.horizontal, Spacing.edge)
+    }
+}

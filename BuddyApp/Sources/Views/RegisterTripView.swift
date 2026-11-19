@@ -41,21 +41,18 @@ struct RegisterTripView: View {
         ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
 
-                        // Eyebrow — solo cuando el usuario planifica; si ya está
-                        // en el lugar el campo viene prellenado y no hace falta título.
-                        if quickOption != .here {
-                        Text("TU PRÓXIMO TRIP")
-                            .font(BT.eyebrow)
-                            .tracking(2)
-                            .foregroundStyle(Color.inkMuted)
-                            .padding(.horizontal, Spacing.edge)
-                            .padding(.top, Spacing.lg)
-                            .padding(.bottom, Spacing.md)
-                            .animation(.none, value: quickOption)
+                        // Cabecera como "Tus trips" (Inicio es la base).
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Nuevo trip")
+                                .font(.system(.largeTitle).weight(.bold))
+                                .foregroundStyle(Color.brand)
                         }
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.top, Spacing.sm)
+                        .padding(.bottom, Spacing.lg)
 
                         // ── Destination ─────────────────────────
-                        sectionLabel("¿DÓNDE ESTÁS?")
+                        sectionLabel("¿Dónde estás?", icon: "mappin.and.ellipse")
 
                         // Search field
                         HStack(spacing: Spacing.sm) {
@@ -98,11 +95,10 @@ struct RegisterTripView: View {
                                 .buttonStyle(.pressable)
                             }
                         }
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, 14)
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                        .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+                        .padding(.leading, Spacing.md)
+                        .frame(minHeight: 50)
+                        .background(Color.surface, in: Capsule())
+                        .cardShadow()
                         .padding(.horizontal, Spacing.edge)
 
                         // Chips de destinos populares: skeleton → datos o retry
@@ -171,9 +167,11 @@ struct RegisterTripView: View {
                                                 to: nil, from: nil, for: nil)
                                         } label: {
                                             HStack(spacing: Spacing.sm) {
-                                                Image(systemName: "mappin.circle")
-                                                    .font(.system(size: 14))
-                                                    .foregroundStyle(Color.inkMuted)
+                                                LocationPin(size: 16)
+                                                    .font(.system(size: 14, weight: .semibold))
+                                                    .foregroundStyle(Color.brand)
+                                                    .frame(width: 34, height: 34)
+                                                    .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 10))
                                                 VStack(alignment: .leading, spacing: 1) {
                                                     Text(place.title)
                                                         .font(BT.callout)
@@ -195,15 +193,15 @@ struct RegisterTripView: View {
                                     }
                                 }
                                 .background(Color.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+                                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                                .cardShadow()
                                 .padding(.horizontal, Spacing.edge)
+                                .padding(.top, Spacing.sm)
                             }
                         } else if !hasTyped, !popularDests.isEmpty {
                             // Sin texto → chips de destinos populares
-                            Text("POPULARES")
-                                .font(BT.eyebrow)
-                                .tracking(1.5)
+                            Label("Destinos populares", systemImage: "star")
+                                .font(BT.footnoteBold)
                                 .foregroundStyle(Color.inkMuted)
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.lg)
@@ -232,72 +230,12 @@ struct RegisterTripView: View {
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                         }
 
-                        // ── Arrival ──────────────────────────────
-                        sectionLabel("¿CUÁNDO LLEGAS?")
-                            .padding(.top, Spacing.xl)
-
-                        HStack(spacing: Spacing.sm) {
-                            QuickOptionCard(icon: "mappin.circle",  title: "Ya estoy\naquí",  subtitle: "",        isSelected: quickOption == .here) {
-                                quickOption = .here
-                                selectedDate = Date()
-                                withAnimation { showDatePicker = false }
-                            }
-                            QuickOptionCard(icon: "sun.horizon",    title: "Hoy",              subtitle: shortDate(Date()),  isSelected: quickOption == .today) {
-                                quickOption = .today
-                                selectedDate = Date()
-                                withAnimation { showDatePicker = false }
-                            }
-                            QuickOptionCard(icon: "moon.stars",     title: "Mañana",           subtitle: shortDate(tomorrow), isSelected: quickOption == .tomorrow) {
-                                quickOption = .tomorrow
-                                selectedDate = tomorrow
-                                withAnimation { showDatePicker = false }
-                            }
-                        }
-                        .padding(.horizontal, Spacing.edge)
-
-                        // Fecha específica — camino alternativo
-                        Button {
-                            Haptic.light()
-                            withAnimation { showDatePicker.toggle() }
-                        } label: {
-                            HStack {
-                                Image(systemName: "calendar")
-                                    .foregroundStyle(quickOption == nil ? Color.teal : Color.inkMuted)
-                                    .font(.system(size: 15))
-                                Text(quickOption == nil ? formattedDate(selectedDate) : "O elige otra fecha")
-                                    .font(BT.callout)
-                                    .foregroundStyle(quickOption == nil ? Color.ink : Color.inkMuted)
-                                Spacer()
-                                Image(systemName: showDatePicker ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(Color.inkMuted)
-                            }
-                            .padding(.horizontal, Spacing.md)
-                            .padding(.vertical, 14)
-                            .background(Color.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(
-                                quickOption == nil ? Color.teal : Color.border,
-                                lineWidth: quickOption == nil ? 1.5 : 1
-                            ))
-                        }
-                        .buttonStyle(.pressable)
-                        .padding(.horizontal, Spacing.edge)
-                        .padding(.top, Spacing.sm)
-
-                        if showDatePicker {
-                            DatePicker("", selection: $selectedDate, in: Date()..., displayedComponents: .date)
-                                .datePickerStyle(.compact)
-                                .labelsHidden()
-                                .tint(Color.teal)
-                                .padding(.horizontal, Spacing.edge)
-                                .onChange(of: selectedDate) { _, _ in quickOption = nil }
-                        }
+                        // "¿Cuándo llegas?" quitado (Keyla, 19 Nov 2026): el trip empieza hoy, donde está.
 
                         // ── Planning questions ───────────────────────
                         if showPlanningQuestions {
-                            sectionLabel("¿YA LO TIENES RESUELTO?")
-                                .padding(.top, Spacing.md)
+                            sectionLabel("¿Ya lo tienes resuelto?", icon: "checklist")
+                                .padding(.top, Spacing.xl)
 
                             VStack(spacing: Spacing.sm) {
                                 PlanningToggleCard(
@@ -333,16 +271,15 @@ struct RegisterTripView: View {
                                 }
                             }
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 17)
-                            .background(canCreate ? Color.ink : Color.inkMuted.opacity(0.25))
+                            .frame(minHeight: 52)
+                            .background(canCreate ? Color.brand : Color.inkMuted.opacity(0.2))
                             .foregroundStyle(canCreate ? Color.inkInverse : Color.inkMuted)
                             .clipShape(Capsule())
                         }
                         .disabled(!canCreate || isCreating)
                         .padding(.horizontal, Spacing.edge)
-                        .padding(.top, Spacing.lg)
+                        .padding(.top, Spacing.xl)
                         .padding(.bottom, Spacing.xl)
-                        .safeAreaPadding(.bottom)
                     }
         }
         .background(Color.canvas)
@@ -358,14 +295,16 @@ struct RegisterTripView: View {
                     }
                     .padding(.horizontal, 28)
                     .padding(.vertical, 22)
-                    .background(Color.canvas)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .background(Color.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
                 }
                 .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isCreating)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .task {
             do {
                 popularDests = try await APIClient.shared.fetchDestinations()
@@ -522,11 +461,19 @@ struct RegisterTripView: View {
     // MARK: – Helpers
 
     @ViewBuilder
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(BT.eyebrow)
-            .tracking(1.5)
-            .foregroundStyle(Color.ink)
+    private func sectionLabel(_ text: String, icon: String) -> some View {
+        // Igual que "Historias de viajeros": icono en cuadro pale sage + título.
+        HStack(spacing: 12) {
+            AppIcon(name: icon, size: 17)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.brand)
+                .frame(width: 40, height: 40)
+                .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
+            Text(text)
+                .font(.system(.title3).weight(.bold))
+                .foregroundStyle(Color.ink)
+                .accessibilityAddTraits(.isHeader)
+        }
             .padding(.horizontal, Spacing.edge)
             .padding(.bottom, Spacing.sm)
     }
@@ -577,8 +524,8 @@ struct PlaceCommunityCard: View {
                 .padding(Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                .cardShadow()
             } else if let ctx = context {
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     // Estado de comunidad
@@ -600,7 +547,7 @@ struct PlaceCommunityCard: View {
                     if ctx.buddies > 0 || ctx.stories > 0 {
                         HStack(spacing: Spacing.md) {
                             if ctx.buddies > 0 {
-                                Label("\(ctx.buddies) buddy\(ctx.buddies == 1 ? "" : "s")", systemImage: "person.2")
+                                Label("\(ctx.buddies) budd\(ctx.buddies == 1 ? "y" : "ies")", systemImage: "person.2")
                                     .font(BT.caption1)
                                     .foregroundStyle(Color.inkMuted)
                             }
@@ -615,33 +562,34 @@ struct PlaceCommunityCard: View {
                 .padding(Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(statusBackgroundColor(ctx.status))
-                .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(statusBorderColor(ctx.status), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(statusBorderColor(ctx.status), lineWidth: 1))
+                .cardShadow()
             }
         }
     }
 
     private func statusColor(_ status: String) -> Color {
         switch status {
-        case "active":  return Color.teal
-        case "growing": return Color.yellow
+        case "active":  return Color.brand
+        case "growing": return Color.terracotta
         default:        return Color.inkMuted
         }
     }
 
     private func statusBackgroundColor(_ status: String) -> Color {
         switch status {
-        case "active":  return Color.teal.opacity(0.06)
-        case "growing": return Color.yellow.opacity(0.06)
+        case "active":  return Color.paleSage
+        case "growing": return Color.surface
         default:        return Color.surface
         }
     }
 
     private func statusBorderColor(_ status: String) -> Color {
         switch status {
-        case "active":  return Color.teal.opacity(0.3)
-        case "growing": return Color.yellow.opacity(0.3)
-        default:        return Color.border
+        case "active":  return Color.clear
+        case "growing": return Color.clear
+        default:        return Color.clear
         }
     }
 
@@ -655,7 +603,7 @@ struct PlaceCommunityCard: View {
 
     private func statusCopy(_ status: String) -> String {
         switch status {
-        case "active":  return "Siempre encontrarás alguien que te ayude."
+        case "active":  return "Siempre encontrarás a alguien que te ayude."
         case "growing": return "Ya hay personas ayudando en esta zona."
         default:        return "Todavía no hay buddies en este lugar. Puedes crear el primer trip."
         }
@@ -738,21 +686,18 @@ struct DestinationChip: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 5) {
-                Image(systemName: "mappin.circle")
-                    .font(.system(size: 12))
+                LocationPin(size: 14)
+                    .font(.system(size: 12, weight: .semibold))
                 Text(name)
-                    .font(BT.callout)
+                    .font(BT.footnoteBold)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(minHeight: 44)
-            .background(isSelected ? Color.teal.opacity(0.10) : Color.surface)
-            .foregroundStyle(isSelected ? Color.teal : Color.ink)
+            .background(isSelected ? Color.brand : Color.surface)
+            .foregroundStyle(isSelected ? Color.inkInverse : Color.brand)
             .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(
-                isSelected ? Color.teal : Color.border,
-                lineWidth: isSelected ? 1.5 : 1
-            ))
+            .cardShadow()
         }
         .buttonStyle(.pressable)
     }
@@ -768,10 +713,11 @@ struct PlanningToggleCard: View {
 
     var body: some View {
         HStack(spacing: Spacing.md) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(isOn ? Color.teal : Color.inkMuted)
-                .frame(width: 32)
+            Image(systemName: icon.replacingOccurrences(of: ".fill", with: ""))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.brand)
+                .frame(width: 40, height: 40)
+                .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
 
             Toggle(isOn: $isOn) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -783,16 +729,14 @@ struct PlanningToggleCard: View {
                         .foregroundStyle(Color.inkMuted)
                 }
             }
-            .tint(Color.teal)
+            .tint(Color.brand)
             .onChange(of: isOn) { _, _ in Haptic.select() }
         }
         .padding(.horizontal, Spacing.md)
         .padding(.vertical, 14)
-        .background(isOn ? Color.teal.opacity(0.06) : Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-        .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(
-            isOn ? Color.teal.opacity(0.4) : Color.border, lineWidth: 1
-        ))
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+        .cardShadow()
     }
 }
 
@@ -808,9 +752,11 @@ struct QuickOptionCard: View {
     var body: some View {
         Button(action: { Haptic.select(); onTap() }) {
             VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 20, weight: .light))
-                    .foregroundStyle(isSelected ? Color.teal : Color.inkMuted)
+                AppIcon(name: icon, size: 16)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.inkInverse : Color.brand)
+                    .frame(width: 36, height: 36)
+                    .background(isSelected ? Color.brand : Color.paleSage, in: RoundedRectangle(cornerRadius: 10))
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.ink)
@@ -822,12 +768,11 @@ struct QuickOptionCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(Spacing.md)
-            .background(isSelected ? Color.teal.opacity(0.07) : Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(
-                isSelected ? Color.teal : Color.border,
-                lineWidth: isSelected ? 1.5 : 1
-            ))
+            .background(isSelected ? Color.paleSage : Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+            .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(
+                isSelected ? Color.brand : .clear, lineWidth: 1.5))
+            .cardShadow()
         }
         .buttonStyle(.pressable)
         .accessibilityLabel(subtitle.isEmpty ? title : "\(title), \(subtitle)")

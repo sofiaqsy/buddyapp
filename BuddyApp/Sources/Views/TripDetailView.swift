@@ -635,7 +635,7 @@ struct TripDetailView: View {
                                 .foregroundStyle(Color.brand)
                                 .padding(.horizontal, 12)
                                 .frame(height: 32)
-                                .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                                .background(Color.sageTint, in: Capsule())
                                 .frame(minHeight: 44)
                                 .contentShape(Rectangle())
                         }
@@ -870,7 +870,7 @@ struct DestinationPin: View {
                     .fill(Color.sand)
                     .frame(width: 46, height: 46)
                     .shadow(color: Color.sand.opacity(0.4), radius: 8, y: 3)
-                Image(systemName: "mappin.and.ellipse")
+                LocationPin(size: 23)
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white)
             }
@@ -1325,7 +1325,7 @@ struct PlaceGuideDetailSheet: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.brand)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.paleSage))
+                    .background(Circle().fill(Color.sageTint))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }

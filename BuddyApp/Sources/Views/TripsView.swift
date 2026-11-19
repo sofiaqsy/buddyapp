@@ -12,6 +12,20 @@ struct TripsView: View {
     @State private var isLoading = true
     @State private var hasLoadedOnce = false
     @State private var navPath = NavigationPath()
+    /// "Mis trips" vive en Yo (Keyla, 19 Nov 2026): se empuja dentro del stack
+    /// de Yo con su path; la pestaña pasó a ser Comunidad.
+    var embedded = false
+    var externalPath: Binding<NavigationPath>? = nil
+    private var pathB: Binding<NavigationPath> { externalPath ?? $navPath }
+    /// Vuelve a esta pantalla: en Yo solo quita lo que se abrió encima.
+    private func popToSelf() {
+        if embedded {
+            let n = pathB.wrappedValue.count
+            if n > 1 { pathB.wrappedValue.removeLast(n - 1) }
+        } else {
+            pathB.wrappedValue = NavigationPath()
+        }
+    }
     @State private var editTarget: EditTarget? = nil
     /// Override local: el id del trip recién activado con "Ya llegué".
     /// El backend confirma el PATCH pero el GET puede devolver datos stale,
@@ -93,13 +107,23 @@ struct TripsView: View {
     @State private var storiesReloadToken = 0
 
     var body: some View {
-        NavigationStack(path: $navPath) {
+        if embedded {
+            core
+        } else {
+            NavigationStack(path: $navPath) { core }
+        }
+    }
+
+    private var core: some View {
           ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
 
                     // Ancla del re-tap del tab: volver arriba.
                     Color.clear.frame(height: 0).id("tripsTop")
+
+                    // Encabezado como en Inicio (Villa Rica, 19 Nov 2026).
+                    tripsHeader
 
                     // Selector horizontal de trips — navegación, no contenido.
                     // Solo aparece si hay más de un trip que recordar.
@@ -135,24 +159,23 @@ struct TripsView: View {
 
                     // Historias de otros viajeros, después de lo propio (el trip
                     // en curso o la invitación a registrar uno).
-                    TravelerStoriesSection(reloadToken: storiesReloadToken)
-                        .padding(.top, Spacing.xl)
+                    // Las historias de otros viven en la pestaña Comunidad.
+                    if !embedded {
+                        storiesHeader
+                            .padding(.top, Spacing.xl)
+                        TravelerStoriesSection(reloadToken: storiesReloadToken)
+                            .padding(.top, 12)
+                    }
 
                     Spacer().frame(height: 100)
                 }
             }
             .background(Color.canvas)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Image("BuddyLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 30)
-                }
-            }
+            .toolbar(embedded ? .automatic : .hidden, for: .navigationBar)
             .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
                 guard note.object as? Int == AppTab.trips.rawValue else { return }
+                guard !embedded else { return }
                 if !navPath.isEmpty { navPath = NavigationPath() }
                 withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("tripsTop", anchor: .top) }
             }
@@ -162,8 +185,8 @@ struct TripsView: View {
                 await loadJourneys(trigger: "refreshable")
             }
             // Al volver del flujo de registro (pop a raíz), un refresh dirigido
-            .onChange(of: navPath.count) { old, new in
-                if new == 0 && old > 0 { Task { await loadJourneys(trigger: "navPath") } }
+            .onChange(of: pathB.wrappedValue.count) { old, new in
+                if new == (embedded ? 1 : 0) && old > new { Task { await loadJourneys(trigger: "navPath") } }
             }
             .onChange(of: authState.isLoggedIn) { _, loggedIn in
                 if !loggedIn {
@@ -176,10 +199,21 @@ struct TripsView: View {
                     dismissedJourneyIds = []
                     dismissedTripId     = nil
                     selectedTripId      = nil
-                    navPath             = NavigationPath()
+                    popToSelf()
                 } else {
                     Task { await loadJourneys(trigger: "isLoggedIn") }
                 }
+            }
+            // Mapa del destino de una historia: el mismo de Inicio.
+            .navigationDestination(for: DestinationMapRoute.self) { route in
+                PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
+            }
+            .navigationDestination(for: StoriesListRoute.self) { route in
+                StoriesListView(route: route)
+            }
+            .navigationDestination(for: TravelerProfileRoute.self) { route in
+                TravelerProfileView(travelerId: route.travelerId,
+                                    previewName: route.name, previewAvatarUrl: route.avatarUrl)
             }
             .navigationDestination(for: APIJourney.self) { journey in
                 TripDetailGate(journey: journey)
@@ -195,15 +229,14 @@ struct TripsView: View {
                             journeys.insert(creado, at: 0)
                         }
                         selectedTripId = creado.id
-                        navPath = NavigationPath()
+                        popToSelf()
                         Task { await loadJourneys(trigger: "registerTrip") }
                     }
                 }
             }
           }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .journeyActivated)) { _ in
-            navPath = NavigationPath()
+            popToSelf()
             // El trip pasó de "por llegar" a "en curso" — un solo refresh dirigido
             Task { await loadJourneys(trigger: "notif:journeyActivated") }
         }
@@ -275,7 +308,7 @@ struct TripsView: View {
                 onEdit: { pageIndex in
                     editTarget = EditTarget(journey: journey, pageIndex: pageIndex)
                 },
-                onMapTap: { navPath.append(journey) },
+                onMapTap: { pathB.wrappedValue.append(journey) },
                 buddyAvatarUrl: (journey.status ?? "") == "active" ? activeMatch?.buddy?.avatarUrl : nil,
                 buddyFirstName: (journey.status ?? "") == "active"
                     ? activeMatch?.buddy?.fullName?.components(separatedBy: " ").first?.capitalized
@@ -374,66 +407,124 @@ struct TripsView: View {
         }
     }
 
+    // MARK: – Encabezados (estilo Inicio)
+
+    private var tripsHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tus trips")
+                    .font(.system(.largeTitle).weight(.bold))
+                    .foregroundStyle(Color.brand)
+                    .accessibilityAddTraits(.isHeader)
+                Text("Tu bitácora de viaje")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            Spacer(minLength: 8)
+            // Solo con trips: sin ninguno, la tarjeta vacía ya trae su botón
+            // (una sola acción principal por pantalla).
+            if Session.hasSession && selectedTrip != nil {
+                Button {
+                    Haptic.medium()
+                    pathB.wrappedValue.append("register")
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus").font(.system(size: 13, weight: .semibold))
+                        Text("Nuevo trip").font(BT.footnoteBold)
+                    }
+                    .foregroundStyle(Color.inkInverse)
+                    .padding(.horizontal, 14)
+                    .frame(height: 36)
+                    .background(Capsule().fill(Color.brand))
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+            }
+        }
+        .padding(.horizontal, Spacing.edge)
+        .padding(.top, Spacing.md)
+    }
+
+    private var storiesHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "book")
+                .font(.system(size: 18))
+                .foregroundStyle(Color.brand)
+                .frame(width: 40, height: 40)
+                .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Trips de viajeros")
+                    .font(.system(.title3).weight(.bold))
+                    .foregroundStyle(Color.brand)
+                    .accessibilityAddTraits(.isHeader)
+                Text("Lo que otros vivieron cerca de ti")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.edge)
+    }
+
+    /// Estado vacío con la insignia de Inicio y el botón forest.
+    private func emptyCard(icon: String, title: String, text: String, button: String) -> some View {
+        VStack(spacing: Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 24))
+                .foregroundStyle(Color.brand)
+                .frame(width: 56, height: 56)
+                .background(Color.paleSage, in: Circle())
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.system(.title3).weight(.bold))
+                .foregroundStyle(Color.ink)
+                .multilineTextAlignment(.center)
+            Text(text)
+                .font(BT.callout)
+                .foregroundStyle(Color.inkMuted)
+                .multilineTextAlignment(.center)
+            Button {
+                Haptic.medium()
+                pathB.wrappedValue.append("register")
+            } label: {
+                Label(button, systemImage: "plus")
+                    .font(BT.footnoteBold)
+                    .padding(.horizontal, Spacing.lg)
+                    .frame(height: 44)
+                    .background(Color.brand)
+                    .foregroundStyle(Color.inkInverse)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.pressable)
+            .padding(.top, Spacing.xs)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Spacing.xl)
+        .padding(.horizontal, Spacing.md)
+        .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.sm))
+        .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+        .padding(.horizontal, Spacing.edge)
+        .padding(.top, Spacing.md)
+    }
+
     // MARK: – Estado anónimo del tab Tu trip
 
     @ViewBuilder
     private var anonymousTripState: some View {
-        VStack(spacing: Spacing.md) {
-            Image(systemName: "map")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Color.inkMuted)
-            Text("Tu bitácora de viajes")
-                .font(BT.title3)
-                .foregroundStyle(Color.ink)
-            Text("Registra un destino, agrega momentos\ny comparte tu historia.")
-                .font(BT.callout)
-                .foregroundStyle(Color.inkMuted)
-                .multilineTextAlignment(.center)
-
-            Button {
-                Haptic.medium()
-                navPath.append("register")
-            } label: {
-                Label("Empezar", systemImage: "plus")
-                    .font(BT.footnoteBold)
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.vertical, 13)
-                    .background(Color.ink)
-                    .foregroundStyle(Color.inkInverse)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, Spacing.sm)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 60)
+        emptyCard(icon: "suitcase",
+                  title: "Tu bitácora de viajes",
+                  text: "Registra un destino, agrega momentos y comparte tu historia.",
+                  button: "Empezar")
     }
 
     @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: Spacing.md) {
-            Text("Tu próximo trip te espera")
-                .font(BT.title3)
-                .foregroundStyle(Color.ink)
-            Text("Registra tu próximo destino\ny comparte tu trip.")
-                .font(BT.callout)
-                .foregroundStyle(Color.inkMuted)
-                .multilineTextAlignment(.center)
-
-            Button { Haptic.medium(); navPath.append("register") } label: {
-                Label("Registrar trip", systemImage: "plus")
-                    .font(BT.footnoteBold)
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.vertical, 13)
-                    .background(Color.ink)
-                    .foregroundStyle(Color.inkInverse)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, Spacing.sm)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 60)
+        emptyCard(icon: "map",
+                  title: "Tu próximo trip te espera",
+                  text: "Registra tu próximo destino y comparte tu trip.",
+                  button: "Registrar trip")
     }
 
     /// `trigger` y `line` solo instrumentan: nueve sitios llaman a esta
@@ -1577,7 +1668,7 @@ struct TravelerStoriesSection: View {
             if isLoading && stories.isEmpty {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
                     VStack(alignment: .leading, spacing: 0) {
-                        SkeletonBox(cornerRadius: 0).frame(height: 480)
+                        SkeletonBox(cornerRadius: 0).frame(height: 300)
                         HStack(spacing: 8) {
                             SkeletonBox(cornerRadius: 12).frame(width: 24, height: 24)
                             SkeletonBox(cornerRadius: 4).frame(width: 100, height: 13)
@@ -1594,7 +1685,7 @@ struct TravelerStoriesSection: View {
                 .skeletonPulse()
             } else if failed {
                 VStack(spacing: Spacing.sm) {
-                    Text("No pudimos cargar las historias")
+                    Text("No pudimos cargar los trips")
                         .font(BT.callout)
                         .foregroundStyle(Color.inkMuted)
                     Button {
@@ -1614,28 +1705,14 @@ struct TravelerStoriesSection: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Spacing.xl)
             } else if !stories.isEmpty {
-                LazyVStack(alignment: .leading, spacing: Spacing.lg) {
-                    ForEach(stories) { journey in
-                        PublishedTripCard(journey: journey)
-                            .equatable()
-                            .onAppear {
-                                if journey.id == stories.suffix(4).first?.id {
-                                    Task { await loadMore() }
-                                }
-                            }
-                    }
-                    if isLoadingMore {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, Spacing.md)
-                    }
-                }
+                // Filas tipo Inicio (Keyla, 19 Nov 2026): carruseles por tema.
+                StoriesRowsView(stories: stories)
             } else {
                 VStack(alignment: .leading, spacing: Spacing.md) {
                     VStack(spacing: 8) {
                         Text("Aún nadie ha contado su paso por aquí")
                             .font(BT.callout).foregroundStyle(Color.ink)
-                        Text("Cuando termines tu trip, tu historia será la primera.")
+                        Text("Cuando termines tu trip, el tuyo será el primero.")
                             .font(BT.footnote).foregroundStyle(Color.inkMuted)
                             .multilineTextAlignment(.center)
                     }
@@ -1663,6 +1740,8 @@ struct TravelerStoriesSection: View {
                 hasMore = page.hasMore
                 failed = false
                 isLoading = false
+                // Las filas agrupan por destino: dos páginas más dan filas llenas.
+                for _ in 0..<2 where hasMore { await loadMore() }
                 return
             } catch {
                 if Task.isCancelled { return }
@@ -1704,5 +1783,346 @@ struct TravelerStoriesSection: View {
                 return
             }
         }
+    }
+}
+
+
+// MARK: – Historias en filas (como Inicio)
+//
+// Orden pensado para el visitante (Keyla, 19 Nov 2026):
+//   1. Viajeros: avatares de quienes publicaron (abren su perfil).
+//   2. Recientes: lo último publicado, primero.
+//   3. Una fila por destino, en el orden de cercanía que da el servidor
+//      (el destino donde está el visitante sale primero).
+//   4. Más historias: destinos con una sola historia, juntos al final.
+// Cada fila tiene "Ver todos" → lista completa con la misma tarjeta grande.
+
+struct StoriesListRoute: Hashable {
+    let title: String
+    let journeys: [APIJourney]
+}
+
+struct StoriesRowsView: View {
+    let stories: [APIJourney]
+
+    private func destName(_ j: APIJourney) -> String {
+        j.destination?.name ?? j.place?.name ?? "Otros lugares"
+    }
+
+    private func mapRoute(_ items: [APIJourney], name: String) -> DestinationMapRoute? {
+        guard let id = items.lazy.compactMap({ $0.destination?.id ?? $0.destinationId }).first else { return nil }
+        return DestinationMapRoute(destinationId: id, name: name)
+    }
+
+    private var recent: [APIJourney] {
+        Array(stories.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }.prefix(10))
+    }
+
+    /// (destino, historias) en orden de primera aparición = cercanía.
+    private var groups: [(String, [APIJourney])] {
+        var order: [String] = []; var map: [String: [APIJourney]] = [:]
+        for j in stories {
+            let k = destName(j)
+            if map[k] == nil { order.append(k) }
+            map[k, default: []].append(j)
+        }
+        return order.map { ($0, map[$0]!) }
+    }
+
+    private var travelers: [APIUserRef] {
+        var seen = Set<String>(); var out: [APIUserRef] = []
+        for j in stories { if let u = j.users, let id = u.id, seen.insert(id).inserted { out.append(u) } }
+        return out
+    }
+
+    var body: some View {
+        let big = groups.filter { $0.1.count > 1 }
+        let singles = groups.filter { $0.1.count == 1 }.flatMap(\.1)
+        LazyVStack(alignment: .leading, spacing: Spacing.xl) {
+            if travelers.count > 1 { travelersRow }
+            row(title: "Recientes", subtitle: "Lo último que compartieron", items: recent, all: stories)
+            ForEach(big, id: \.0) { name, items in
+                row(title: "En \(name)", subtitle: "\(items.count) trips", items: items, all: items, showsPlace: false,
+                    map: mapRoute(items, name: name))
+            }
+            if !singles.isEmpty {
+                row(title: "Más trips", subtitle: "Otros destinos de viajeros", items: singles, all: singles)
+            }
+        }
+    }
+
+    private var travelersRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionTitle(title: "Viajeros", count: travelers.count)
+                .padding(.horizontal, Spacing.edge)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(travelers, id: \.id) { u in
+                        NavigationLink(value: TravelerProfileRoute(travelerId: u.id ?? "", name: u.fullName, avatarUrl: u.avatarUrl)) {
+                            VStack(spacing: 6) {
+                                let name = (u.fullName ?? "Viajero").capitalized
+                                Circle().fill(Color.paleSage).frame(width: 64, height: 64)
+                                    .overlay {
+                                        CachedImage(urlString: u.avatarUrl) { img in
+                                            img.resizable().scaledToFill().frame(width: 64, height: 64).clipShape(Circle())
+                                        } placeholder: {
+                                            Text(String(name.prefix(1))).font(.system(size: 24, weight: .semibold)).foregroundStyle(Color.brand)
+                                        }
+                                    }
+                                    .overlay(Circle().strokeBorder(Color.brand, lineWidth: 2).padding(-3))
+                                Text(name.components(separatedBy: " ").first ?? name)
+                                    .font(BT.caption1).foregroundStyle(Color.ink).lineLimit(1)
+                            }
+                            .frame(width: 72)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func row(title: String, subtitle: String, items: [APIJourney], all: [APIJourney], showsPlace: Bool = true, map: DestinationMapRoute? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                let header = VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.system(.title3).weight(.bold))
+                            .foregroundStyle(Color.brand)
+                            .accessibilityAddTraits(.isHeader)
+                        if map != nil {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(Color.brand)
+                        }
+                    }
+                    Text(subtitle).font(BT.footnote).foregroundStyle(Color.inkMuted)
+                }
+                // "En <destino>" abre el mapa de Inicio (Keyla, 19 Nov 2026).
+                if let map {
+                    NavigationLink(value: map) { header }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Abre el mapa de \(map.name)")
+                } else {
+                    header
+                }
+                Spacer(minLength: 8)
+                // Sin "Ver todos" (Keyla, 19 Nov 2026): el carrusel ya muestra todo.
+            }
+            .padding(.horizontal, Spacing.edge)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 12) {
+                    ForEach(all) { StoryCarouselCard(journey: $0, showsPlace: showsPlace) }
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.vertical, 6)
+            }
+        }
+    }
+}
+
+/// Tarjeta vertical del carrusel: foto, destino, autor. Abre el visor a
+/// pantalla completa (el mismo de las historias).
+struct StoryCarouselCard: View {
+    let journey: APIJourney
+    /// En una fila "En <destino>" el destino ya está en el título.
+    var showsPlace: Bool = true
+    @State private var showStory = false
+
+    private var cover: String? { journey.pageThumbs?.first ?? journey.coverUrl ?? journey.destination?.coverUrl }
+    private var place: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Trip" }
+    private var author: String { (journey.users?.fullName ?? "Viajero").capitalized }
+    private var photos: Int { journey.pageThumbs?.count ?? 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { Haptic.light(); showStory = true } label: {
+                CachedImage(urlString: cover) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: { Color.paleSage }
+                .frame(width: 200, height: 250)
+                .clipped()
+                .overlay(alignment: .topLeading) {
+                    if showsPlace {
+                    HStack(spacing: 5) {
+                        LocationPin(size: 13)
+                        Text(place).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.ink).lineLimit(1)
+                    }
+                    .padding(.horizontal, 10).frame(height: 28)
+                    .background(Color.surface, in: Capsule())
+                    .padding(10)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if photos > 1 {
+                        Text("\(photos) fotos")
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 8).frame(height: 24)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .padding(.top, 12).padding(.trailing, 10)
+                    }
+                }
+            }
+            .buttonStyle(.pressable)
+            .accessibilityLabel("Trip de \(author) en \(place)")
+            // El autor abre su perfil, a pantalla completa.
+            if let id = journey.users?.id {
+                NavigationLink(value: TravelerProfileRoute(travelerId: id, name: journey.users?.fullName,
+                                                           avatarUrl: journey.users?.avatarUrl)) {
+                HStack(spacing: 8) {
+                    Circle().fill(Color.paleSage).frame(width: 26, height: 26)
+                        .overlay {
+                            CachedImage(urlString: journey.users?.avatarUrl) { img in
+                                img.resizable().scaledToFill().frame(width: 26, height: 26).clipShape(Circle())
+                            } placeholder: {
+                                Text(String(author.prefix(1))).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.brand)
+                            }
+                        }
+                    Text(author).font(BT.footnoteBold).foregroundStyle(Color.ink).lineLimit(1)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Abre el perfil")
+            } else {
+                HStack(spacing: 8) {
+                    Circle().fill(Color.paleSage).frame(width: 26, height: 26)
+                        .overlay {
+                            CachedImage(urlString: journey.users?.avatarUrl) { img in
+                                img.resizable().scaledToFill().frame(width: 26, height: 26).clipShape(Circle())
+                            } placeholder: {
+                                Text(String(author.prefix(1))).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.brand)
+                            }
+                        }
+                    Text(author).font(BT.footnoteBold).foregroundStyle(Color.ink).lineLimit(1)
+                }
+                .padding(12)
+            }
+        }
+        .frame(width: 200)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+        .cardShadow()
+        .fullScreenCover(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+    }
+}
+
+/// "Ver todos" de una fila: la tarjeta grande de siempre, en lista.
+struct StoriesListView: View {
+    let route: StoriesListRoute
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: Spacing.lg) {
+                Text(route.title)
+                    .font(.system(.largeTitle).weight(.bold))
+                    .foregroundStyle(Color.brand)
+                    .padding(.horizontal, Spacing.edge)
+                ForEach(route.journeys) { PublishedTripCard(journey: $0).equatable() }
+            }
+            .padding(.bottom, 40)
+        }
+        .background(Color.canvas)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+// MARK: – Comunidad (pestaña)
+//
+// Antes "Trips" (Keyla, 19 Nov 2026): la pestaña es para ver lo que viven
+// otros viajeros. Los trips propios ("Tu próximo trip", registrar, editar)
+// viven ahora en Yo → "Mis trips".
+
+struct MyTripsRoute: Hashable {}
+
+struct CommunityView: View {
+    @State private var navPath = NavigationPath()
+    @State private var reloadToken = 0
+
+    var body: some View {
+        NavigationStack(path: $navPath) {
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Color.clear.frame(height: 0).id("communityTop")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Comunidad")
+                                .font(.system(.largeTitle).weight(.bold))
+                                .foregroundStyle(Color.brand)
+                                .accessibilityAddTraits(.isHeader)
+                            Text("Trips de viajeros cerca de ti")
+                                .font(BT.footnote)
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                        .padding(.horizontal, Spacing.edge)
+                        .padding(.top, Spacing.md)
+
+                        TravelerStoriesSection(reloadToken: reloadToken)
+                            .padding(.top, Spacing.lg)
+
+                        Spacer().frame(height: 100)
+                    }
+                }
+                .background(Color.canvas)
+                .toolbar(.hidden, for: .navigationBar)
+                .refreshable { reloadToken += 1 }
+                .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
+                    guard note.object as? Int == AppTab.trips.rawValue else { return }
+                    if !navPath.isEmpty { navPath = NavigationPath() }
+                    withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("communityTop", anchor: .top) }
+                }
+                .navigationDestination(for: DestinationMapRoute.self) { route in
+                    PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
+                }
+                .navigationDestination(for: StoriesListRoute.self) { route in
+                    StoriesListView(route: route)
+                }
+                .navigationDestination(for: APIPlaceCard.self) { place in
+                    PlaceGuideMapSheet(place: place)
+                }
+                .navigationDestination(for: TravelerProfileRoute.self) { route in
+                    TravelerProfileView(travelerId: route.travelerId,
+                                        previewName: route.name, previewAvatarUrl: route.avatarUrl)
+                }
+            }
+        }
+    }
+}
+
+/// Entrada a "Mis trips" en Yo: mismo estilo de tarjeta que Inicio.
+struct MyTripsEntryCard: View {
+    var body: some View {
+        NavigationLink(value: MyTripsRoute()) {
+            HStack(spacing: 12) {
+                Image(systemName: "suitcase")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 44, height: 44)
+                    .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Mis trips")
+                        .font(.system(.headline).weight(.bold))
+                        .foregroundStyle(Color.brand)
+                    Text("Registra tu próximo trip y sigue el que está en curso")
+                        .font(BT.footnote)
+                        .foregroundStyle(Color.inkMuted)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 32, height: 32)
+                    .background(Color.sageTint, in: Circle())
+            }
+            .padding(14)
+            .background(Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+            .cardShadow()
+        }
+        .buttonStyle(.pressable)
     }
 }

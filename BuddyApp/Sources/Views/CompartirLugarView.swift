@@ -188,7 +188,7 @@ struct CompartirLugarSheet: View {
 
     private func optionRow(icon: String, title: String, subtitle: String?, isLoading: Bool) -> some View {
         HStack(spacing: Spacing.md) {
-            Image(systemName: icon)
+            AppIcon(name: icon, size: 18)
                 .font(.system(size: 18))
                 .foregroundStyle(Color.brand)
                 .frame(width: 28)
@@ -719,7 +719,7 @@ struct ElegirLugarEnMapaView: View {
                 .offset(y: -8 - lift)
             ZStack {
                 RoundedRectangle(cornerRadius: 10).fill(Color.ink)
-                Image(systemName: "mappin")
+                LocationPin(size: 18)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.inkInverse)
             }

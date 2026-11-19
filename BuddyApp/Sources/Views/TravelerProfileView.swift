@@ -14,20 +14,23 @@ struct TravelerProfileView: View {
     var previewName: String? = nil
     var previewAvatarUrl: String? = nil
 
-    @Environment(\.dismiss) private var dismiss
-
     @State private var user: APIUser? = nil
     @State private var shares: [APIPlaceCard] = []
     @State private var trips: [APIJourney] = []
     @State private var isLoading = true
+    @State private var tripsHasMore = false
+    @State private var isLoadingMore = false
+    @State private var selectedStory: APIJourney? = nil
+    @State private var openPlace: APIPlaceCard? = nil
     @State private var failed = false
 
     private var displayName: String {
         (user?.fullName ?? previewName ?? "Viajero").capitalized
     }
 
+    // Se abre con push dentro de la navegación de la pestaña (pantalla
+    // completa, botón atrás del sistema), no como hoja (Keyla, 19 Nov 2026).
     var body: some View {
-        NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
                     header
@@ -46,15 +49,9 @@ struct TravelerProfileView: View {
             }
             .background(Color.canvas)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cerrar") { dismiss() }
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
-                }
-            }
+            .fullScreenCover(item: $selectedStory) { StoryViewerSheet(journey: $0) }
+            .navigationDestination(item: $openPlace) { PlaceGuideMapSheet(place: $0) }
             .task { await load() }
-        }
     }
 
     // MARK: – Cabecera
@@ -62,33 +59,45 @@ struct TravelerProfileView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(spacing: Spacing.md) {
-                Circle().fill(Color.tealDeep).frame(width: 64, height: 64)
+                // Igual que la cabecera de Yo: avatar grande sobre pale sage.
+                Circle().fill(Color.paleSage).frame(width: 88, height: 88)
                     .overlay {
                         CachedImage(urlString: user?.avatarUrl ?? previewAvatarUrl) { img in
-                            img.resizable().scaledToFill().frame(width: 64, height: 64).clipShape(Circle())
+                            img.resizable().scaledToFill().frame(width: 88, height: 88).clipShape(Circle())
                         } placeholder: {
                             Text(String(displayName.prefix(1)).uppercased())
-                                .font(.system(size: 26, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .font(.system(size: 34, weight: .semibold))
+                                .foregroundStyle(Color.brand)
                         }
                     }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(displayName)
-                        .font(BT.title3)
+                        .font(.system(.title2).weight(.bold))
                         .foregroundStyle(Color.ink)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                    ProfileStatPills(items: ProfileStatPills.make(
+                        trips: trips.count, places: shares.count,
+                        helps: user?.buddyProfile?.totalHelps))
                     if let sub = subtitleLine {
                         Text(sub)
-                            .font(BT.footnote)
+                            .font(BT.caption1)
                             .foregroundStyle(Color.inkMuted)
                     }
                 }
                 Spacer(minLength: 0)
             }
             if let bio = user?.bio, !bio.isEmpty {
+                // Misma tarjeta blanca de la bio en Yo (sin lápiz: no es tuyo).
                 Text(bio)
                     .font(BT.callout)
                     .foregroundStyle(Color.ink)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 14)
+                    .background(Color.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
             }
         }
         .padding(.horizontal, Spacing.edge)
@@ -99,7 +108,6 @@ struct TravelerProfileView: View {
         if let bp = user?.buddyProfile {
             var parts: [String] = []
             if let dest = bp.destination?.name { parts.append("Buddy en \(dest)") } else { parts.append("Buddy") }
-            if let helps = bp.totalHelps, helps > 0 { parts.append("\(helps) apoyo\(helps == 1 ? "" : "s")") }
             return parts.joined(separator: " · ")
         }
         if let since = user?.memberSince {
@@ -115,19 +123,15 @@ struct TravelerProfileView: View {
 
     private var sharesSection: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text("LUGARES QUE RECOMIENDA")
-                .font(BT.eyebrow)
-                .tracking(1.5)
-                .foregroundStyle(Color.inkMuted)
+            SectionTitle(title: "Lugares que recomienda", count: shares.count)
                 .padding(.horizontal, Spacing.edge)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Spacing.sm) {
+                HStack(spacing: 12) {
                     ForEach(shares) { place in
-                        NearbyPlaceCard(
-                            place: place,
-                            subtitleOverride: place.photoLabel,
-                            onTap: {}
-                        )
+                        // Abre el lugar, como en Yo.
+                        NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel) {
+                            openPlace = place
+                        }
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
@@ -137,14 +141,11 @@ struct TravelerProfileView: View {
 
     private var tripsSection: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
-            Text("SUS TRIPS")
-                .font(BT.eyebrow)
-                .tracking(1.5)
-                .foregroundStyle(Color.inkMuted)
+            SectionTitle(title: "Trips publicados", count: trips.count)
                 .padding(.horizontal, Spacing.edge)
-            ForEach(trips) { trip in
-                PublishedTripCard(journey: trip).equatable()
-            }
+            ProfileTripsGrid(journeys: trips, hasMore: tripsHasMore,
+                             onTap: { selectedStory = $0 },
+                             onReachEnd: { Task { await loadMoreTrips() } })
         }
     }
 
@@ -205,7 +206,23 @@ struct TravelerProfileView: View {
         user   = u
         shares = s ?? []
         trips  = t?.items ?? []
+        tripsHasMore = t?.hasMore ?? false
         failed = (u == nil)
         isLoading = false
+    }
+
+    /// Igual que en Yo: el cursor del servidor repite trips, así que se pide
+    /// la lista desde el inicio con un límite mayor y se suman los nuevos.
+    private func loadMoreTrips() async {
+        guard tripsHasMore, !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        let limite = min(trips.count + 12, 50)
+        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: travelerId, cursor: nil, limit: limite) else {
+            tripsHasMore = false; return
+        }
+        let nuevos = page.items.filter { n in !trips.contains { $0.id == n.id } }
+        trips += nuevos
+        tripsHasMore = page.hasMore && !nuevos.isEmpty && limite < 50
     }
 }

@@ -65,7 +65,7 @@ final class ChatStore: ObservableObject {
         }
 
         var lastText: String {
-            guard let msg = lastMessage else { return "Nueva conexión" }
+            guard let msg = lastMessage else { return "Aún no hay mensajes" }
             switch msg.type {
             case "audio": return "Mensaje de voz"
             default:
@@ -505,19 +505,15 @@ struct ConexionesView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 0) {
                 // Header — misma voz que el tab Trips
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("Tus")
-                            .font(BT.title1)
-                            .foregroundStyle(Color.ink)
-                        Text("conexiones.")
-                            .font(BT.displayLarge)
-                            .foregroundStyle(Color.sand)
-                    }
-                    Text("Las personas que estuvieron contigo cuando llegaste.")
-                        .font(BT.subhead)
+                // Mismo encabezado que Trips e Inicio (Villa Rica, 19 Nov 2026).
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tus conexiones")
+                        .font(.system(.largeTitle).weight(.bold))
+                        .foregroundStyle(Color.brand)
+                        .accessibilityAddTraits(.isHeader)
+                    Text("Las personas que te acompañaron en tus trips")
+                        .font(BT.footnote)
                         .foregroundStyle(Color.inkMuted)
-                        .padding(.top, 2)
                 }
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.md)
@@ -592,7 +588,7 @@ struct ConexionesView: View {
                 await chatStore.refreshAvailableHelp()
             }
         }
-        .sheet(item: $chatTarget, onDismiss: { Task { await chatStore.load() } }) { item in
+        .fullScreenCover(item: $chatTarget, onDismiss: { Task { await chatStore.load() } }) { item in
             if let journey = SyntheticJourney.make(for: item.match) {
                 BuddyChatView(match: item.match, journey: journey).equatable()
             }
@@ -613,14 +609,12 @@ struct ConexionesView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 14) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.sandLight)
-                                .frame(width: 44, height: 44)
-                            Image(systemName: "point.topright.arrow.triangle.backward.to.point.bottomleft.scurvepath")
-                                .font(.system(size: 18, weight: .light))
-                                .foregroundStyle(Color.sand)
-                        }
+                        Image(systemName: "person.2")
+                            .font(.system(size: 18))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 44, height: 44)
+                            .background(Color.paleSage, in: Circle())
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Las personas son parte del viaje")
                                 .font(BT.footnoteBold)
@@ -640,7 +634,7 @@ struct ConexionesView: View {
                         anonymousBenefit(icon: "bubble.left.and.bubble.right",
                                          title: "Tus conversaciones",
                                          subtitle: "Consulta el historial de lo que hablaste con tus buddies.")
-                        anonymousBenefit(icon: "person.fill.checkmark",
+                        anonymousBenefit(icon: "person.badge.shield.checkmark",
                                          title: "Tus buddies",
                                          subtitle: "Las personas que te ayudaron, siempre a un mensaje de distancia.")
                         anonymousBenefit(icon: "heart",
@@ -703,8 +697,8 @@ struct ConexionesView: View {
                 }
                 .padding(Spacing.lg)
                 .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-                .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+                .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
                 .padding(.horizontal, Spacing.edge)
             }
             .padding(.top, Spacing.lg)
@@ -802,14 +796,13 @@ struct ConexionesView: View {
 
     private func anonymousBenefit(icon: String, title: String, subtitle: String) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.canvas)
-                    .frame(width: 30, height: 30)
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.sand)
-            }
+            // Insignia de Inicio: forest sobre pale sage, mismo peso.
+            Image(systemName: icon)
+                .font(.system(size: 15))
+                .foregroundStyle(Color.brand)
+                .frame(width: 36, height: 36)
+                .background(Color.paleSage, in: Circle())
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(BT.footnoteBold)
@@ -825,6 +818,13 @@ struct ConexionesView: View {
     private var connectionList: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
+                // Personas: un avatar por persona (como "Viajeros" en Comunidad).
+                // Abre la conversación más reciente con ella.
+                if people.count > 1 {
+                    peopleRow
+                        .padding(.top, Spacing.lg)
+                }
+
                 // A demanda: solo aparece cuando el matching te eligió.
                 if !chatStore.offers.isEmpty {
                     listHeader("ASIGNADAS PARA TI", count: chatStore.offers.count, color: Color.brand)
@@ -859,6 +859,12 @@ struct ConexionesView: View {
                         .padding(.horizontal, Spacing.edge)
                         .padding(.top, Spacing.lg).padding(.bottom, Spacing.sm)
 
+                    if chatStore.availableHelp.isEmpty {
+                        hintCard(icon: "hand.raised",
+                                 title: "Nadie necesita ayuda ahora",
+                                 text: "Cuando un viajero cerca de ti pida ayuda, aparecerá aquí.")
+                            .padding(.horizontal, Spacing.edge)
+                    }
                     VStack(spacing: Spacing.sm) {
                         ForEach(chatStore.availableHelp) { item in
                             AvailableHelpCard(
@@ -891,19 +897,25 @@ struct ConexionesView: View {
                         .padding(.top, Spacing.lg)
                         .padding(.bottom, Spacing.sm)
 
+                    // Una tarjeta blanca agrupada (estilo Inicio), no filas sueltas.
                     VStack(spacing: 0) {
                         ForEach(Array(past.enumerated()), id: \.element.id) { i, item in
                             if i > 0 {
-                                Divider().padding(.leading, 76).padding(.trailing, Spacing.edge)
+                                Divider().overlay(Color.hairline).padding(.leading, 74)
                             }
                             Button { chatTarget = item } label: {
                                 ConnectionRow(item: item, isActive: false)
-                                    .padding(.horizontal, Spacing.edge)
+                                    .padding(.horizontal, Spacing.md)
                                     .padding(.vertical, 12)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.pressable)
                         }
                     }
+                    .background(Color.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
+                    .padding(.horizontal, Spacing.edge)
                 }
             }
             .padding(.bottom, 100)
@@ -935,22 +947,97 @@ struct ConexionesView: View {
 
     @ViewBuilder
     private func listHeader(_ title: String, count: Int, color: Color) -> some View {
-        HStack(spacing: 6) {
-            Text(title).font(BT.eyebrow).tracking(1.5).foregroundStyle(color)
-            // Siempre visible, también en 0: las secciones son fijas, así que
-            // el número es lo que dice si hay algo o no.
-            Text("· \(count)").font(BT.eyebrow).foregroundStyle(Color.inkMuted.opacity(0.7))
+        // Encabezado de sección como en Inicio: oración, no MAYÚSCULAS, y el
+        // número en una pastilla pale sage (siempre visible, también en 0).
+        let titulo = title.prefix(1).uppercased() + title.dropFirst().lowercased()
+        HStack(spacing: 8) {
+            Text(titulo)
+                .font(.system(.title3).weight(.bold))
+                .foregroundStyle(Color.brand)
+                .accessibilityAddTraits(.isHeader)
+            Text("\(count)")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.brand)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Color.paleSage, in: Capsule())
+            Spacer(minLength: 0)
         }
+    }
+
+    /// Una entrada por persona, con su conversación más reciente.
+    private var people: [ChatStore.ConnectionItem] {
+        var seen = Set<String>(); var out: [ChatStore.ConnectionItem] = []
+        for item in active + past {
+            let key = (item.isBuddyRole ? item.match.travelerId : item.match.buddyId) ?? item.buddyName
+            if seen.insert(key).inserted { out.append(item) }
+        }
+        return out
+    }
+
+    private var peopleRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            listHeader("Personas", count: people.count, color: Color.brand)
+                .padding(.horizontal, Spacing.edge)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(people) { item in
+                        Button { Haptic.light(); chatTarget = item } label: {
+                            VStack(spacing: 6) {
+                                ConnectionAvatar(url: item.buddyAvatarUrl, name: item.buddyName, size: 64)
+                                    .overlay(Circle().strokeBorder(Color.brand, lineWidth: 2).padding(-3))
+                                    .overlay(alignment: .topTrailing) {
+                                        if item.unreadCount > 0 {
+                                            Circle().fill(Color.brand).frame(width: 14, height: 14)
+                                                .overlay(Circle().stroke(Color.canvas, lineWidth: 2))
+                                        }
+                                    }
+                                Text(item.buddyName.components(separatedBy: " ").first ?? item.buddyName)
+                                    .font(BT.caption1).foregroundStyle(Color.ink).lineLimit(1)
+                            }
+                            .frame(width: 72)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Abrir conversación con \(item.buddyName)")
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func hintCard(icon: String, title: String, text: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.brand)
+                .frame(width: 40, height: 40)
+                .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(BT.footnoteBold).foregroundStyle(Color.ink)
+                Text(text).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+        .cardShadow()
     }
 
     private var emptyState: some View {
         VStack(spacing: Spacing.md) {
             Image(systemName: "person.2")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(Color.inkMuted.opacity(0.4))
+                .font(.system(size: 24))
+                .foregroundStyle(Color.brand)
+                .frame(width: 56, height: 56)
+                .background(Color.paleSage, in: Circle())
+                .accessibilityHidden(true)
             VStack(spacing: 4) {
                 Text("Las conexiones nacen de un trip")
-                    .font(BT.callout)
+                    .font(.system(.title3).weight(.bold))
                     .foregroundStyle(Color.ink)
                 Text("Cuando llegues a tu destino, un buddy te estará esperando.")
                     .font(BT.footnote)
@@ -958,13 +1045,13 @@ struct ConexionesView: View {
                     .multilineTextAlignment(.center)
             }
             Button {
-                router.switchTo(.trips)
+                router.openMyTrips()
             } label: {
                 Text("Crear mi trip")
                     .font(BT.footnoteBold)
                     .padding(.horizontal, Spacing.lg)
-                    .padding(.vertical, 12)
-                    .background(Color.ink)
+                    .frame(height: 44)
+                    .background(Color.brand)
                     .foregroundStyle(Color.inkInverse)
                     .clipShape(Capsule())
             }
@@ -1305,20 +1392,7 @@ struct ConnectionRow: View {
         HStack(spacing: 12) {
             // Avatar con punto online
             ZStack(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(Color.sandLight)
-                    .frame(width: isActive ? 50 : 44, height: isActive ? 50 : 44)
-                    .overlay {
-                        if let urlStr = item.buddyAvatarUrl, let url = URL(string: urlStr) {
-                            AsyncImage(url: url) { img in img.resizable().scaledToFill() }
-                                placeholder: { Color.sandLight }
-                                .clipShape(Circle())
-                        } else {
-                            Image(systemName: "person.fill")
-                                .font(.system(size: isActive ? 20 : 17))
-                                .foregroundStyle(Color.sand)
-                        }
-                    }
+                ConnectionAvatar(url: item.buddyAvatarUrl, name: item.buddyName, size: isActive ? 52 : 48)
                 if isActive {
                     Circle().fill(Color.onlineGreen)
                         .frame(width: 13, height: 13)
@@ -1330,8 +1404,9 @@ struct ConnectionRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(item.buddyName)
-                        .font(isActive ? BT.headline : BT.callout)
+                        .font(BT.headline)
                         .foregroundStyle(Color.ink)
+                        .lineLimit(1)
                     Spacer()
                     Text(item.lastTime)
                         .font(BT.caption1)
@@ -1368,14 +1443,17 @@ struct ConnectionRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, item.unreadCount > 9 ? 6 : 0)
                             .frame(minWidth: 20, minHeight: 20)
-                            .background(Color.errorRed)
+                            .background(Color.brand)
                             .clipShape(Capsule())
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.inkMuted.opacity(0.35))
                     }
                 }
+            }
+            // Flecha centrada en la fila, no pegada a la última línea (Keyla, 19 Nov 2026).
+            if item.unreadCount == 0 {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted.opacity(0.5))
+                    .frame(maxHeight: .infinity, alignment: .center)
             }
         }
     }
@@ -1395,5 +1473,25 @@ enum SyntheticJourney {
               let journey = try? JSONDecoder.buddy.decode(APIJourney.self, from: data)
         else { return nil }
         return journey
+    }
+}
+
+
+/// Avatar de conexión: foto o inicial sobre sage (igual que Comunidad).
+struct ConnectionAvatar: View {
+    let url: String?
+    let name: String
+    var size: CGFloat = 48
+    var body: some View {
+        Circle().fill(Color.paleSage).frame(width: size, height: size)
+            .overlay {
+                CachedImage(urlString: url) { img in
+                    img.resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
+                } placeholder: {
+                    Text(String(name.prefix(1)).uppercased())
+                        .font(.system(size: size * 0.38, weight: .semibold))
+                        .foregroundStyle(Color.brand)
+                }
+            }
     }
 }

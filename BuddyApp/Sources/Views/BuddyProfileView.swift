@@ -262,7 +262,7 @@ struct BuddyProfileView: View {
 
             // Header: nombre del lugar + botón eliminar
             HStack(spacing: 8) {
-                Image(systemName: "mappin.circle.fill")
+                LocationPin(size: 16)
                     .font(.system(size: 14)).foregroundStyle(Color.teal)
                 Text(zone.name)
                     .font(BT.callout).fontWeight(.semibold).foregroundStyle(Color.ink)
@@ -1277,7 +1277,7 @@ private struct SpotEditRow: View {
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8).fill(Color.teal.opacity(0.1))
-                    Image(systemName: "mappin.circle.fill").font(.system(size: 20)).foregroundStyle(Color.teal)
+                    LocationPin(size: 23).font(.system(size: 20)).foregroundStyle(Color.teal)
                 }
                 .frame(width: 48, height: 48)
             }

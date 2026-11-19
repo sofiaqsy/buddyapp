@@ -483,7 +483,7 @@ struct InicioView: View {
         let displayCity = resolvedLocation?.destinationName ?? locationService.currentCity
         if let city = displayCity {
             HStack(spacing: 5) {
-                Image(systemName: "mappin")
+                LocationPin(size: 13)
                     .font(.system(size: 11, weight: .semibold))
                 Text("Estás en \(city)")
                     .font(BT.caption1.weight(.semibold))
@@ -543,7 +543,7 @@ struct InicioView: View {
                 withAnimation { pioneerConfirmation = "Registramos tu solicitud en \(city). Te avisaremos cuando haya un buddy disponible." }
                 // Navigate to Tu trip tab after creating request
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    router.switchTo(.trips)
+                    router.openMyTrips()
                 }
             }
         } catch {
@@ -563,7 +563,7 @@ struct InicioView: View {
             await MainActor.run {
                 withAnimation { pioneerConfirmation = "Registramos tu solicitud en \(city). Te avisaremos cuando haya un buddy disponible." }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    router.switchTo(.trips)
+                    router.openMyTrips()
                 }
             }
         } catch {
@@ -616,7 +616,7 @@ struct InicioView: View {
             // Pioneer: no hay buddies en este lugar → redirigir al tab Tu trip
             if homeCommunityContext?.totalBuddies == 0 {
                 dlog("📍 [submitHelpFromHome] pioneer con trip activo → Tu trip tab")
-                await MainActor.run { router.switchTo(.trips) }
+                await MainActor.run { router.openMyTrips() }
                 return
             }
             let destIdOpt = activeJourney.destination?.id ?? activeJourney.destinationId
@@ -647,7 +647,7 @@ struct InicioView: View {
                 // Pioneer sin trip: crear el trip + request, luego ir a Tu trip
                 dlog("📍 [submitHelpFromHome] pioneer sin trip + cat=\(category) → crear trip + Tu trip tab")
                 await pioneerHelpFlow(category: category, description: description, loc: loc)
-                await MainActor.run { router.switchTo(.trips) }
+                await MainActor.run { router.openMyTrips() }
             } else if let loc = locationService.userLocation, homeCommunityContext != nil {
                 await pioneerHelpFlow(category: category, description: description, loc: loc)
             } else {
@@ -683,6 +683,10 @@ struct InicioView: View {
                 }
                 .navigationDestination(for: DestinationMapRoute.self) { route in
                     PlaceGuideMapSheet(destinationId: route.destinationId, name: route.name)
+                }
+                .navigationDestination(for: TravelerProfileRoute.self) { route in
+                    TravelerProfileView(travelerId: route.travelerId,
+                                        previewName: route.name, previewAvatarUrl: route.avatarUrl)
                 }
                 .navigationDestination(for: HomeCategoryRoute.self) { route in
                     // Categorías y "Cerca de ti → Ver todos" abren el MAPA
@@ -999,7 +1003,7 @@ struct InicioView: View {
                     contactSheetJourney = journey
                 } else {
                     dlog("🧳 [onJourneyCreated] path=switchToTrips — liveJourneys sigue en \(liveJourneys.count)")
-                    router.switchTo(.trips)
+                    router.openMyTrips()
                 }
             }
         } else if route == "tripDetail", let journey = activeJourney {
@@ -1823,7 +1827,7 @@ private struct NoGuideMapView: View {
             MapPinView(name: name, lat: lat, lng: lng)
         } else {
             VStack(spacing: Spacing.md) {
-                Image(systemName: "mappin.and.ellipse")
+                LocationPin(size: 46)
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(Color.brand)
                 Text(name)
@@ -1871,7 +1875,7 @@ private struct MapPinView: View {
 
             // Chip con el nombre del destino sobre el mapa
             HStack(spacing: Spacing.xs) {
-                Image(systemName: "mappin.circle.fill")
+                LocationPin(size: 16)
                     .foregroundStyle(Color.brand)
                 Text(name)
                     .font(BT.footnoteBold)
@@ -2027,6 +2031,13 @@ struct DestinationMapRoute: Hashable {
     let name: String
 }
 
+/// Perfil de otro viajero, abierto a pantalla completa (push), no en hoja.
+struct TravelerProfileRoute: Hashable {
+    let travelerId: String
+    let name: String?
+    let avatarUrl: String?
+}
+
 struct HomeHelpItem: Identifiable {
     let id = UUID()
     let destinationId: String
@@ -2141,7 +2152,6 @@ struct PublishedTripCard: View {
     var nearby: Bool = false
 
     @State private var showStory = false
-    @State private var showAuthorProfile = false
     @State private var page = 0
 
     private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
@@ -2175,7 +2185,8 @@ struct PublishedTripCard: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
         .padding(.horizontal, Spacing.edge)
-        .sheet(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+        .fullScreenCover(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+
         .onAppear { print("🖼️ [StoryCard] aparece id=\(journey.id.prefix(8)) fotos=\(thumbs.count)") }
     }
 
@@ -2200,11 +2211,30 @@ struct PublishedTripCard: View {
                         }
                         VStack(spacing: 0) {
                             HStack {
-                                Text(destName)
-                                    .font(BT.footnoteBold)
+                                // El destino abre el MISMO mapa que Inicio, empujado en
+                                // la navegación del tab (Keyla, 19 Nov 2026: reusar
+                                // componentes). El resto de la foto abre la historia.
+                                NavigationLink(value: DestinationMapRoute(
+                                    destinationId: journey.destination?.id ?? journey.destinationId ?? "",
+                                    name: destName)) {
+                                    HStack(spacing: 4) {
+                                        Text(destName)
+                                            .font(BT.footnoteBold)
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 10, weight: .bold))
+                                    }
                                     .foregroundStyle(.white)
-                                    .padding(.horizontal, 14)
-                                    .padding(.top, 12)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(.black.opacity(0.25), in: Capsule())
+                                    .frame(minHeight: 44)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(journey.destination?.id == nil && journey.destinationId == nil)
+                                .accessibilityLabel("Ver el mapa de \(destName)")
+                                .padding(.horizontal, 10)
+                                .padding(.top, 4)
                                 Spacer()
                             }
                             Spacer()
@@ -2313,18 +2343,28 @@ struct PublishedTripCard: View {
         .padding(14)
         .contentShape(Rectangle())
         .onTapGesture { Haptic.light(); showStory = true }
-        .sheet(isPresented: $showAuthorProfile) {
-            if let id = journey.users?.id {
-                TravelerProfileView(travelerId: id,
-                                    previewName: journey.users?.fullName,
-                                    previewAvatarUrl: journey.users?.avatarUrl)
-            }
-        }
     }
 
     /// Avatar + nombre. Con id de autor abre su perfil; sin id se comporta
     /// como el resto del pie y abre la historia.
+    @ViewBuilder
     private var authorRow: some View {
+        if let id = journey.users?.id {
+            NavigationLink(value: TravelerProfileRoute(travelerId: id,
+                                                       name: journey.users?.fullName,
+                                                       avatarUrl: journey.users?.avatarUrl)) {
+                authorLabel
+            }
+            .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded { Haptic.light() })
+        } else {
+            authorLabel
+                .contentShape(Rectangle())
+                .onTapGesture { Haptic.light(); showStory = true }
+        }
+    }
+
+    private var authorLabel: some View {
         HStack(spacing: 8) {
             Circle().fill(Color.tealDeep).frame(width: 24, height: 24)
                 .overlay {
@@ -2340,11 +2380,6 @@ struct PublishedTripCard: View {
                 .foregroundStyle(Color.ink)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            guard journey.users?.id != nil else { Haptic.light(); showStory = true; return }
-            Haptic.light()
-            showAuthorProfile = true
-        }
     }
 }
 
@@ -2600,71 +2635,43 @@ struct PlaceGuideMapSheet: View {
 }
 
 struct StoryViewerSheet: View {
+    // Visor de fotos a pantalla completa (Keyla, 19 Nov 2026): fondo oscuro,
+    // barras de progreso, autor y destino arriba, miniaturas abajo.
+    // Toque a la izquierda/derecha cambia de foto; deslizar hacia abajo cierra.
     let journey: APIJourney
     @Environment(\.dismiss) private var dismiss
     @State private var thumbs: [String] = []
     @State private var current = 0
+    @State private var dragY: CGFloat = 0
 
     private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
+    private var authorName: String { (journey.users?.fullName ?? "Viajero").capitalized }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.canvas.ignoresSafeArea()
+        ZStack {
+            Color.black.opacity(1 - min(abs(dragY) / 600, 0.6)).ignoresSafeArea()
 
-            if thumbs.isEmpty {
-                CachedImage(urlString: journey.destination?.coverUrl) { img in
-                    img.resizable().scaledToFit()
-                } placeholder: {
-                    LinearGradient(colors: [Color.tealDeep, Color.teal],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                TabView(selection: $current) {
-                    ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
-                        CachedImage(urlString: url) { img in
-                            img.resizable().scaledToFit()
-                        } placeholder: { Color.sandLight }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .tag(i)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .clipped()
-                .overlay(alignment: .bottom) {
-                    if thumbs.count > 1 {
-                        HStack(spacing: 7) {
-                            ForEach(0..<thumbs.count, id: \.self) { i in
-                                Circle()
-                                    .fill(i == current ? Color.ink : Color.ink.opacity(0.25))
-                                    .frame(width: 7, height: 7)
-                            }
-                        }
-                        .animation(.easeInOut(duration: 0.2), value: current)
-                        .padding(.vertical, 10).padding(.horizontal, 14)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(.bottom, 24)
-                    }
-                }
-            }
+            photos
+                .offset(y: dragY)
+                .scaleEffect(1 - min(abs(dragY) / 2000, 0.1))
 
-            // Solo el botón de cerrar — sin conteos. Material para verse sobre
-            // foto o sobre el fondo crema indistintamente.
-            HStack {
+            VStack(spacing: 0) {
+                topBar
                 Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold)).foregroundStyle(Color.ink)
-                        .frame(width: 36, height: 36).background(.ultraThinMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
+                if thumbs.count > 1 { thumbStrip }
             }
-            .padding(.horizontal, Spacing.edge).padding(.top, 8)
+            .opacity(dragY == 0 ? 1 : 0.3)
         }
+        .statusBarHidden()
+        .gesture(
+            DragGesture()
+                .onChanged { v in if v.translation.height > 0 { dragY = v.translation.height } }
+                .onEnded { v in
+                    if v.translation.height > 140 { dismiss() }
+                    else { withAnimation(.spring(duration: 0.3)) { dragY = 0 } }
+                }
+        )
         .task {
-            // El feed (trips) ya trae page_thumbs agregados de todos los lugares.
-            // Si no vienen (p. ej. tab Yo con id de journey real), se piden al server.
             if let pt = journey.pageThumbs, !pt.isEmpty {
                 thumbs = pt
             } else {
@@ -2673,6 +2680,115 @@ struct StoryViewerSheet: View {
             }
             ImagePrefetcher.prefetch(thumbs)
         }
+    }
+
+    @ViewBuilder private var photos: some View {
+        if thumbs.isEmpty {
+            CachedImage(urlString: journey.destination?.coverUrl) { img in
+                img.resizable().scaledToFit()
+            } placeholder: { ProgressView().tint(.white) }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            TabView(selection: $current) {
+                ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
+                    CachedImage(urlString: url) { img in
+                        img.resizable().scaledToFit()
+                    } placeholder: { ProgressView().tint(.white) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
+            .overlay {
+                // Zonas de toque como en las historias: izquierda atrás, derecha adelante.
+                HStack(spacing: 0) {
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { step(-1) }
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { step(1) }
+                }
+                .padding(.vertical, 120)
+            }
+        }
+    }
+
+    private func step(_ d: Int) {
+        let n = current + d
+        guard thumbs.indices.contains(n) else { if d > 0 { dismiss() }; return }
+        Haptic.light()
+        withAnimation(.easeInOut(duration: 0.25)) { current = n }
+    }
+
+    private var topBar: some View {
+        VStack(spacing: 12) {
+            if thumbs.count > 1 {
+                HStack(spacing: 4) {
+                    ForEach(0..<thumbs.count, id: \.self) { i in
+                        Capsule()
+                            .fill(i <= current ? Color.white : Color.white.opacity(0.3))
+                            .frame(height: 3)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: current)
+            }
+            HStack(spacing: 10) {
+                Circle().fill(Color.paleSage).frame(width: 36, height: 36)
+                    .overlay {
+                        CachedImage(urlString: journey.users?.avatarUrl) { img in
+                            img.resizable().scaledToFill().frame(width: 36, height: 36).clipShape(Circle())
+                        } placeholder: {
+                            Text(String(authorName.prefix(1)))
+                                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.brand)
+                        }
+                    }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(authorName).font(BT.footnoteBold).foregroundStyle(.white)
+                    Text(thumbs.count > 1 ? "\(destName) · \(current + 1) de \(thumbs.count)" : destName)
+                        .font(BT.caption1).foregroundStyle(.white.opacity(0.75))
+                }
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(.white.opacity(0.18), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cerrar")
+            }
+        }
+        .padding(.horizontal, Spacing.edge)
+        .padding(.top, 8)
+        .padding(.bottom, 24)
+        .background(LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea())
+    }
+
+    private var thumbStrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
+                        CachedImage(urlString: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: { Color.white.opacity(0.1) }
+                        .frame(width: 52, height: 52)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(i == current ? Color.white : .clear, lineWidth: 2))
+                        .opacity(i == current ? 1 : 0.55)
+                        .id(i)
+                        .onTapGesture { Haptic.light(); withAnimation { current = i } }
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.vertical, 12)
+            }
+            .onChange(of: current) { _, n in withAnimation { proxy.scrollTo(n, anchor: .center) } }
+        }
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea())
     }
 }
 
@@ -3500,12 +3616,24 @@ struct HomeRowsView: View {
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
+    /// Nombres que no son una categoría real ("Otro", o lugares sin
+    /// categoría): no tienen acceso directo ni fila propia (Keyla, 19 Nov
+    /// 2026). Sus lugares siguen en Cerca de ti y Más para descubrir.
+    static func isCatchAll(_ name: String) -> Bool {
+        ["otro", "otros", "otros lugares"].contains(name.lowercased())
+    }
+
+    /// Accesos rápidos de "Explora por categoría": solo categorías reales.
+    private var shortcutGroups: [(name: String, items: [APIPlaceCard])] {
+        groups.filter { !Self.isCatchAll($0.name) }
+    }
+
     private var bigGroups: [(name: String, items: [APIPlaceCard])] {
         // "Otro" no es una categoría que alguien busque: sus lugares van al
         // final, en "Más para descubrir" (Keyla, 19 Nov 2026).
         groups.filter {
             $0.items.count >= Self.minRowItems
-                && !["otro", "otros", "otros lugares"].contains($0.name.lowercased())
+                && !Self.isCatchAll($0.name)
         }
     }
 
@@ -3527,7 +3655,7 @@ struct HomeRowsView: View {
                         if cards.isEmpty {
                             emptyState
                         } else {
-                            if groups.count > 1 { quickCategories }
+                            if shortcutGroups.count > 1 { quickCategories }
                             if !nearby.isEmpty {
                                 row(title: "Cerca de ti", subtitle: "Lugares a pocos minutos",
                                     items: nearby, large: true, category: Self.nearbyRoute, capsuleAction: true)
@@ -3687,7 +3815,7 @@ struct HomeRowsView: View {
             rowHeader("Explora por categoría", category: nil)
             ScrollView(.horizontal) {
                 HStack(spacing: 10) {
-                    ForEach(groups, id: \.name) { g in
+                    ForEach(shortcutGroups, id: \.name) { g in
                         Button { onOpenCategory(g.name) } label: {
                             VStack(spacing: 5) {
                                 CategoryIconBadge(category: g.name, diameter: 38)
@@ -3769,7 +3897,7 @@ struct HomeRowsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(.title3).weight(.bold))
-                    .foregroundStyle(Color.ink)
+                    .foregroundStyle(Color.brand)
                     .accessibilityAddTraits(.isHeader)
                 if let subtitle {
                     Text(subtitle)
@@ -3790,7 +3918,7 @@ struct HomeRowsView: View {
                         .foregroundStyle(Color.brand)
                         .padding(.horizontal, 14)
                         .frame(height: 34)
-                        .overlay(Capsule().strokeBorder(Color.border, lineWidth: 1))
+                        .background(Color.sageTint, in: Capsule())
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                     }
@@ -3801,7 +3929,7 @@ struct HomeRowsView: View {
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(Color.brand)
                             .frame(width: 36, height: 36)
-                            .background(Color.paleSage, in: Circle())
+                            .background(Color.sageTint, in: Circle())
                             .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
@@ -3816,7 +3944,7 @@ struct HomeRowsView: View {
     /// Subtítulo neutral por categoría (sin "los mejores": no hay rankings).
     static func rowSubtitle(_ category: String) -> String? {
         let n = category.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .init(identifier: "es"))
-        if n.contains("cafe") { return "Cafés para descubrir en Villa Rica" }
+        if n.contains("cafe") { return "Para un buen café" }
         if n.contains("restaur") || n.contains("comida") { return "Gastronomía local cerca de ti" }
         if n.contains("tienda") || n.contains("producto") { return "Productos de la zona" }
         if n.contains("hosped") || n.contains("aloja") { return "Dónde quedarte" }
@@ -3833,7 +3961,9 @@ struct HomeRowsView: View {
                 LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(items) { card in
                         Button { onOpenPlace(card) } label: {
-                            HomePlaceCard(card: card, large: large)
+                            // En filas de categoría (las que tienen ícono) no se
+                            // repite la categoría en cada tarjeta.
+                            HomePlaceCard(card: card, large: large, showsCategory: icon == nil)
                         }
                         .buttonStyle(.pressable)
                     }
@@ -3850,6 +3980,9 @@ struct HomeRowsView: View {
 struct HomePlaceCard: View {
     let card: APIPlaceCard
     let large: Bool
+    /// En una fila de categoría la categoría ya está en el título de la
+    /// sección: la tarjeta muestra solo el nombre (Keyla, 19 Nov 2026).
+    var showsCategory: Bool = true
 
     /// Siempre 4:3: las filas se leen parejas aunque las fotos varíen.
     private var width: CGFloat { large ? 264 : 168 }
@@ -3893,7 +4026,7 @@ struct HomePlaceCard: View {
                     .foregroundStyle(Color.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
-                if let cat = card.category, !cat.isEmpty {
+                if showsCategory, let cat = card.category, !cat.isEmpty {
                     HStack(spacing: 6) {
                         Image(systemName: CategoryIcon.symbol(for: cat))
                             .font(.system(size: 12, weight: .regular))
@@ -4045,5 +4178,32 @@ struct LocationPinShape: Shape {
         // Hueco central.
         p.addEllipse(in: CGRect(x: center.x - r * 0.42, y: center.y - r * 0.42, width: r * 0.84, height: r * 0.84))
         return p
+    }
+}
+
+/// Icono de ubicación de toda la app: el mismo pin de "Cerca de ti" en Inicio
+/// (Keyla, 19 Nov 2026: "use the same icon in all the app"). Toma el color de
+/// `.foregroundStyle`; `size` es la altura (ancho 11:14).
+struct LocationPin: View {
+    var size: CGFloat = 14
+    var body: some View {
+        // Siempre forest green (revisión de paleta, 19 Nov 2026).
+        LocationPinShape()
+            .fill(Color.brand, style: FillStyle(eoFill: true))
+            .frame(width: size * 11 / 14, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
+/// SF Symbol, salvo los pines de ubicación, que usan siempre `LocationPin`.
+struct AppIcon: View {
+    let name: String
+    var size: CGFloat = 15
+    var body: some View {
+        if name.hasPrefix("mappin") {
+            LocationPin(size: size * 1.15)
+        } else {
+            Image(systemName: name).font(.system(size: size, weight: .semibold))
+        }
     }
 }

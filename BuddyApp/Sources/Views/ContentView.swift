@@ -11,7 +11,7 @@ enum AppTab: Int, CaseIterable {
     var icon: String {
         switch self {
         case .inicio:     return "safari"
-        case .trips:      return "suitcase"
+        case .trips:      return "globe.americas"
         case .conexiones: return "bubble.left.and.bubble.right"
         case .yo:         return "person"
         }
@@ -19,7 +19,7 @@ enum AppTab: Int, CaseIterable {
     var activeIcon: String {
         switch self {
         case .inicio:     return "safari.fill"
-        case .trips:      return "suitcase.fill"
+        case .trips:      return "globe.americas.fill"
         case .conexiones: return "bubble.left.and.bubble.right.fill"
         case .yo:         return "person.fill"
         }
@@ -27,7 +27,7 @@ enum AppTab: Int, CaseIterable {
     var label: String {
         switch self {
         case .inicio:     return "Inicio"
-        case .trips:      return "Trips"
+        case .trips:      return "Comunidad"
         case .conexiones: return "Conexiones"
         case .yo:         return "Yo"
         }
@@ -51,7 +51,7 @@ struct RootView: View {
         // safeAreaPadding y el último elemento nunca queda tapado.
         TabView(selection: $router.selectedTab) {
             InicioView().floatingTabBarSpace().tag(AppTab.inicio)
-            TripsView().floatingTabBarSpace().tag(AppTab.trips)
+            CommunityView().floatingTabBarSpace().tag(AppTab.trips)
             ConexionesView().environmentObject(chatStore).floatingTabBarSpace().tag(AppTab.conexiones)
             YoView().environmentObject(authState).environmentObject(routeStore).floatingTabBarSpace().tag(AppTab.yo)
         }
@@ -238,7 +238,7 @@ struct GlassTabBar: View {
                     .frame(maxWidth: .infinity, minHeight: 50)
                     .background {
                         if active {
-                            Capsule().fill(Color.brand.opacity(0.10))
+                            Capsule().fill(Color.sageTint)
                         }
                     }
                     .contentShape(Capsule())

@@ -10,6 +10,13 @@ final class AppRouter: ObservableObject {
 
     @Published var selectedTab: AppTab = .inicio
 
+    /// "Mis trips" vive en Yo (19 Nov 2026): abre Yo y empuja Mis trips.
+    @Published var pendingMyTrips = false
+    func openMyTrips() {
+        pendingMyTrips = true
+        switchTo(.yo)
+    }
+
     func switchTo(_ tab: AppTab) {
         DispatchQueue.main.async {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
