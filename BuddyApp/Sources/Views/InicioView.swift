@@ -1101,6 +1101,8 @@ struct InicioView: View {
         let previousId   = resolvedLocation?.destinationId
         let previousName = resolvedLocation?.destinationName
         resolvedLocation = resolution
+        // Velocidad: la guía del destino se baja ya, así abrir un lugar es inmediato.
+        if let id = resolution?.destinationId, id != previousId { RouteStore.prefetch(destinationId: id) }
 
         guard let resolution else {
             if previousId != nil { print("🏠 [location] \(previousName ?? "?") → fuera de cobertura") }
@@ -1408,6 +1410,7 @@ struct InicioView: View {
         guard isLoadingData else { return }
         dlog("⏱️ [tiempo] Home listo (fuera el esqueleto) a los \(Cronometro.desdeArranque())ms del arranque, con \(spotsStore.spots.count) spot(s) en memoria — \(motivo)")
         isLoadingData = false
+        PerfLog.ms("inicio-listo(\(motivo))", since: Cronometro.arranque)
     }
 
     private func _loadDataBody(force: Bool) async {
@@ -2475,8 +2478,8 @@ struct NearbyPlaceCard: View {
                         .padding(8)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-            .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -2563,6 +2566,8 @@ struct PlaceGuideMapSheet: View {
         self.lat           = lat
         self.lng           = lng
         self.muestraCerrar = muestraCerrar
+        // La guía del destino se comparte: abrir un lugar no la vuelve a bajar.
+        _routeStore = StateObject(wrappedValue: destinationId.map { RouteStore.shared(forDestination: $0) } ?? RouteStore())
     }
 
     init(place: APIPlaceCard, muestraCerrar: Bool = false) {
@@ -2571,7 +2576,7 @@ struct PlaceGuideMapSheet: View {
                   muestraCerrar: muestraCerrar)
     }
 
-    @StateObject private var routeStore = RouteStore()
+    @StateObject private var routeStore: RouteStore
     @State private var loadState: MapLoadState = .loading
     @Environment(\.dismiss) private var dismiss
 
@@ -2604,7 +2609,9 @@ struct PlaceGuideMapSheet: View {
                     ? .noGuide(lat: lat!, lng: lng!) : .noData
                 return
             }
+            let t0 = Date()
             loadState = await routeStore.ensureLoaded(destinationId: destId)
+            PerfLog.ms("abrir-lugar", since: t0)
         }
     }
 
@@ -3543,6 +3550,8 @@ struct HomeRowsView: View {
     var heroSlogan: String? = nil
 
     @State private var query = ""
+    /// Coincidencias en productos: id del lugar -> productos que coinciden.
+    @State private var productHits: [String: [ProductSearchHit.P]] = [:]
     /// Cuánto subió la portada. Cuando la foto ya pasó, una franja tapa la
     /// zona de la hora para que el contenido no se lea debajo de ella.
     @State private var heroScroll: CGFloat = 0
@@ -3570,12 +3579,21 @@ struct HomeRowsView: View {
         return category + "es"
     }
 
+    /// Búsqueda inteligente (Keyla, 20 Nov 2026): sin tildes ni mayúsculas,
+    /// todas las palabras, y también en los productos de cada lugar.
     private var searchResults: [APIPlaceCard] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return [] }
-        return local.filter {
-            $0.name.lowercased().contains(q) || ($0.category ?? "").lowercased().contains(q)
-        }
+        PlaceSearch.results(local, query: query,
+                            text: { "\($0.name) \($0.category ?? "")" },
+                            hasProductHit: { productHits[$0.id.lowercased()] != nil })
+    }
+
+    private func loadProductHits(_ q: String) async {
+        let t = q.trimmingCharacters(in: .whitespaces)
+        guard t.count >= 2 else { productHits = [:]; return }
+        try? await Task.sleep(nanoseconds: 300_000_000)   // espera a que deje de escribir
+        guard !Task.isCancelled,
+              let hits = try? await APIClient.shared.searchProducts(t) else { return }
+        productHits = Dictionary(hits.map { ($0.spotId.lowercased(), $0.products) }, uniquingKeysWith: { a, _ in a })
     }
 
     static func categoryName(_ card: APIPlaceCard) -> String {
@@ -3637,7 +3655,19 @@ struct HomeRowsView: View {
         }
     }
 
+    /// Velocidad: baja por adelantado la guía de los destinos que se ven en
+    /// Inicio (máximo 2), así abrir un lugar no espera a la red.
+    private var prefetchKey: String {
+        Array(Set(local.prefix(12).compactMap(\.destinationId))).sorted().prefix(2).joined(separator: ",")
+    }
+
     var body: some View {
+        rowsBody.task(id: prefetchKey) {
+            for id in prefetchKey.split(separator: ",") { RouteStore.prefetch(destinationId: String(id)) }
+        }
+    }
+
+    private var rowsBody: some View {
         GeometryReader { geo in
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -3765,6 +3795,7 @@ struct HomeRowsView: View {
                 .foregroundStyle(Color.inkMuted)
                 .accessibilityHidden(true)
             TextField("¿Qué quieres descubrir?", text: $query)
+                .task(id: query) { await loadProductHits(query) }
                 .font(BT.body)
                 .foregroundStyle(Color.ink)
                 .submitLabel(.search)
@@ -3790,16 +3821,25 @@ struct HomeRowsView: View {
                 Text("Sin resultados para \"\(query)\"")
                     .font(BT.headline)
                     .foregroundStyle(Color.ink)
-                Text("Prueba con otra palabra, como café o restaurante.")
+                Text("Buscamos en lugares y en sus productos. Prueba con otra palabra, como café o miel.")
                     .font(BT.footnote)
                     .foregroundStyle(Color.inkMuted)
             }
             .padding(.horizontal, Spacing.edge)
         } else {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12, alignment: .top), GridItem(.flexible(), spacing: 12, alignment: .top)],
+                      alignment: .leading, spacing: 16) {
                 ForEach(searchResults) { card in
                     Button { onOpenPlace(card) } label: {
-                        HomePlaceCard(card: card, large: false)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HomePlaceCard(card: card, large: false)
+                            // Por qué aparece: el producto que coincide.
+                            if let p = productHits[card.id.lowercased()]?.first {
+                                Text("Tiene: " + p.name + (p.price.map { String(format: " · S/ %.2f", $0) } ?? ""))
+                                    .font(BT.caption1).foregroundStyle(Color.brand).lineLimit(2)
+                                    .padding(.horizontal, 4)
+                            }
+                        }
                     }
                     .buttonStyle(.pressable)
                 }
@@ -3827,7 +3867,7 @@ struct HomeRowsView: View {
                             .frame(minWidth: 80)
                             .frame(height: 70)
                             .padding(.horizontal, 8)
-                            .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.sm))
+                            .background(Color.surface, in: RoundedRectangle(cornerRadius: 10))
                         }
                         .buttonStyle(.pressable)
                         .accessibilityLabel("Categoría \(g.name), \(g.items.count) lugares")
@@ -3861,7 +3901,7 @@ struct HomeRowsView: View {
                     .accessibilityHidden(true)
             }
             .padding(Spacing.md)
-            .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.sm))
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: 10))
             .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
         }
         .buttonStyle(.pressable)
@@ -3958,7 +3998,7 @@ struct HomeRowsView: View {
         VStack(alignment: .leading, spacing: 12) {
             rowHeader(title, subtitle: subtitle, category: category, icon: icon, capsuleAction: capsuleAction)
             ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: icon == nil ? 12 : 8) {
                     ForEach(items) { card in
                         Button { onOpenPlace(card) } label: {
                             // En filas de categoría (las que tienen ícono) no se
@@ -3984,9 +4024,13 @@ struct HomePlaceCard: View {
     /// sección: la tarjeta muestra solo el nombre (Keyla, 19 Nov 2026).
     var showsCategory: Bool = true
 
-    /// Siempre 4:3: las filas se leen parejas aunque las fotos varíen.
-    private var width: CGFloat { large ? 264 : 168 }
-    private var height: CGFloat { width * 3 / 4 }
+    /// Filas de categoría: foto vertical 4:5, más angosta y con esquinas más
+    /// chicas (Keyla, 20 Nov 2026). Las demás filas siguen en 4:3.
+    private var portrait: Bool { !showsCategory && !large }
+    private var width: CGFloat { large ? 264 : (portrait ? 150 : 168) }
+    private var height: CGFloat { portrait ? width * 5 / 4 : width * 3 / 4 }
+    /// Mismo radio en todas las tarjetas de lugar, menos curvo (Keyla, 20 Nov 2026).
+    private var corner: CGFloat { 10 }
 
     private var distanceText: String? {
         guard let m = card.distanceMeters else { return nil }
@@ -4045,10 +4089,11 @@ struct HomePlaceCard: View {
             .frame(width: width, alignment: .leading)
         }
         .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+        .clipShape(RoundedRectangle(cornerRadius: corner))
         .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("placeCard")   // para las pruebas de fluidez
     }
 }
 
@@ -4091,7 +4136,7 @@ struct HomeRowsSkeleton: View {
                         .padding(.horizontal, Spacing.edge)
                     HStack(spacing: 12) {
                         ForEach(0..<3, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: Radius.sm)
+                            RoundedRectangle(cornerRadius: 10)
                                 .frame(width: i == 0 ? 264 : 168, height: i == 0 ? 198 : 126)
                         }
                     }

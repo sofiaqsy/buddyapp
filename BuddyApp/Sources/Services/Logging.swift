@@ -41,3 +41,17 @@ enum Cronometro {
         return r
     }
 }
+
+// MARK: – Tiempos reales de pantalla (fluidez, Keyla 20 Nov 2026)
+// Se leen con: log show --predicate 'subsystem == "com.buddyapp.perf"'
+// Solo duraciones, nunca datos personales.
+import os
+enum PerfLog {
+    static let logger = Logger(subsystem: "com.buddyapp.perf", category: "screen")
+    /// Momento del último toque en la barra de pestañas.
+    nonisolated(unsafe) static var tabTapAt: Date?
+    static func ms(_ what: String, since t0: Date) {
+        let ms = Int(Date().timeIntervalSince(t0) * 1000)
+        logger.notice("PERF \(what, privacy: .public) \(ms, privacy: .public) ms")
+    }
+}

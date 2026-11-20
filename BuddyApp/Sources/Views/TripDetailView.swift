@@ -213,8 +213,47 @@ struct TripDetailView: View {
     /// Alto actual del panel (lista o detalle). Lo usan el panel y el botón de
     /// "mi ubicación", que debe quedar siempre por encima del panel.
     private var panelHeight: CGFloat {
-        (selectedPlace != nil || (focusPlaceId != nil && !focusHandled)
+        if detailExpanded && selectedPlace != nil { return expandedHeight }
+        return (selectedPlace != nil || (focusPlaceId != nil && !focusHandled)
             ? detalleHeight : sheetHeight) + bottomClearance
+    }
+
+    /// Detalle de un lugar a pantalla casi completa (Keyla, 20 Nov 2026): se
+    /// jala hacia arriba y tapa el mapa; hacia abajo vuelve al alto normal.
+    @State private var detailExpanded = false
+    @State private var dragOffset: CGFloat = 0
+    private var expandedHeight: CGFloat {
+        let top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.safeAreaInsets.top ?? 0
+        // El panel termina por debajo del borde inferior (pasa bajo la tab
+        // bar), así que se resta algo más para que la barrita quede bajo la isla.
+        return UIScreen.main.bounds.height - max(top, 54) - 36
+    }
+
+    /// Barrita para jalar: arriba abre todo, abajo vuelve. Tocarla alterna.
+    private var grabber: some View {
+        Capsule().fill(Color.border).frame(width: 40, height: 5)
+            .frame(maxWidth: .infinity).frame(height: 30)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.spring(duration: 0.3)) { detailExpanded.toggle() } }
+            .highPriorityGesture(panelDrag)
+            .accessibilityLabel(detailExpanded ? "Mostrar el mapa" : "Ver todo el lugar")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private var panelDrag: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { v in dragOffset = v.translation.height }
+            .onEnded { v in
+                let dy = v.predictedEndTranslation.height
+                withAnimation(.spring(duration: 0.3)) {
+                    if dy < -60 { detailExpanded = true }
+                    else if dy > 60 {
+                        detailExpanded = false
+                    }
+                    dragOffset = 0
+                }
+            }
     }
 
     var body: some View {
@@ -361,6 +400,8 @@ struct TripDetailView: View {
             .frame(width: 44)
             .padding(.trailing, 16)
             .padding(.bottom, panelHeight + 52)
+            // Con el detalle abierto a pantalla completa no hay mapa que ubicar.
+            .opacity(detailExpanded && selectedPlace != nil ? 0 : 1)
             .animation(.easeInOut(duration: 0.25), value: panelHeight)
         }
     }
@@ -519,6 +560,8 @@ struct TripDetailView: View {
     private func bottomSection(geo: GeometryProxy) -> some View {
         VStack(spacing: 0) {
             if let place = selectedPlace {
+                grabber
+                    .padding(.bottom, -14)
                 // Mismo panel, contenido reemplazado — nada se levanta encima
                 // del mapa. Antes esto abría un .sheet modal; se sentía como
                 // una interrupción en vez de una respuesta a tocar el lugar.
@@ -531,7 +574,8 @@ struct TripDetailView: View {
                         if let jid = journey?.id { routeStore.toggleFavorite(placeId: place.id, journeyId: jid) }
                     },
                     onNavigate: { navigationTarget = place },
-                    onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil } }
+                    onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil; detailExpanded = false } },
+                    expanded: detailExpanded
                 )
             } else {
             // Presencia humana — el corazón de Buddy, antes que los lugares
@@ -666,9 +710,12 @@ struct TripDetailView: View {
         // segundo después bajaba a su sitio.
         .frame(
             width: geo.size.width,
-            height: panelHeight,
+            // Mientras se jala, el panel sigue al dedo (sin pasarse de los topes).
+            height: selectedPlace == nil ? panelHeight
+                : min(expandedHeight, max(detalleHeight + bottomClearance, panelHeight - dragOffset)),
             alignment: .top,
         )
+
         // Superficie blanca sólida con esquinas superiores redondeadas, como las
         // tarjetas de Inicio: el mapa ya no se transparenta detrás del texto.
         .background(
@@ -679,7 +726,7 @@ struct TripDetailView: View {
         )
         .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
         .onChange(of: selectedPlace?.id) { _, id in
-            if id != nil { focusHandled = true }
+            if id != nil { focusHandled = true } else { detailExpanded = false }
         }
     }
 
@@ -1100,20 +1147,27 @@ struct PlaceGuideDetailSheet: View {
     /// no tiene nada que cerrar ahí, así que quién lo contiene decide qué
     /// significa "cerrar" (volver a mostrar la lista).
     let onClose: () -> Void
+    /// Panel jalado hacia arriba: las fotos se ven en cuadrícula, no en carrusel.
+    var expanded: Bool = false
 
     private enum Tab: String, CaseIterable {
-        case fotos = "Fotos", info = "Información", buddies = "Buddies"
+        case productos = "Productos", info = "Información", fotos = "Fotos", buddies = "Buddies"
         /// Pestañas visibles: Buddies queda oculta en Villa Rica V1.
-        static var visible: [Tab] { HomeRowsView.showsBuddyTools ? allCases : [.fotos, .info] }
+        static var visible: [Tab] { HomeRowsView.showsBuddyTools ? allCases : [.productos, .info, .fotos] }
         var icon: String {
             switch self {
             case .fotos:   return "photo.on.rectangle"
             case .info:    return "info.circle"
+            case .productos: return "bag"
             case .buddies: return "person.2"
             }
         }
     }
-    @State private var tab: Tab = .fotos
+    @State private var tab: Tab = .productos
+    @State private var userPickedTab = false
+    @State private var products: [FincasProduct] = []
+    @State private var productsState: ProductsState = .idle
+    private enum ProductsState { case idle, loading, loaded, notLinked, failed }
 
     @State private var gallery: APIPlaceGallery?
     @State private var isLoadingGallery = true
@@ -1211,6 +1265,7 @@ struct PlaceGuideDetailSheet: View {
                     switch tab {
                     case .fotos:   fotosTab
                     case .info:    infoTab
+                    case .productos: productosTab
                     case .buddies: buddiesTab
                     }
                 }
@@ -1236,6 +1291,9 @@ struct PlaceGuideDetailSheet: View {
         // quedaban con las del lugar anterior: un .task sin id corre UNA sola
         // vez por instancia de vista, y bottomSection reusa la misma vista al
         // cambiar selectedPlace, así que nunca volvía a pedir la galería.
+        .task(id: place.id) { tab = .productos; await loadProducts() }
+        .fullScreenCover(item: $chatTarget) { t in BusinessChatView(target: t) }
+        .fullScreenCover(item: $productViewer) { set in PlacePhotoViewer(photos: set.photos, inicial: 0) }
         .task(id: place.id) {
             isLoadingGallery = true
             isLoadingBuddies = true
@@ -1286,6 +1344,167 @@ struct PlaceGuideDetailSheet: View {
     private func fetchBuddiesIfPossible() async -> [APIPlaceBuddy]? {
         guard let destinationId else { return nil }
         return try? await APIClient.shared.fetchDestinationBuddies(id: destinationId)
+    }
+
+    // MARK: Productos (solo lectura, desde Apartalo vía buddy-core)
+
+    @ViewBuilder
+    private var productosTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch productsState {
+            case .idle, .loading:
+                HStack(spacing: 8) { ProgressView(); Text("Cargando productos").font(BT.footnote).foregroundStyle(Color.inkMuted) }
+                    .padding(.vertical, 16)
+            case .notLinked, .failed where products.isEmpty:
+                productsEmpty(productsState == .failed
+                    ? "No pudimos cargar los productos. Intenta más tarde."
+                    : "Este lugar aún no muestra sus productos en Buddy.")
+            default:
+                if products.isEmpty {
+                    productsEmpty("Este negocio aún no tiene productos visibles.")
+                } else {
+                    ForEach(products) { p in productRow(p) }
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    @State private var chatTarget: BusinessChatTarget? = nil
+
+    /// "Preguntar al negocio": abre el chat con una tarjeta del lugar.
+    private var askBusinessButton: some View {
+        Button {
+            chatTarget = BusinessChatTarget(spotId: place.id.uuidString.lowercased(), title: place.name,
+                                            card: BizCard(kind: "place", title: place.name,
+                                                          subtitle: place.categoryName,
+                                                          spotId: place.id.uuidString.lowercased()))
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left.and.text.bubble.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 30, height: 30)
+                    .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pregúntale al negocio").font(BT.footnoteBold).foregroundStyle(Color.ink)
+                    Text("Horario, precios o lo que necesites saber").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.brand)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func askAbout(_ p: FincasProduct) {
+        let shown = (p.presentations ?? []).filter { $0.visible != false }
+        let first = shown.first
+        chatTarget = BusinessChatTarget(
+            spotId: place.id.uuidString.lowercased(), title: place.name,
+            card: BizCard(kind: "product", title: p.name, subtitle: first?.label,
+                          price: first?.price.map { String(format: "S/ %.2f", $0) },
+                          imageUrl: p.coverUrl, productId: p.id))
+    }
+
+    private func productsEmpty(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "bag").foregroundStyle(Color.brand)
+                .frame(width: 34, height: 34).background(Color.paleSage, in: RoundedRectangle(cornerRadius: 10))
+            Text(text).font(BT.footnote).foregroundStyle(Color.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+    }
+
+    /// Toda la tarjeta pregunta por el producto; el ícono de chat va junto al
+    /// nombre, como parte de la tarjeta (Keyla, 20 Nov 2026: el botón suelto
+    /// se veía "fuera de lugar").
+    private func productRow(_ p: FincasProduct) -> some View {
+        let shown = (p.presentations ?? []).filter { $0.visible != false }
+        let photos = productPhotos(p)
+        return HStack(alignment: .top, spacing: 12) {
+            // La foto abre el mismo visor de pantalla completa que las demás fotos.
+            Button {
+                if !photos.isEmpty { productViewer = ProductPhotoSet(photos: photos) }
+            } label: {
+                AsyncImage(url: p.coverUrl.flatMap(URL.init(string:))) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Image(systemName: "bag").foregroundStyle(Color.brand)
+                }
+                .frame(width: 64, height: 64)
+                .background(Color.paleSage)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .disabled(photos.isEmpty)
+            .accessibilityLabel("Ver fotos de \(p.name)")
+            Button { askAbout(p) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(p.name).font(BT.footnoteBold).foregroundStyle(Color.ink)
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                        Spacer(minLength: 4)
+                        Image(systemName: "bubble.left.and.text.bubble.right")
+                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.brand)
+                            .frame(width: 32, height: 32)
+                            .background(Color.sageTint, in: Circle())
+                    }
+                    ForEach(shown) { pr in
+                        HStack {
+                            Text(pr.label).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                            Spacer()
+                            if let price = pr.price {
+                                Text(String(format: "S/ %.2f", price)).font(BT.footnoteBold).foregroundStyle(Color.brand)
+                            }
+                        }
+                    }
+                    Text("Toca para preguntar").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Preguntar por \(p.name)")
+        }
+        .padding(12)
+        .background(Color.canvas, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    struct ProductPhotoSet: Identifiable { let id = UUID(); let photos: [String] }
+    @State private var productViewer: ProductPhotoSet? = nil
+
+    /// Todas las fotos del producto, sin repetir: portada y las de cada presentación.
+    private func productPhotos(_ p: FincasProduct) -> [String] {
+        var out: [String] = []
+        var all: [String?] = [p.coverUrl]
+        for pr in p.presentations ?? [] {
+            all += (pr.photos ?? []).map { Optional($0.url) }
+            all.append(pr.photoUrl)
+        }
+        for u in all { if let u, !u.isEmpty, !out.contains(u) { out.append(u) } }
+        return out
+    }
+
+    private func loadProducts() async {
+        productsState = .loading
+        do {
+            let page = try await APIClient.shared.fetchSpotProducts(spotId: place.id.uuidString.lowercased())
+            products = page.items
+            productsState = page.linked == false ? .notLinked : .loaded
+            // Con productos, la ficha abre en Productos; sin ellos, en Información.
+            // Siempre abre en Productos (Keyla, 20 Nov 2026).
+        } catch {
+            dlog("🛍️ [PlaceProducts] \(error)")
+            products = []
+            // Integración apagada (404) o sin dueño: se muestra como "aún no muestra productos".
+            productsState = .notLinked
+        }
     }
 
     // MARK: Header
@@ -1346,6 +1565,7 @@ struct PlaceGuideDetailSheet: View {
                 Button {
                     Haptic.select()
                     tab = t
+                    userPickedTab = true
                 } label: {
                     VStack(spacing: 6) {
                         Text(t.rawValue)
@@ -1358,6 +1578,8 @@ struct PlaceGuideDetailSheet: View {
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
+                // VoiceOver dice cuál pestaña está elegida (y las pruebas lo leen).
+                .accessibilityAddTraits(tab == t ? .isSelected : [])
             }
         }
         .padding(.horizontal, 8)
@@ -1458,6 +1680,35 @@ struct PlaceGuideDetailSheet: View {
                 } else {
                     emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
                 }
+            } else if expanded {
+                // Pantalla completa: cuadrícula de 3 columnas con TODAS las
+                // fotos, sin carrusel lateral (Keyla, 20 Nov 2026).
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                    if myBuddyRecommendation != nil {
+                        Color.clear.aspectRatio(1, contentMode: .fit).overlay(addPhotoTile)
+                    }
+                    ForEach(galleryPhotos) { photo in
+                        Button {
+                            visorFoto = VisorFotoInicio(indice: allPhotos.firstIndex(of: photo.url) ?? 0)
+                        } label: {
+                            Color.clear.aspectRatio(1, contentMode: .fit)
+                                .overlay(CachedImage(urlString: photo.url) { img in
+                                    img.resizable().scaledToFill()
+                                } placeholder: { Rectangle().fill(Color.sandLight) })
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            if photo.isMine, photo.isDeletable {
+                                Button(role: .destructive) { photoPendingDeletion = photo } label: {
+                                    Label("Eliminar foto", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 120)
             } else {
                 // Sin "Ver todas": tocar cualquier foto abre el visor, y ahí
                 // se recorren TODAS (no solo las de esta fila).
@@ -1505,24 +1756,15 @@ struct PlaceGuideDetailSheet: View {
 
     private var infoTab: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach([("Horario", "clock"), ("Precios", "tag"), ("Contacto", "phone")], id: \.0) { row in
-                HStack(spacing: 10) {
-                    Image(systemName: row.1)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.brand)
-                        .frame(width: 30, height: 30)
-                        .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 9))
-                        .accessibilityHidden(true)
-                    Text(row.0)
-                        .font(BT.footnoteBold)
-                        .foregroundStyle(Color.ink)
-                    Spacer()
-                    // Sin datos del negocio todavía: nunca se inventan.
-                    Text("Por confirmar")
-                        .font(BT.caption1)
-                        .foregroundStyle(Color.inkMuted)
-                }
-                .accessibilityElement(children: .combine)
+            // Aún no hay horario, precios ni contacto guardados: no se muestran
+            // filas "Por confirmar". Si el lugar tiene negocio, la acción es
+            // preguntarle, con el mismo estilo de fila (Keyla, 20 Nov 2026).
+            if productsState == .loaded {
+                askBusinessButton
+            } else if place.description.isEmpty {
+                Text("Aún no hay información de este lugar.")
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                    .padding(.vertical, 6)
             }
 
             if !place.description.isEmpty {
@@ -1810,4 +2052,215 @@ struct SpotBounds {
     func contains(_ o: SpotBounds) -> Bool {
         o.minLat >= minLat && o.maxLat <= maxLat && o.minLng >= minLng && o.maxLng <= maxLng
     }
+}
+
+
+// MARK: – Preguntar al negocio (chat viajero ↔ negocio, Keyla 20 Nov 2026)
+
+/// Qué abrir: el viajero llega desde un lugar (spotId) con una tarjeta; el
+/// negocio llega desde su bandeja con el id de la conversación.
+struct BusinessChatTarget: Identifiable, Hashable {
+    var id: String { conversationId ?? spotId ?? UUID().uuidString }
+    var spotId: String? = nil
+    var conversationId: String? = nil
+    var title: String
+    var card: BizCard? = nil
+}
+
+struct BusinessChatView: View {
+    let target: BusinessChatTarget
+    @Environment(\.dismiss) private var dismiss
+    @State private var conversationId: String? = nil
+    @State private var messages: [BizMessage] = []
+    @State private var side = "traveler"
+    @State private var pendingCard: BizCard? = nil
+    @State private var text = ""
+    @State private var sending = false
+    @State private var errorText: String? = nil
+    @State private var loading = true
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            if loading {
+                                ProgressView().tint(Color.brand).padding(.top, 40)
+                            } else if messages.isEmpty {
+                                Text(side == "traveler"
+                                     ? "Escribe tu pregunta. El negocio te responderá aquí."
+                                     : "Aún no hay mensajes.")
+                                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.top, 40).padding(.horizontal, Spacing.xl)
+                            }
+                            ForEach(messages) { m in
+                                bubble(m).id(m.id)
+                            }
+                        }
+                        .padding(.horizontal, Spacing.edge).padding(.vertical, Spacing.md)
+                    }
+                    .onChange(of: messages.count) { _, _ in
+                        if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                    }
+                }
+                composer
+            }
+            .background(Color.canvas)
+            .navigationTitle(target.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cerrar") { dismiss() } }
+            }
+        }
+        .task { await open() }
+        .task(id: conversationId) {
+            // Mientras la pantalla está abierta se revisan respuestas nuevas.
+            while !Task.isCancelled, conversationId != nil {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await reload()
+            }
+        }
+    }
+
+    // MARK: Burbujas
+
+    @ViewBuilder
+    private func bubble(_ m: BizMessage) -> some View {
+        let mine = m.senderRole == side
+        VStack(alignment: mine ? .trailing : .leading, spacing: 6) {
+            if let card = m.card { cardView(card) }
+            Text(m.body)
+                .font(.system(size: 16))
+                .foregroundStyle(mine ? Color.inkInverse : Color.ink)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(mine ? Color.brand : Color.surface, in: RoundedRectangle(cornerRadius: 18))
+        }
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+        .padding(mine ? .leading : .trailing, 48)
+    }
+
+    private func cardView(_ c: BizCard) -> some View {
+        HStack(spacing: 10) {
+            AsyncImage(url: c.imageUrl.flatMap(URL.init(string:))) { img in img.resizable().scaledToFill() } placeholder: {
+                Image(systemName: c.kind == "product" ? "bag" : "storefront").foregroundStyle(Color.brand)
+            }
+            .frame(width: 48, height: 48)
+            .background(Color.paleSage)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(c.kind == "product" ? "Pregunta sobre este producto" : "Consulta sobre este lugar")
+                    .font(BT.caption1).foregroundStyle(Color.inkMuted)
+                Text(c.title).font(BT.footnoteBold).foregroundStyle(Color.ink).lineLimit(2)
+                if let line = [c.subtitle, c.price].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
+                    Text(line).font(BT.caption1).foregroundStyle(Color.brand)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: 280, alignment: .leading)
+        .background(Color.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.hairline, lineWidth: 1))
+    }
+
+    // MARK: Escribir
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let pendingCard {
+                HStack(spacing: 8) {
+                    cardView(pendingCard)
+                    Button { self.pendingCard = nil } label: {
+                        Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.inkMuted)
+                            .frame(width: 32, height: 32).background(Color.sageTint, in: Circle())
+                    }
+                    .accessibilityLabel("Quitar tarjeta")
+                }
+            }
+            if let errorText { Text(errorText).font(BT.caption1).foregroundStyle(Color.errorRed) }
+            HStack(spacing: 8) {
+                TextField(side == "traveler" ? "Escribe tu pregunta…" : "Escribe tu respuesta…", text: $text, axis: .vertical)
+                    .lineLimit(1...4)
+                    .focused($focused)
+                    .font(BT.callout)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Color.surface, in: RoundedRectangle(cornerRadius: 20))
+                Button { Task { await send() } } label: {
+                    Group {
+                        if sending { ProgressView().tint(Color.inkInverse) }
+                        else { Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)) }
+                    }
+                    .foregroundStyle(Color.inkInverse)
+                    .frame(width: 44, height: 44)
+                    .background(canSend ? Color.brand : Color.inkMuted.opacity(0.4), in: Circle())
+                }
+                .disabled(!canSend)
+                .accessibilityLabel("Enviar")
+            }
+        }
+        .padding(.horizontal, Spacing.edge).padding(.vertical, 10)
+        .background(Color.canvas)
+    }
+
+    private var canSend: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sending && conversationId != nil
+    }
+
+    // MARK: Datos
+
+    private func open() async {
+        pendingCard = target.card
+        do {
+            if let id = target.conversationId {
+                conversationId = id
+            } else if let spotId = target.spotId {
+                conversationId = try await APIClient.shared.startBusinessChat(spotId: spotId).id
+            }
+            await reload()
+            // Si ya se mandó una tarjeta igual, no se repite.
+            if let c = pendingCard, messages.contains(where: { $0.card == c }) { pendingCard = nil }
+            focused = true
+        } catch {
+            errorText = message(for: error)
+        }
+        loading = false
+    }
+
+    private func reload() async {
+        guard let id = conversationId,
+              let thread = try? await APIClient.shared.businessChatMessages(conversationId: id) else { return }
+        side = thread.side
+        if thread.messages != messages { messages = thread.messages }
+    }
+
+    private func send() async {
+        guard let id = conversationId else { return }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        sending = true
+        errorText = nil
+        defer { sending = false }
+        do {
+            let m = try await APIClient.shared.sendBusinessChat(conversationId: id, body: body, card: pendingCard)
+            messages.append(m)
+            text = ""
+            pendingCard = nil
+            Haptic.success()
+        } catch {
+            errorText = message(for: error)
+        }
+    }
+
+    private func message(for error: Error) -> String {
+        // Mensajes del servidor en español (p. ej. "Este es tu negocio"); los técnicos no se muestran.
+        if case APIError.server(_, let msg) = error, !msg.isEmpty,
+           !["Unknown error", "Route not found", "Not found", "Unauthorized", "Error interno"].contains(msg) { return msg }
+        return "No pudimos enviar. Revisa tu conexión e intenta de nuevo."
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

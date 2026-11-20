@@ -42,6 +42,7 @@ struct RootView: View {
     @EnvironmentObject var authState: AuthState
     @EnvironmentObject var router: AppRouter
     @StateObject private var chatStore = ChatStore.shared
+    @ObservedObject private var accounts = AccountStore.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -50,10 +51,10 @@ struct RootView: View {
         // páginas, así que cada tab reserva el alto de la barra con
         // safeAreaPadding y el último elemento nunca queda tapado.
         TabView(selection: $router.selectedTab) {
-            InicioView().floatingTabBarSpace().tag(AppTab.inicio)
-            CommunityView().floatingTabBarSpace().tag(AppTab.trips)
-            ConexionesView().environmentObject(chatStore).floatingTabBarSpace().tag(AppTab.conexiones)
-            YoView().environmentObject(authState).environmentObject(routeStore).floatingTabBarSpace().tag(AppTab.yo)
+            InicioView().floatingTabBarSpace().perfTabAppear("inicio").tag(AppTab.inicio)
+            CommunityView().floatingTabBarSpace().perfTabAppear("comunidad").tag(AppTab.trips)
+            ConexionesView().environmentObject(chatStore).floatingTabBarSpace().perfTabAppear("conexiones").tag(AppTab.conexiones)
+            YoView().environmentObject(authState).environmentObject(routeStore).floatingTabBarSpace().perfTabAppear("yo").tag(AppTab.yo)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
@@ -192,6 +193,16 @@ private struct RootViewEvents: ViewModifier {
 struct GlassTabBar: View {
     @Binding var selection: AppTab
     var unreadChats: Int = 0
+    /// Modo negocio (prototipo): el 4.º tab muestra el negocio activo.
+    @ObservedObject private var accounts = AccountStore.shared
+
+    private func label(_ tab: AppTab) -> String {
+        tab == .yo ? (accounts.active != nil ? "Negocio" : tab.label) : tab.label
+    }
+    private func icon(_ tab: AppTab, _ active: Bool) -> String {
+        if tab == .yo, accounts.active != nil { return active ? "storefront.fill" : "storefront" }
+        return active ? tab.activeIcon : tab.icon
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -207,13 +218,17 @@ struct GlassTabBar: View {
                         return
                     }
                     Haptic.select()
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                        selection = tab
-                    }
+                    // Velocidad (Keyla, 20 Nov 2026): la pantalla cambia al
+                    // instante, como las pestañas nativas. Antes el cambio iba
+                    // dentro de un resorte y TODA la pantalla nueva se animaba
+                    // (~1 s hasta quedar quieta). La animación queda solo en la
+                    // barra (ver .animation abajo).
+                    PerfLog.tabTapAt = Date()
+                    selection = tab
                 } label: {
                     VStack(spacing: 3) {
                         ZStack(alignment: .topTrailing) {
-                            Image(systemName: active ? tab.activeIcon : tab.icon)
+                            Image(systemName: icon(tab, active))
                                 .font(.system(size: 19, weight: active ? .semibold : .regular))
                                 .frame(height: 22)
                                 .padding(.trailing, badge > 0 ? 10 : 0)
@@ -229,7 +244,7 @@ struct GlassTabBar: View {
                                     .offset(x: 8, y: -5)
                             }
                         }
-                        Text(tab.label)
+                        Text(label(tab))
                             .font(.system(size: 11, weight: active ? .semibold : .regular))
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -245,12 +260,13 @@ struct GlassTabBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(tab.label)
+                .accessibilityLabel(label(tab))
                 .accessibilityValue(badge > 0 ? "\(badge) sin leer" : "")
                 .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
             }
         }
         .padding(6)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: selection)
         .floatingTabBarSurface()
     }
 }
@@ -275,4 +291,11 @@ private extension View {
 extension View {
     /// Alto que ocupa la barra flotante (cápsula 62 + margen 4 + aire 10).
     func floatingTabBarSpace() -> some View { safeAreaPadding(.bottom, 76) }
+    /// Tiempo real desde el toque en la barra hasta que la pestaña se dibuja.
+    func perfTabAppear(_ name: String) -> some View {
+        onAppear {
+            guard let t = PerfLog.tabTapAt else { return }
+            DispatchQueue.main.async { PerfLog.ms("pestaña-\(name)", since: t); PerfLog.tabTapAt = nil }
+        }
+    }
 }

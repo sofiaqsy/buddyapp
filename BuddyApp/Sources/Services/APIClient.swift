@@ -15,13 +15,17 @@ final class APIClient {
     // URLSession con timeouts agresivos para redes de hotel/aeropuerto.
     // 15 s por request individual, 30 s máximo total — falla rápido y deja
     // que la capa de llamada decida si reintentar o mostrar un error.
-    private static let session: URLSession = {
+    // `var` solo para que las pruebas puedan poner un servidor falso
+    // (BuddyAppTests/APIClientTests). La app nunca la cambia.
+    static var session: URLSession = URLSession(configuration: makeConfiguration())
+
+    static func makeConfiguration() -> URLSessionConfiguration {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest  = 15
         cfg.timeoutIntervalForResource = 30
         cfg.waitsForConnectivity = false
-        return URLSession(configuration: cfg)
-    }()
+        return cfg
+    }
 
     private var headers: [String: String] {
         // Priority: Traveler JWT (guest or verified) → anon key
@@ -33,6 +37,10 @@ final class APIClient {
     }
 
     private init() {}
+
+    /// Solo pruebas: reemplaza la renovación de sesión del camino 401, para no
+    /// tocar la sesión real. La app nunca lo usa (nil).
+    var refreshOverride: (() async -> Bool)? = nil
 
     // MARK: – Deduplicación de peticiones en vuelo
     //
@@ -180,7 +188,7 @@ final class APIClient {
 
         if http.statusCode == 401, !isRetry {
             print("🔑 [APIClient] \(method) \(path) → 401 reqId=\(reqId.prefix(8)) — attempting refresh")
-            let refreshed = await sharedRefresh()
+            let refreshed = await (refreshOverride != nil ? refreshOverride!() : sharedRefresh())
             if refreshed {
                 return try await request(path: path, method: method, body: body, isRetry: true, rawSink: rawSink)
             } else {
@@ -1532,4 +1540,118 @@ actor HomeBootstrap {
         if Self.escriturasFalsas.contains(where: { path.hasPrefix($0) }) { return }
         entradas.removeAll()
     }
+}
+
+
+// MARK: – Vínculo con fincas (buddy-core /v1/integrations/fincas, ADR-001)
+struct FincasLinkAnswer: Decodable {
+    struct Link: Decodable { let farmId: String; let businessId: String?; let name: String; let role: String }
+    let status: String
+    let links: [Link]?
+}
+extension APIClient {
+    func linkFincasBusinesses(firebaseToken: String) async throws -> FincasLinkAnswer {
+        try await request(path: "/integrations/fincas/link", method: "POST", body: ["firebaseToken": firebaseToken])
+    }
+
+    /// Lugares cuyos productos coinciden con la búsqueda (sin tildes).
+    func searchProducts(_ q: String) async throws -> [ProductSearchHit] {
+        struct R: Decodable { let results: [ProductSearchHit] }
+        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let r: R = try await request(path: "/integrations/fincas/product-search?q=\(enc)")
+        return r.results
+    }
+
+    // MARK: Preguntar al negocio (chat viajero ↔ negocio)
+    func startBusinessChat(spotId: String) async throws -> BizConversationRef {
+        try await request(path: "/integrations/business-chat/start", method: "POST", body: ["spotId": spotId])
+    }
+    func businessChatMessages(conversationId: String) async throws -> BizThread {
+        try await request(path: "/integrations/business-chat/\(conversationId)/messages")
+    }
+    func sendBusinessChat(conversationId: String, body: String, card: BizCard?) async throws -> BizMessage {
+        var payload: [String: Any] = ["body": body]
+        if let card { payload["card"] = card.asDictionary }
+        return try await request(path: "/integrations/business-chat/\(conversationId)/messages", method: "POST", body: payload)
+    }
+    func businessConversations(farmId: String?) async throws -> [BizConversation] {
+        struct R: Decodable { let conversations: [BizConversation] }
+        let q = farmId.map { "?farmId=\($0)" } ?? ""
+        let r: R = try await request(path: "/integrations/business-chat/conversations\(q)")
+        return r.conversations
+    }
+
+    /// El dueño reclama un lugar de Buddy como sede de su negocio de Apartalo.
+    func claimFincasSpot(spotId: String, farmId: String) async throws {
+        struct Ok: Decodable { let claimed: Bool? }
+        let _: Ok = try await request(path: "/integrations/fincas/spots/\(spotId)/claim", method: "POST", body: ["farmId": farmId])
+    }
+
+    func releaseFincasSpot(spotId: String, farmId: String) async throws {
+        struct Ok: Decodable { let released: Bool? }
+        let _: Ok = try await request(path: "/integrations/fincas/spots/\(spotId)/claim/\(farmId)", method: "DELETE")
+    }
+
+    /// Productos de un lugar vinculado a un negocio de Apartalo (solo lectura).
+    /// linked=false: el lugar aún no tiene dueño en Apartalo.
+    func fetchSpotProducts(spotId: String, offset: Int = 0) async throws -> SpotProductsPage {
+        try await request(path: "/integrations/fincas/spots/\(spotId)/products?offset=\(offset)&limit=20")
+    }
+}
+
+
+struct SpotProductsPage: Decodable {
+    let items: [FincasProduct]
+    let total: Int?
+    let hasMore: Bool?
+    let linked: Bool?
+}
+
+
+// MARK: – Chat viajero ↔ negocio
+struct BizConversationRef: Decodable, Hashable { let id: String; let businessName: String? }
+struct BizCard: Codable, Hashable {
+    var kind: String          // "place" | "product"
+    var title: String
+    var subtitle: String? = nil
+    var price: String? = nil
+    var imageUrl: String? = nil
+    var productId: String? = nil
+    var spotId: String? = nil
+    var asDictionary: [String: Any] {
+        var d: [String: Any] = ["kind": kind, "title": title]
+        if let subtitle { d["subtitle"] = subtitle }
+        if let price { d["price"] = price }
+        if let imageUrl { d["imageUrl"] = imageUrl }
+        if let productId { d["productId"] = productId }
+        if let spotId { d["spotId"] = spotId }
+        return d
+    }
+}
+struct BizMessage: Decodable, Identifiable, Hashable {
+    let id: String
+    let senderRole: String
+    let body: String
+    let card: BizCard?
+    let createdAt: String?
+}
+struct BizThread: Decodable {
+    let side: String
+    let messages: [BizMessage]
+}
+struct BizConversation: Decodable, Identifiable, Hashable {
+    let id: String
+    let farmId: String?
+    let spotId: String?
+    let businessName: String?
+    let travelerName: String?
+    let lastMessage: String?
+    let lastSender: String?
+    let lastAt: String?
+}
+
+struct ProductSearchHit: Decodable, Hashable {
+    struct P: Decodable, Hashable { let id: String; let name: String; let price: Double? }
+    let spotId: String
+    let products: [P]
 }

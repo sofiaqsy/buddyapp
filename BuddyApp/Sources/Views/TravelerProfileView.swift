@@ -77,9 +77,6 @@ struct TravelerProfileView: View {
                         .foregroundStyle(Color.ink)
                         .lineLimit(2)
                         .minimumScaleFactor(0.85)
-                    ProfileStatPills(items: ProfileStatPills.make(
-                        trips: trips.count, places: shares.count,
-                        helps: user?.buddyProfile?.totalHelps))
                     if let sub = subtitleLine {
                         Text(sub)
                             .font(BT.caption1)
@@ -89,16 +86,13 @@ struct TravelerProfileView: View {
                 Spacer(minLength: 0)
             }
             if let bio = user?.bio, !bio.isEmpty {
-                // Misma tarjeta blanca de la bio en Yo (sin lápiz: no es tuyo).
+                // Texto plano, sin tarjeta: en un perfil ajeno no se edita y una
+                // tarjeta blanca parecía un campo para escribir (Keyla, 20 Nov 2026).
                 Text(bio)
                     .font(BT.callout)
                     .foregroundStyle(Color.ink)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14).padding(.vertical, 14)
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-                    .cardShadow()
             }
         }
         .padding(.horizontal, Spacing.edge)

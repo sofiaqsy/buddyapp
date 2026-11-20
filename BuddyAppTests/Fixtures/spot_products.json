@@ -1,0 +1,1 @@
+{"items":[{"id":"p2","name":"Miel de abeja","description":"Frasco","status":"active","imageUrl":null,"presentations":[{"id":"pr1","packSize":0.5,"unit":"kg","price":18.5,"stock":4,"visible":true,"photos":[{"id":"ph1","url":"https://example.com/miel.jpg"}]}]},{"id":"p3","name":"Sin fotos"}],"total":2,"hasMore":false,"linked":true}

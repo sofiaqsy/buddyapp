@@ -6,7 +6,28 @@ import Foundation
 
 final class AuthService {
     static let shared = AuthService()
-    private init() {}
+
+    // Dependencias inyectables para las pruebas (BuddyAppTests/AuthServiceTests).
+    // La app usa siempre los valores por defecto: mismo comportamiento que antes.
+    private let defaults: UserDefaults
+    private let store: SecureStore
+    private let session: URLSession
+    private let notifications: NotificationCenter
+    private let travelerOverride: TravelerService?
+    /// En la app es TravelerService.shared (se lee al usarlo, como antes).
+    private var traveler: TravelerService { travelerOverride ?? TravelerService.shared }
+
+    init(defaults: UserDefaults = .standard,
+         store: SecureStore = .shared,
+         session: URLSession = .shared,
+         notifications: NotificationCenter = .default,
+         traveler: TravelerService? = nil) {
+        self.defaults = defaults
+        self.store = store
+        self.session = session
+        self.notifications = notifications
+        self.travelerOverride = traveler
+    }
 
     private let coreURL = "https://buddy-core-504b393f8333.herokuapp.com/v1/auth"
 
@@ -19,7 +40,7 @@ final class AuthService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["phone": phone])
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let body   = String(data: data, encoding: .utf8) ?? "empty"
         print("📱 sendOTP → status: \(status), body: \(body)")
@@ -39,13 +60,13 @@ final class AuthService {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var payload: [String: Any] = ["phone": phone, "token": code]
-        if let currentId = TravelerService.shared.travelerId {
+        if let currentId = traveler.travelerId {
             payload["guest_traveler_id"] = currentId
-            print("🔐 verifyOTP → incluyendo guest_traveler_id=\(currentId.prefix(8)) (status=\(TravelerService.shared.status ?? "nil"))")
+            print("🔐 verifyOTP → incluyendo guest_traveler_id=\(currentId.prefix(8)) (status=\(traveler.status ?? "nil"))")
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let body   = String(data: data, encoding: .utf8) ?? "empty"
         print("🔐 verifyOTP → status: \(status), body: \(body)")
@@ -56,18 +77,18 @@ final class AuthService {
 
         var profileComplete = false
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let token  = json["access_token"]  as? String { UserDefaults.standard.set(token,  forKey: "buddy.accessToken")  }
-            if let userId = json["user_id"]        as? String { UserDefaults.standard.set(userId, forKey: "buddy.userId")       }
-            if let rtoken = json["refresh_token"]  as? String { UserDefaults.standard.set(rtoken, forKey: "buddy.refreshToken") }
+            if let token  = json["access_token"]  as? String { store.set(token, .accessToken)  }
+            if let userId = json["user_id"]        as? String { defaults.set(userId, forKey: "buddy.userId")       }
+            if let rtoken = json["refresh_token"]  as? String { store.set(rtoken, .refreshToken) }
             profileComplete = json["has_profile"] as? Bool ?? false
             if profileComplete {
-                UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
+                defaults.set(true, forKey: "buddy.onboardingDone")
             }
             // Hydrate TravelerService with the Traveler identity resolved at auth time.
             if let tid   = json["traveler_id"]     as? String,
                let ttok  = json["traveler_token"]  as? String {
                 let tstatus = json["traveler_status"] as? String ?? "verified"
-                TravelerService.shared.hydrate(travelerId: tid, token: ttok, status: tstatus)
+                traveler.hydrate(travelerId: tid, token: ttok, status: tstatus)
             }
         }
         return profileComplete
@@ -87,13 +108,13 @@ final class AuthService {
         req.setValue("Bearer \(token)",  forHTTPHeaderField: "Authorization")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["full_name": fullName])
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
         dlog("👤 completeProfileMinimal → status: \(status), body: \(bodyStr)")
 
         guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
-        UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
+        defaults.set(true, forKey: "buddy.onboardingDone")
     }
 
     // MARK: – Complete profile (full — onboarding clásico)
@@ -116,7 +137,7 @@ final class AuthService {
         if !birthDate.isEmpty { body["birth_date"] = birthDate }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
         dlog("👤 completeProfile → status: \(status), body: \(bodyStr)")
@@ -124,7 +145,7 @@ final class AuthService {
         guard (200...299).contains(status) else {
             throw AuthError.sendFailed(bodyStr)
         }
-        UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
+        defaults.set(true, forKey: "buddy.onboardingDone")
     }
 
     // MARK: – Validate session against server
@@ -150,9 +171,9 @@ final class AuthService {
         // JWT vencido (vive 15 min) pero la identidad persiste: renovar en
         // silencio con el secret device-bound del Keychain — la sesión social
         // debe sobrevivir indefinidamente, igual que un guest.
-        if TravelerService.shared.isVerified, let tid = TravelerService.shared.travelerId {
+        if traveler.isVerified, let tid = traveler.travelerId {
             do {
-                _ = try await TravelerService.shared.forceRefresh(travelerId: tid)
+                _ = try await traveler.forceRefresh(travelerId: tid)
                 dlog("🔄 [validateSession] social JWT renovado en silencio")
                 return true
             } catch {
@@ -175,7 +196,7 @@ final class AuthService {
         req.httpMethod = "GET"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 10
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await session.data(for: req)
         return (response as? HTTPURLResponse)?.statusCode ?? 0
     }
 
@@ -199,11 +220,11 @@ final class AuthService {
     }
 
     private func performTryRefresh() async -> Bool {
-        guard let refreshToken = UserDefaults.standard.string(forKey: "buddy.refreshToken"),
+        guard let refreshToken = store.string(.refreshToken),
               !refreshToken.isEmpty else {
             // No refresh token at all → session truly gone
             await MainActor.run {
-                NotificationCenter.default.post(name: .sessionExpired, object: nil)
+                notifications.post(name: .sessionExpired, object: nil)
             }
             return false
         }
@@ -216,7 +237,7 @@ final class AuthService {
         req.timeoutInterval = 15
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: req)
+            let (data, response) = try await session.data(for: req)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
 
             if status == 200,
@@ -224,30 +245,30 @@ final class AuthService {
                 // Si el refresh devuelve OTRO usuario (sesiones cruzadas al
                 // probar varias cuentas en el mismo dispositivo), no podemos
                 // seguir con la UI del usuario anterior → re-login explícito.
-                let previousId = UserDefaults.standard.string(forKey: "buddy.userId")
+                let previousId = defaults.string(forKey: "buddy.userId")
                 if let id = json["user_id"] as? String,
                    let prev = previousId, !prev.isEmpty, prev != id {
                     print("🚨 refresh devolvió otro usuario (\(prev) → \(id)) — forzando re-login")
                     await MainActor.run {
-                        NotificationCenter.default.post(name: .sessionExpired, object: nil)
+                        notifications.post(name: .sessionExpired, object: nil)
                     }
                     return false
                 }
-                if let t  = json["access_token"]  as? String { UserDefaults.standard.set(t,  forKey: "buddy.accessToken")  }
-                if let rt = json["refresh_token"] as? String { UserDefaults.standard.set(rt, forKey: "buddy.refreshToken") }
-                if let id = json["user_id"]       as? String { UserDefaults.standard.set(id, forKey: "buddy.userId")       }
+                if let t  = json["access_token"]  as? String { store.set(t, .accessToken)  }
+                if let rt = json["refresh_token"] as? String { store.set(rt, .refreshToken) }
+                if let id = json["user_id"]       as? String { defaults.set(id, forKey: "buddy.userId")       }
                 // Refresh response now includes Traveler identity — hydrate so
                 // TravelerService.travelerId is always set after any auth lifecycle event.
                 if let tid  = json["traveler_id"]    as? String,
                    let ttok = json["traveler_token"] as? String {
                     let tstatus = json["traveler_status"] as? String ?? "verified"
-                    TravelerService.shared.hydrate(travelerId: tid, token: ttok, status: tstatus)
+                    traveler.hydrate(travelerId: tid, token: ttok, status: tstatus)
                 } else {
                     // Server returned no traveler identity — clear any stale traveler token
                     // so APIClient falls back to the Supabase token and doesn't loop.
                     print("⚠️ refresh returned no traveler_id — clearing stale traveler token")
-                    UserDefaults.standard.removeObject(forKey: "buddy.traveler.token")
-                    UserDefaults.standard.removeObject(forKey: "buddy.traveler.id")
+                    store.remove(.travelerToken)
+                    defaults.removeObject(forKey: "buddy.traveler.id")
                 }
                 dlog("🔄 session refreshed silently")
                 return true
@@ -255,10 +276,10 @@ final class AuthService {
                 // Server rejected refresh token (truly invalid) → clear stale tokens
                 // so APIClient falls back to anonKey instead of looping with a dead token.
                 print("❌ refresh failed with status \(status) — clearing stale tokens")
-                UserDefaults.standard.removeObject(forKey: "buddy.accessToken")
-                UserDefaults.standard.removeObject(forKey: "buddy.refreshToken")
+                store.remove(.accessToken)
+                store.remove(.refreshToken)
                 await MainActor.run {
-                    NotificationCenter.default.post(name: .sessionExpired, object: nil)
+                    notifications.post(name: .sessionExpired, object: nil)
                 }
                 return false
             }
@@ -285,18 +306,18 @@ final class AuthService {
         ]
         if let name = credential.fullName { payload["full_name"] = name }
         // device_id permite al backend crear la sesión de refresh device-bound
-        payload["device_id"] = TravelerService.shared.currentDeviceId
+        payload["device_id"] = traveler.currentDeviceId
 
         let url = URL(string: "\(coreURL)/social")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = TravelerService.shared.token {
+        if let token = traveler.token {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr    = String(data: data, encoding: .utf8) ?? "empty"
         // Nunca loguear el cuerpo: trae traveler_token y secret de refresh.
@@ -326,7 +347,7 @@ final class AuthService {
     // MARK: – Complete profile para usuarios de Apple/Google (sin sesión Supabase)
     /// Usa el traveler JWT directamente — no requiere access_token de Supabase.
     func completeProfileForSocialLogin(fullName: String) async throws {
-        guard let token = TravelerService.shared.token else { throw AuthError.noSession }
+        guard let token = traveler.token else { throw AuthError.noSession }
 
         let url = URL(string: "\(coreURL)/profile")!
         var req = URLRequest(url: url)
@@ -335,23 +356,23 @@ final class AuthService {
         req.setValue("Bearer \(token)",  forHTTPHeaderField: "Authorization")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["full_name": fullName])
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         let status  = (response as? HTTPURLResponse)?.statusCode ?? 0
         let bodyStr = String(data: data, encoding: .utf8) ?? "empty"
         dlog("👤 completeProfileSocial → status: \(status), body: \(bodyStr)")
 
         guard (200...299).contains(status) else { throw AuthError.sendFailed(bodyStr) }
-        UserDefaults.standard.set(true, forKey: "buddy.onboardingDone")
+        defaults.set(true, forKey: "buddy.onboardingDone")
     }
 
     // MARK: – Session helpers
 
     var accessToken: String? {
-        UserDefaults.standard.string(forKey: "buddy.accessToken")
+        store.string(.accessToken)
     }
 
     var userId: String? {
-        UserDefaults.standard.string(forKey: "buddy.userId")
+        defaults.string(forKey: "buddy.userId")
     }
 
     /// True si hay sesión Supabase activa (OTP) O identidad social verificada persistida.
@@ -361,14 +382,14 @@ final class AuthService {
     /// del último uso mandaría al usuario al login (el bug de "la sesión murió").
     var isLoggedIn: Bool {
         if accessToken != nil { return true }
-        return TravelerService.shared.isVerified && TravelerService.shared.travelerId != nil
+        return traveler.isVerified && traveler.travelerId != nil
     }
 
     // Decodifica el traveler JWT localmente y verifica que no haya expirado.
     // Para usuarios Apple/Google que no tienen access_token de Supabase.
     private func socialSessionValid() -> Bool {
-        guard let token = TravelerService.shared.token,
-              TravelerService.shared.status == "verified" else { return false }
+        guard let token = traveler.token,
+              traveler.status == "verified" else { return false }
         return !jwtExpired(token)
     }
 
@@ -386,7 +407,7 @@ final class AuthService {
     }
 
     var hasCompletedOnboarding: Bool {
-        UserDefaults.standard.bool(forKey: "buddy.onboardingDone")
+        defaults.bool(forKey: "buddy.onboardingDone")
     }
 
     // MARK: – Sign out
@@ -398,28 +419,29 @@ final class AuthService {
         // waterfall la sigue eligiendo como buddy sin nadie dentro de la app.
         // Va en un Task aparte para que la limpieza local sea inmediata aunque
         // no haya red.
-        if let travelerToken = TravelerService.shared.token {
-            let deviceId  = TravelerService.shared.currentDeviceId
-            let pushToken = UserDefaults.standard.string(forKey: "apns_device_token")
+        if let travelerToken = traveler.token {
+            let deviceId  = traveler.currentDeviceId
+            let pushToken = defaults.string(forKey: "apns_device_token")
+            let t = traveler
             Task.detached {
-                await TravelerService.shared.logoutRemote(
+                await t.logoutRemote(
                     token: travelerToken, deviceId: deviceId, pushToken: pushToken
                 )
             }
         }
 
         print("🚪 [AuthService.signOut] limpiando sesión OTP…")
-        UserDefaults.standard.removeObject(forKey: "apns_device_token")
-        UserDefaults.standard.removeObject(forKey: "buddy.accessToken")
-        UserDefaults.standard.removeObject(forKey: "buddy.userId")
-        UserDefaults.standard.removeObject(forKey: "buddy.refreshToken")
-        UserDefaults.standard.set(false, forKey: "buddy.isLoggedIn")
-        UserDefaults.standard.removeObject(forKey: "buddy.onboardingDone")
-        UserDefaults.standard.removeObject(forKey: "buddy.device.id")
+        defaults.removeObject(forKey: "apns_device_token")
+        store.remove(.accessToken)
+        defaults.removeObject(forKey: "buddy.userId")
+        store.remove(.refreshToken)
+        defaults.set(false, forKey: "buddy.isLoggedIn")
+        defaults.removeObject(forKey: "buddy.onboardingDone")
+        defaults.removeObject(forKey: "buddy.device.id")
         print("🚪 [AuthService.signOut] limpiando sesión Traveler (UserDefaults + Keychain)…")
-        TravelerService.shared.clearSession()
+        traveler.clearSession()
         print("🚪 [AuthService.signOut] ✅ todo limpio — emitiendo userDidLogOut")
-        NotificationCenter.default.post(name: .userDidLogOut, object: nil)
+        notifications.post(name: .userDidLogOut, object: nil)
     }
 }
 

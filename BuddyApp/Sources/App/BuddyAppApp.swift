@@ -47,6 +47,7 @@ struct BuddyAppApp: App {
                 // Validación en background: si el token almacenado ya no es válido,
                 // AuthState lo marca y la UI transiciona a estado anónimo.
                 .task { await authState.validate() }
+                .onAppear { PerfLog.ms("primera-pantalla", since: Cronometro.arranque) }
                 .tint(Color.brand)
                 .preferredColorScheme(.light)
                 .animation(.easeInOut(duration: 0.3), value: authState.isLoggedIn)

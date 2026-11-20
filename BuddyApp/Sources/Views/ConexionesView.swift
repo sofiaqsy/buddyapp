@@ -488,6 +488,7 @@ struct ConexionesView: View {
     @EnvironmentObject var authState: AuthState
     @EnvironmentObject var router: AppRouter
     @State private var chatTarget: ChatStore.ConnectionItem? = nil
+    @ObservedObject private var accounts = AccountStore.shared
     @State private var showIdentitySheet = false
     @State private var conexSocialLoading = false
     @State private var conexSocialError: String? = nil
@@ -511,7 +512,7 @@ struct ConexionesView: View {
                         .font(.system(.largeTitle).weight(.bold))
                         .foregroundStyle(Color.brand)
                         .accessibilityAddTraits(.isHeader)
-                    Text("Las personas que te acompañaron en tus trips")
+                    Text(accounts.active == nil ? "Las personas que te acompañaron en tus trips" : "Las preguntas de los visitantes a tu negocio")
                         .font(BT.footnote)
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -519,8 +520,11 @@ struct ConexionesView: View {
                 .padding(.top, Spacing.md)
 
                 Group {
+                    // ── Modo negocio (prototipo): solo los chats del negocio ──
+                    if let biz = AccountStore.shared.active {
+                        BusinessInboxView(business: biz)
                     // ── Estado anónimo: el tab muestra una invitación, no está vacío ──
-                    if !authState.isLoggedIn {
+                    } else if !authState.isLoggedIn {
                         anonymousConnectionState
                     // Spinner SOLO antes de la primera carga — después, vacío
                     // significa empty state y las recargas son silenciosas
@@ -1493,5 +1497,86 @@ struct ConnectionAvatar: View {
                         .foregroundStyle(Color.brand)
                 }
             }
+    }
+}
+
+
+// MARK: – Bandeja del negocio: preguntas de los visitantes (Keyla, 20 Nov 2026)
+struct BusinessInboxView: View {
+    let business: ProtoBusiness
+    @State private var items: [BizConversation] = []
+    @State private var loading = true
+    @State private var errorText: String? = nil
+    @State private var open: BusinessChatTarget? = nil
+
+    var body: some View {
+        Group {
+            if !business.isLinkedAccount {
+                empty(icon: "hourglass", title: "Tu negocio está en revisión",
+                      text: "Cuando lo aprobemos, aquí verás las preguntas de los visitantes.")
+            } else if loading {
+                ProgressView().tint(Color.brand).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if items.isEmpty {
+                empty(icon: "bubble.left.and.text.bubble.right", title: "Aún no hay preguntas",
+                      text: errorText ?? "Cuando un visitante pregunte por \(business.name) o uno de tus productos, aparecerá aquí.")
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(items) { c in
+                            Button {
+                                open = BusinessChatTarget(conversationId: c.id, title: c.travelerName ?? "Visitante")
+                            } label: { row(c) }
+                            .buttonStyle(.plain)
+                            Divider().overlay(Color.hairline).padding(.leading, 72)
+                        }
+                    }
+                    .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.lg))
+                    .cardShadow()
+                    .padding(.horizontal, Spacing.edge).padding(.top, Spacing.md).padding(.bottom, 140)
+                }
+                .refreshable { await load() }
+            }
+        }
+        .task(id: business.id) { await load() }
+        .fullScreenCover(item: $open, onDismiss: { Task { await load() } }) { t in BusinessChatView(target: t) }
+    }
+
+    private func row(_ c: BizConversation) -> some View {
+        HStack(spacing: 12) {
+            Text(String((c.travelerName ?? "V").prefix(1)))
+                .font(.system(size: 18, weight: .bold)).foregroundStyle(Color.brand)
+                .frame(width: 44, height: 44).background(Color.paleSage, in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(c.travelerName ?? "Visitante").font(BT.headline).foregroundStyle(Color.ink)
+                Text((c.lastSender == "business" ? "Tú: " : "") + (c.lastMessage ?? ""))
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted).lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.brand)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    private func empty(icon: String, title: String, text: String) -> some View {
+        VStack(spacing: Spacing.md) {
+            Image(systemName: icon).font(.system(size: 22)).foregroundStyle(Color.brand)
+                .frame(width: 56, height: 56).background(Color.paleSage, in: Circle())
+            Text(title).font(.system(.title3).weight(.bold)).foregroundStyle(Color.ink).multilineTextAlignment(.center)
+            Text(text).font(BT.footnote).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, Spacing.xl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func load() async {
+        guard business.isLinkedAccount else { loading = false; return }
+        do {
+            items = try await APIClient.shared.businessConversations(farmId: business.id)
+            errorText = nil
+        } catch {
+            errorText = "No pudimos cargar las preguntas. Desliza hacia abajo para intentar de nuevo."
+        }
+        loading = false
     }
 }

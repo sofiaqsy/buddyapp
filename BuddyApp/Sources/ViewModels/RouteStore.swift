@@ -120,9 +120,17 @@ final class RouteStore: ObservableObject {
     /// su resultado en lugar de disparar un segundo request.
     @MainActor
     private func _ensureLoaded(key: String, fetch: @escaping () async -> MapLoadState) async -> MapLoadState {
-        // Caché hit
+        // Caché hit: se muestra al instante. Si tiene más de 5 min, se
+        // actualiza en segundo plano sin dejar la pantalla en blanco.
         if loadedKey == key, isReady {
-            dlog("🗺️ [RouteStore] caché válido para \(key) — sin fetch")
+            if let at = loadedAt, Date().timeIntervalSince(at) > Self.freshFor, fetchingTask == nil {
+                dlog("🗺️ [RouteStore] caché de \(key) viejo — actualizo en segundo plano")
+                loadedAt = Date()
+                lastFetch = fetch
+                Task { @MainActor in _ = await fetch() }
+            } else {
+                dlog("🗺️ [RouteStore] caché válido para \(key) — sin fetch")
+            }
             return .guideAvailable
         }
         // Fetch en vuelo para la misma key — esperar
@@ -139,7 +147,32 @@ final class RouteStore: ObservableObject {
         let result = await task.value
         fetchingTask = nil
         fetchingKey = nil
+        if result == .guideAvailable { loadedAt = Date() }
         return result
+    }
+
+    // MARK: – Una guía por destino, compartida (velocidad, Keyla 20 Nov 2026)
+    //
+    // Antes cada lugar abierto desde Inicio creaba su propio RouteStore y
+    // volvía a bajar la guía entera del destino (~3 s en su iPhone). Ahora la
+    // guía de cada destino se guarda y se reusa; Inicio la pide por adelantado.
+    private var loadedAt: Date?
+    static let freshFor: TimeInterval = 300
+    private static let registryLock = NSLock()
+    nonisolated(unsafe) private static var registry: [String: RouteStore] = [:]
+
+    static func shared(forDestination id: String) -> RouteStore {
+        registryLock.lock(); defer { registryLock.unlock() }
+        if let s = registry[id] { return s }
+        let s = RouteStore()
+        registry[id] = s
+        return s
+    }
+
+    /// Inicio llama esto al saber en qué destino está el usuario.
+    static func prefetch(destinationId id: String) {
+        let store = shared(forDestination: id)
+        Task { @MainActor in _ = await store.ensureLoaded(destinationId: id) }
     }
 
     // MARK: – Fetch internos (privados)

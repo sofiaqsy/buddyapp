@@ -466,6 +466,18 @@ struct ElegirLugarEnMapaView: View {
     let onPropose: (_ name: String, _ categoryId: String?, _ lat: Double, _ lng: Double) -> Void
 
     let initialCoords: (lat: Double, lng: Double)?
+    /// Textos del panel: por defecto los de "Compartir un lugar". Mi negocio
+    /// usa el mismo mapa para sus ubicaciones con sus propios textos.
+    var pickTitle = "Elegir este lugar"
+    var proposeTitle = "Compartir aquí"
+    var newEyebrow = "NUEVO LUGAR"
+    var namePlaceholder = "¿Cómo se llama? Ej. Cafetería Rosal"
+    /// Sugerir los lugares del mapa (Apple Maps) que están junto al pin, aunque
+    /// nadie los haya recomendado en Buddy. Tocar uno pone su nombre y centra
+    /// el pin ahí (Keyla, 20 Nov 2026: ubicaciones del negocio).
+    var suggestMapPlaces = false
+    @State private var mapPlaces: [MKMapItem] = []
+    @State private var poiTask: Task<Void, Never>?
     private let openedAt = Date()
     @State private var releasedAt: Date?
 
@@ -499,8 +511,18 @@ struct ElegirLugarEnMapaView: View {
         isSubmitting: Bool,
         errorMessage: String?,
         onPickSpot: @escaping (APIPlaceGuideSpot) -> Void,
-        onPropose: @escaping (_ name: String, _ categoryId: String?, _ lat: Double, _ lng: Double) -> Void
+        onPropose: @escaping (_ name: String, _ categoryId: String?, _ lat: Double, _ lng: Double) -> Void,
+        pickTitle: String = "Elegir este lugar",
+        proposeTitle: String = "Compartir aquí",
+        newEyebrow: String = "NUEVO LUGAR",
+        namePlaceholder: String = "¿Cómo se llama? Ej. Cafetería Rosal",
+        suggestMapPlaces: Bool = false
     ) {
+        self.suggestMapPlaces = suggestMapPlaces
+        self.pickTitle = pickTitle
+        self.proposeTitle = proposeTitle
+        self.newEyebrow = newEyebrow
+        self.namePlaceholder = namePlaceholder
         self.initialCoords = initialCoords
         self.categories = categories
         self.isSubmitting = isSubmitting
@@ -788,9 +810,28 @@ struct ElegirLugarEnMapaView: View {
             guard !Task.isCancelled else { return }
             let text = marks?.first.flatMap { Self.format($0) }
             await MainActor.run { address = text ?? "Sin dirección" }
+            if suggestMapPlaces { await loadMapPlaces(coord) }
             let sinceRelease = await MainActor.run { releasedAt.map { ", \(ms($0))ms desde que soltaste el mapa" } ?? "" }
             dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] dirección=\(text ?? "nil") — geocoder \(ms(started))ms\(sinceRelease)")
         }
+    }
+
+    /// Lugares de Apple Maps a 80 m del pin, el más cercano primero.
+    private func loadMapPlaces(_ coord: CLLocationCoordinate2D) async {
+        let req = MKLocalPointsOfInterestRequest(center: coord, radius: 80)
+        let items = (try? await MKLocalSearch(request: req).start().mapItems) ?? []
+        let here = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        let sorted = items
+            .filter { ($0.name ?? "").isEmpty == false }
+            .sorted { here.distance(from: $0.placemark.location ?? here) < here.distance(from: $1.placemark.location ?? here) }
+        await MainActor.run { mapPlaces = Array(sorted.prefix(6)) }
+    }
+
+    private func useMapPlace(_ item: MKMapItem) {
+        Haptic.select()
+        name = item.name ?? name
+        let c = item.placemark.coordinate
+        camera = .region(MKCoordinateRegion(center: c, span: MKCoordinateSpan(latitudeDelta: 0.002, longitudeDelta: 0.002)))
     }
 
     private static func format(_ p: CLPlacemark) -> String? {
@@ -811,7 +852,7 @@ struct ElegirLugarEnMapaView: View {
                 if let errorMessage {
                     Text(errorMessage).font(BT.caption1).foregroundStyle(Color.red)
                 }
-                primaryButton(title: "Elegir este lugar", enabled: !isSubmitting, loading: isSubmitting) {
+                primaryButton(title: pickTitle, enabled: !isSubmitting, loading: isSubmitting) {
                     dlog("📍 [ElegirLugarMapa] elegir lugar existente \(spot.id.prefix(8))")
                     onPickSpot(spot)
                 }
@@ -819,8 +860,27 @@ struct ElegirLugarEnMapaView: View {
             .panelStyle()
         } else {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("NUEVO LUGAR").font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
-                TextField("¿Cómo se llama? Ej. Cafetería Rosal", text: $name)
+                Text(newEyebrow).font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                if suggestMapPlaces && !mapPlaces.isEmpty {
+                    Text("¿Es uno de estos lugares cercanos?").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Spacing.sm) {
+                            ForEach(mapPlaces, id: \.self) { item in
+                                let chosen = name == (item.name ?? "")
+                                Button { useMapPlace(item) } label: {
+                                    Text(item.name ?? "").font(BT.footnote).lineLimit(1)
+                                        .padding(.horizontal, Spacing.md).padding(.vertical, 9)
+                                        .background(chosen ? Color.brand : Color.sageTint)
+                                        .foregroundStyle(chosen ? Color.inkInverse : Color.brand)
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 1)
+                    }
+                }
+                TextField(namePlaceholder, text: $name)
                     .font(BT.callout)
                     .padding(.horizontal, Spacing.md).padding(.vertical, 14)
                     .background(Color.surface)
@@ -853,7 +913,7 @@ struct ElegirLugarEnMapaView: View {
                 }
                 let trimmed = name.trimmingCharacters(in: .whitespaces)
                 primaryButton(
-                    title: "Compartir aquí",
+                    title: proposeTitle,
                     enabled: !trimmed.isEmpty && !isSubmitting && center != nil && !isMoving,
                     loading: isSubmitting
                 ) {
