@@ -1184,19 +1184,15 @@ struct YoView: View {
         defer { isLoadingMoreTrips = false }
         // Con carga automática el indicador no puede quedar girando para
         // siempre: si falla o llega vacía, se deja de pedir.
-        // El cursor del servidor (fecha del último journey) repite trips que
-        // tienen varios lugares, así que la 2.ª página volvía solo repetidos y
-        // nunca cargaba más. Se pide la lista desde el inicio con un límite
-        // mayor (máx. 50 en el servidor) y se suman solo los nuevos.
-        let siguienteLimite = min(journeys.count + 12, 50)
-        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: userId, cursor: nil, limit: siguienteLimite) else {
+        // El cursor ahora es cuántos trips ya llegaron (buddy-core, 19 Nov 2026).
+        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: userId, cursor: tripsNextCursor) else {
             tripsHasMore = false
             return
         }
         let nuevos = page.items.filter { n in !journeys.contains { $0.id == n.id } }
         journeys        += nuevos
         tripsNextCursor  = page.nextCursor
-        tripsHasMore     = page.hasMore && !nuevos.isEmpty && siguienteLimite < 50
+        tripsHasMore     = page.hasMore && page.nextCursor != nil && !nuevos.isEmpty
         dlog("👤 [YoView] loadMoreTrips ✅ — +\(page.items.count) trips totalNow=\(journeys.count)")
     }
 

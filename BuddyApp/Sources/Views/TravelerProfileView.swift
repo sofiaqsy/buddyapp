@@ -19,6 +19,7 @@ struct TravelerProfileView: View {
     @State private var trips: [APIJourney] = []
     @State private var isLoading = true
     @State private var tripsHasMore = false
+    @State private var tripsCursor: String? = nil
     @State private var isLoadingMore = false
     @State private var selectedStory: APIJourney? = nil
     @State private var openPlace: APIPlaceCard? = nil
@@ -207,22 +208,22 @@ struct TravelerProfileView: View {
         shares = s ?? []
         trips  = t?.items ?? []
         tripsHasMore = t?.hasMore ?? false
+        tripsCursor = t?.nextCursor
         failed = (u == nil)
         isLoading = false
     }
 
-    /// Igual que en Yo: el cursor del servidor repite trips, así que se pide
-    /// la lista desde el inicio con un límite mayor y se suman los nuevos.
+    /// Siguiente página con el cursor del servidor (cuántos trips ya llegaron).
     private func loadMoreTrips() async {
         guard tripsHasMore, !isLoadingMore else { return }
         isLoadingMore = true
         defer { isLoadingMore = false }
-        let limite = min(trips.count + 12, 50)
-        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: travelerId, cursor: nil, limit: limite) else {
+        guard let page = try? await APIClient.shared.fetchUserTrips(travelerId: travelerId, cursor: tripsCursor) else {
             tripsHasMore = false; return
         }
         let nuevos = page.items.filter { n in !trips.contains { $0.id == n.id } }
         trips += nuevos
-        tripsHasMore = page.hasMore && !nuevos.isEmpty && limite < 50
+        tripsCursor = page.nextCursor
+        tripsHasMore = page.hasMore && page.nextCursor != nil && !nuevos.isEmpty
     }
 }
