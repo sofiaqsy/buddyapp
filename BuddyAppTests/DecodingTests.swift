@@ -56,6 +56,20 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(t.messages[0].createdAt, "2026-11-20T15:00:00.000Z")
     }
 
+    // Reportar y bloquear: el servidor nuevo manda blocked/blockedByMe; el viejo no.
+    func test_bizThread_blockFlags_newAndOldServer() throws {
+        let new = Data(#"{"side":"business","messages":[],"blocked":true,"blockedByMe":true}"#.utf8)
+        let t = try JSONDecoder.buddy.decode(BizThread.self, from: new)
+        XCTAssertEqual(t.blocked, true); XCTAssertEqual(t.blockedByMe, true)
+        let old = try JSONDecoder.buddy.decode(BizThread.self, from: fixture("biz_thread"))
+        XCTAssertNil(old.blocked, "Servidor viejo: sin bloqueo, la app no se rompe")
+    }
+
+    func test_reportReasons_matchServerList() {
+        XCTAssertEqual(APIClient.bizReportReasons.map(\.code),
+                       ["spam", "harassment", "inappropriate_content", "fake_profile", "safety_concern", "other"])
+    }
+
     // La lista de conversaciones llega en camelCase.
     func test_bizConversations_optionalFieldsMayBeNull() throws {
         let list = try JSONDecoder.buddy.decode([BizConversation].self, from: fixture("biz_conversations"))

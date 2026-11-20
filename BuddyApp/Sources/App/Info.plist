@@ -12,26 +12,37 @@
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.1.2</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.975826303754-eraadkk8jh9u68q366l3bhc7d1dleriq</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>GIDClientID</key>
+	<string>975826303754-eraadkk8jh9u68q366l3bhc7d1dleriq.apps.googleusercontent.com</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>BuddyApp necesita la cámara para escanear códigos QR y obtener stickers.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>BuddyApp uses your location in the background to notify you when you reach a new place.</string>
+	<string>Usamos la cámara para tomar fotos de los lugares y productos que compartes, y para escanear códigos QR.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>BuddyApp needs your location to unlock stickers at nearby places.</string>
+	<string>Usamos tu ubicación para mostrarte lugares y negocios cerca de ti, y para ubicar los lugares que recomiendas. Puedes usar la app sin compartirla.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>BuddyApp necesita el micrófono para enviar mensajes de audio a tu buddy.</string>
+	<string>Usamos el micrófono solo cuando grabas un mensaje de voz en un chat.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -49,19 +60,6 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-	</array>
-	<key>GIDClientID</key>
-	<string>975826303754-eraadkk8jh9u68q366l3bhc7d1dleriq.apps.googleusercontent.com</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.googleusercontent.apps.975826303754-eraadkk8jh9u68q366l3bhc7d1dleriq</string>
-			</array>
-		</dict>
 	</array>
 </dict>
 </plist>

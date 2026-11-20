@@ -1574,6 +1574,23 @@ extension APIClient {
         if let card { payload["card"] = card.asDictionary }
         return try await request(path: "/integrations/business-chat/\(conversationId)/messages", method: "POST", body: payload)
     }
+    /// Motivos que acepta el servidor, con su texto en español.
+    static let bizReportReasons: [(code: String, label: String)] = [
+        ("spam", "Spam o publicidad"),
+        ("harassment", "Acoso o insultos"),
+        ("inappropriate_content", "Contenido inapropiado"),
+        ("fake_profile", "Negocio o persona falsa"),
+        ("safety_concern", "Me preocupa mi seguridad"),
+        ("other", "Otro motivo"),
+    ]
+    func reportBusinessChat(conversationId: String, reason: String) async throws {
+        struct R: Decodable { let ok: Bool }
+        let _: R = try await request(path: "/integrations/business-chat/\(conversationId)/report", method: "POST", body: ["reason": reason])
+    }
+    func blockBusinessChat(conversationId: String) async throws {
+        struct R: Decodable { let ok: Bool }
+        let _: R = try await request(path: "/integrations/business-chat/\(conversationId)/block", method: "POST", body: [:])
+    }
     func businessConversations(farmId: String?) async throws -> [BizConversation] {
         struct R: Decodable { let conversations: [BizConversation] }
         let q = farmId.map { "?farmId=\($0)" } ?? ""
@@ -1638,6 +1655,9 @@ struct BizMessage: Decodable, Identifiable, Hashable {
 struct BizThread: Decodable {
     let side: String
     let messages: [BizMessage]
+    /// Reportar y bloquear (App Store 1.2): nil en servidores viejos.
+    var blocked: Bool? = nil
+    var blockedByMe: Bool? = nil
 }
 struct BizConversation: Decodable, Identifiable, Hashable {
     let id: String

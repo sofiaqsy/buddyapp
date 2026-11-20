@@ -2078,6 +2078,10 @@ struct BusinessChatView: View {
     @State private var sending = false
     @State private var errorText: String? = nil
     @State private var loading = true
+    @State private var blocked = false
+    @State private var blockedByMe = false
+    @State private var confirmBlock = false
+    @State private var noticeText: String? = nil
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -2113,6 +2117,31 @@ struct BusinessChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cerrar") { dismiss() } }
+                // Reportar y bloquear (App Store 1.2, contenido de usuarios).
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Menu("Reportar") {
+                            ForEach(APIClient.bizReportReasons, id: \.code) { r in
+                                Button(r.label) { Task { await report(r.code) } }
+                            }
+                        }
+                        if !blocked {
+                            Button(role: .destructive) { confirmBlock = true } label: {
+                                Label("Bloquear", systemImage: "hand.raised")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .disabled(conversationId == nil)
+                    .accessibilityLabel("Más opciones")
+                }
+            }
+            .alert(side == "traveler" ? "¿Bloquear a este negocio?" : "¿Bloquear a esta persona?", isPresented: $confirmBlock) {
+                Button("Cancelar", role: .cancel) {}
+                Button("Bloquear", role: .destructive) { Task { await block() } }
+            } message: {
+                Text("Ya no podrán escribirse en esta conversación y desaparecerá de tu lista.")
             }
         }
         .task { await open() }
@@ -2168,7 +2197,23 @@ struct BusinessChatView: View {
 
     // MARK: Escribir
 
+    @ViewBuilder
     private var composer: some View {
+        if blocked {
+            VStack(spacing: 6) {
+                if let noticeText { Text(noticeText).font(BT.caption1).foregroundStyle(Color.brand) }
+                Text(blockedByMe ? "Bloqueaste esta conversación." : "Esta conversación ya no recibe mensajes.")
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Spacing.edge).padding(.vertical, 16)
+            .background(Color.canvas)
+        } else {
+            writer
+        }
+    }
+
+    private var writer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let pendingCard {
                 HStack(spacing: 8) {
@@ -2180,6 +2225,7 @@ struct BusinessChatView: View {
                     .accessibilityLabel("Quitar tarjeta")
                 }
             }
+            if let noticeText { Text(noticeText).font(BT.caption1).foregroundStyle(Color.brand) }
             if let errorText { Text(errorText).font(BT.caption1).foregroundStyle(Color.errorRed) }
             HStack(spacing: 8) {
                 TextField(side == "traveler" ? "Escribe tu pregunta…" : "Escribe tu respuesta…", text: $text, axis: .vertical)
@@ -2233,7 +2279,34 @@ struct BusinessChatView: View {
         guard let id = conversationId,
               let thread = try? await APIClient.shared.businessChatMessages(conversationId: id) else { return }
         side = thread.side
+        blocked = thread.blocked ?? false
+        blockedByMe = thread.blockedByMe ?? false
         if thread.messages != messages { messages = thread.messages }
+    }
+
+    private func report(_ reason: String) async {
+        guard let id = conversationId else { return }
+        errorText = nil
+        do {
+            try await APIClient.shared.reportBusinessChat(conversationId: id, reason: reason)
+            noticeText = "Gracias. Revisaremos este reporte."
+            Haptic.success()
+        } catch {
+            errorText = "No pudimos enviar el reporte. Intenta de nuevo."
+        }
+    }
+
+    private func block() async {
+        guard let id = conversationId else { return }
+        errorText = nil
+        do {
+            try await APIClient.shared.blockBusinessChat(conversationId: id)
+            blocked = true; blockedByMe = true
+            focused = false
+            Haptic.success()
+        } catch {
+            errorText = "No pudimos bloquear. Intenta de nuevo."
+        }
     }
 
     private func send() async {
