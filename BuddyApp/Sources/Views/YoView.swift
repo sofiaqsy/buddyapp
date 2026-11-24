@@ -2837,11 +2837,17 @@ struct BusinessHomeView: View {
     @State private var remoteError: String? = nil
     /// Solo cuando de verdad falta la sesión de Apartalo se ofrece entrar.
     @State private var remoteNeedsLogin = false
+    /// "Invitar a mi equipo" (Keyla, 24 Nov 2026).
+    @State private var showInvite = false
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 header
+                    .sheet(isPresented: $showInvite) {
+                        InviteTeamSheet(farmId: live.id, businessName: live.name)
+                            .presentationDetents([.medium, .large])
+                    }
                 if !isLinked { Color.clear.frame(height: 0).task { await checkApproval() } }  // el chip "En revisión" ya lo dice; se consulta solo (Keyla, 21 Nov 2026)
                 Picker("", selection: $section) {
                     Text("Mi negocio").tag(1)
@@ -2963,21 +2969,19 @@ struct BusinessHomeView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             HStack(alignment: .top) {
-                NavigationLink(value: AccountsRoute()) {
-                    HStack(spacing: 6) {
-                        Text(live.name)
-                            .font(.system(.largeTitle).weight(.bold))
-                            .foregroundStyle(Color.brand)
-                            .lineLimit(1).minimumScaleFactor(0.7)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(Color.brand)
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Cambiar de cuenta")
+                // Sin flecha: cambiar de cuenta ya está en el menú "⋯" (Keyla, 24 Nov 2026).
+                Text(live.name)
+                    .font(.system(.largeTitle).weight(.bold))
+                    .foregroundStyle(Color.brand)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Menu {
+                    if isLinked {
+                        Button { showInvite = true } label: {
+                            Label("Invitar a mi equipo", systemImage: "person.badge.plus")
+                        }
+                    }
                     Button { onSwitchAccount() } label: {
                         Label("Cambiar de cuenta", systemImage: "arrow.left.arrow.right")
                     }
@@ -3004,7 +3008,8 @@ struct BusinessHomeView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(isLinked ? "Cuenta negocio" : live.category).font(BT.subhead).foregroundStyle(Color.inkMuted)
                     ProfileStatPills(items: isLinked
-                        ? [remoteTotal == 1 ? "1 producto" : "\(remoteTotal) productos", "Vinculado"]
+                        // Sin el conteo de productos (Keyla, 24 Nov 2026).
+                        ? ["Vinculado"]
                         : ["En revisión"])
                 }
             }
@@ -5033,3 +5038,238 @@ extension APIPlaceVisit {
     /// el servidor la manda, si no la lista simple.
     var coverPhoto: String? { photoPages?.first?.url ?? photos.first }
 }
+
+// MARK: – Equipo: invitar con un enlace y unirse (Keyla, 24 Nov 2026)
+// Usa las invitaciones de Apartalo (join-codes): un código de un solo uso que
+// vence en 48 h. Si el negocio tiene "unirse sin aprobación" en Apartalo, abrir
+// el enlace da acceso al instante; si no, la solicitud espera al dueño.
+
+extension FincasAuth {
+    struct JoinCode: Decodable { let code: String; let expiresAt: String? }
+    struct JoinAnswer: Decodable { let status: String; let businessName: String? }
+
+    static func authPost<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
+        let token = try await validIdToken()
+        var req = URLRequest(url: URL(string: fincasBase + path)!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            if code == 401 { throw FincasError.signIn("Tu sesión venció. Vuelve a entrar con tu cuenta.") }
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            throw FincasError.server((json?["error"] as? String) ?? "No pudimos completar esto (\(code)). Intenta de nuevo.")
+        }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    static func createJoinCode(businessId: String) async throws -> JoinCode {
+        try await authPost("/api/auth/join-codes", body: ["businessId": businessId])
+    }
+
+    static func join(code: String) async throws -> JoinAnswer {
+        try await authPost("/api/auth/join", body: ["code": code])
+    }
+
+    /// buddyapp.biz/unirse/<código>: la página abre la app, o lleva a instalarla.
+    static func inviteLink(_ code: String) -> String { "https://www.buddyapp.biz/unirse/\(code)" }
+}
+
+/// Código de invitación que llegó por enlace (buddyvr://unirse/<código>).
+struct JoinInvite: Identifiable, Equatable {
+    let code: String
+    var id: String { code }
+
+    static func from(_ url: URL) -> JoinInvite? {
+        guard url.scheme == "buddyvr", url.host == "unirse" else { return nil }
+        let raw = url.lastPathComponent.uppercased().filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        return raw.filter { $0 != "-" }.count == 8 ? JoinInvite(code: raw) : nil
+    }
+}
+
+/// Negocio > ⋯ > "Invitar a mi equipo": crea el enlace y lo comparte.
+struct InviteTeamSheet: View {
+    let farmId: String
+    let businessName: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var link: String? = nil
+    @State private var errorText: String? = nil
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: Spacing.lg) {
+                Text("Envía este enlace a la persona que te ayudará con \(businessName). Al abrirlo y entrar con su cuenta, podrá administrar el negocio contigo.")
+                    .font(BT.subhead).foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let link {
+                    Text(link)
+                        .font(BT.footnoteBold).foregroundStyle(Color.ink)
+                        .textSelection(.enabled)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.sageTint, in: RoundedRectangle(cornerRadius: Radius.lg))
+                    ShareLink(item: "Te invito a administrar \(businessName) conmigo en Buddy. Abre este enlace: \(link)") {
+                        Label("Compartir enlace", systemImage: "square.and.arrow.up")
+                            .font(BT.footnoteBold)
+                            .frame(maxWidth: .infinity).frame(height: 52)
+                            .background(Color.brand, in: Capsule())
+                            .foregroundStyle(Color.inkInverse)
+                    }
+                    Text("Sirve para una sola persona y vence en 48 horas. Para invitar a alguien más, crea otro enlace.")
+                        .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let errorText {
+                    Text(errorText).font(BT.footnote).foregroundStyle(Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button { self.errorText = nil; Task { await create() } } label: {
+                        Text("Intentar de nuevo").font(BT.footnoteBold).foregroundStyle(Color.brand)
+                            .frame(maxWidth: .infinity).frame(height: 48)
+                            .background(Color.sageTint, in: Capsule())
+                    }
+                } else {
+                    HStack(spacing: 8) { ProgressView(); Text("Creando el enlace").font(BT.footnote).foregroundStyle(Color.inkMuted) }
+                }
+                Spacer()
+            }
+            .padding(Spacing.edge)
+            .background(Color.canvas)
+            .navigationTitle("Invitar a mi equipo")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Listo") { dismiss() } } }
+            .task { await create() }
+        }
+    }
+
+    private func create() async {
+        do {
+            let token = try await FincasAuth.validIdToken()
+            let answer = try await FincasAuth.session(idToken: token)
+            guard let b = (answer.businesses ?? []).first(where: { $0.farmId == farmId }) else {
+                errorText = "No encontramos este negocio en tu cuenta."; return
+            }
+            guard b.role == "owner", let businessId = b.businessId else {
+                errorText = "Solo la dueña o el dueño del negocio puede invitar a otras personas."; return
+            }
+            let c = try await FincasAuth.createJoinCode(businessId: businessId)
+            link = FincasAuth.inviteLink(c.code)
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+}
+
+/// Se abre con el enlace de invitación: entra con Apple o Google y se une.
+struct JoinBusinessView: View {
+    let invite: JoinInvite
+    let onClose: () -> Void
+    private enum Phase: Equatable { case checking, signIn, joining, joined(String), pending(String), already, failed(String) }
+    @State private var phase: Phase = .checking
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: Spacing.lg) {
+                Spacer()
+                Image(systemName: "person.2")
+                    .font(.system(size: 30, weight: .semibold)).foregroundStyle(Color.brand)
+                    .frame(width: 72, height: 72)
+                    .background(Color.paleSage, in: Circle())
+                content
+                Spacer()
+            }
+            .padding(Spacing.edge)
+            .frame(maxWidth: .infinity)
+            .background(Color.canvas)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { ToolbarBackButton { onClose() } } }
+            .task { if phase == .checking { if FincasAuth.hasSavedSession { await join() } else { phase = .signIn } } }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch phase {
+        case .checking, .joining:
+            title("Uniéndote al negocio")
+            ProgressView()
+        case .signIn:
+            title("Te invitaron a un negocio")
+            note("Entra con tu cuenta de Apple o Google para unirte.")
+            providerButton("Continuar con Apple", icon: "apple.logo", dark: true) { await signIn(.apple) }
+            providerButton("Continuar con Google", icon: "g.circle", dark: false) { await signIn(.google) }
+        case .joined(let name):
+            title("Ya eres parte de \(name)")
+            note("Lo encuentras en Negocio. Para cambiar entre tus cuentas, usa el menú ⋯.")
+            primary("Listo") { onClose() }
+        case .pending(let name):
+            title("Solicitud enviada")
+            note("La dueña o el dueño de \(name.isEmpty ? "el negocio" : name) debe aprobarla. Te avisaremos cuando puedas entrar.")
+            primary("Listo") { onClose() }
+        case .already:
+            title("Ya eres parte de este negocio")
+            primary("Listo") { onClose() }
+        case .failed(let msg):
+            title("No pudimos unirte")
+            note(msg)
+            primary("Cerrar") { onClose() }
+        }
+    }
+
+    private func title(_ t: String) -> some View {
+        Text(t).font(.system(.title2).weight(.bold)).foregroundStyle(Color.brand).multilineTextAlignment(.center)
+    }
+    private func note(_ t: String) -> some View {
+        Text(t).font(BT.subhead).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+    private func primary(_ t: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(t).font(BT.footnoteBold).frame(maxWidth: .infinity).frame(height: 52)
+                .background(Color.brand, in: Capsule()).foregroundStyle(Color.inkInverse)
+        }
+    }
+    private func providerButton(_ t: String, icon: String, dark: Bool, action: @escaping () async -> Void) -> some View {
+        Button { Task { await action() } } label: {
+            Label(t, systemImage: icon).font(BT.footnoteBold)
+                .frame(maxWidth: .infinity).frame(height: 52)
+                .background(dark ? Color.black : Color.surface, in: Capsule())
+                .foregroundStyle(dark ? Color.white : Color.ink)
+                .overlay(Capsule().stroke(Color.border, lineWidth: dark ? 0 : 1))
+        }
+    }
+
+    private func signIn(_ provider: IdentityCredential.Provider) async {
+        do {
+            let s = try await FincasAuth.signIn(with: provider)
+            FincasAuth.save(s)
+            await join()
+        } catch let e as ASAuthorizationError where e.code == .canceled {
+            phase = .signIn
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+
+    private func join() async {
+        phase = .joining
+        do {
+            let a = try await FincasAuth.join(code: invite.code)
+            switch a.status {
+            case "joined", "already_member":
+                await AccountStore.shared.syncFromServer()
+                let store = AccountStore.shared
+                if let name = a.businessName,
+                   let b = store.businesses.first(where: { $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
+                    store.activeBusinessId = b.id
+                }
+                Haptic.success()
+                phase = a.status == "joined" ? .joined(a.businessName ?? "el negocio") : .already
+            default:
+                phase = .pending(a.businessName ?? "")
+            }
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+}
+

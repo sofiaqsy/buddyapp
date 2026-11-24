@@ -502,7 +502,7 @@ struct InicioView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "location.circle.fill")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Activa tu ubicación para conectarte con ayuda cerca")
+                    Text("Activa tu ubicación para ver lugares cerca de ti")
                         .font(BT.caption1)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
@@ -778,6 +778,7 @@ struct InicioView: View {
                 }
                 // El logo vive ahora dentro de la portada del Home.
                 .toolbar(.hidden, for: .navigationBar)
+                .onChange(of: heroMemoryKey) { _, _ in rememberHero() }
                 .onReceive(NotificationCenter.default.publisher(for: .tabReselected)) { note in
                     guard note.object as? Int == AppTab.inicio.rawValue else { return }
                     if !navPath.isEmpty { navPath = NavigationPath() }
@@ -954,11 +955,22 @@ struct InicioView: View {
     /// suya en la base). Si no hay, la foto del lugar más cercano.
     /// Nunca la foto de un negocio: si el destino no tiene portada, la
     /// portada es el verde de la marca.
-    private var heroImageUrl: String? {
+    private var heroImageUrl: String? { freshHeroUrl ?? (lastHeroUrl.isEmpty ? nil : lastHeroUrl) }
+    private var freshHeroUrl: String? {
         guard let id = resolvedLocation?.destinationId else { return nil }
         if let url = heroDestination?.coverUrl, !url.isEmpty { return url }
         if let url = destinations.first(where: { $0.id == id })?.coverUrl, !url.isEmpty { return url }
         return nil
+    }
+    /// La última portada mostrada: mientras Inicio recarga (la ubicación se
+    /// vuelve a resolver) la foto se queda, en vez de pasar un segundo por el
+    /// verde (Keyla, 24 Nov 2026). También cubre el arranque en frío.
+    @AppStorage("inicio.lastHeroUrl") private var lastHeroUrl = ""
+    @AppStorage("inicio.lastHeroName") private var lastHeroName = ""
+    private var heroMemoryKey: String { (freshHeroUrl ?? "") + "|" + (resolvedLocation?.destinationName ?? "") }
+    private func rememberHero() {
+        if let url = freshHeroUrl { lastHeroUrl = url }
+        if let n = resolvedLocation?.destinationName, !n.isEmpty { lastHeroName = n }
     }
 
     /// Trae el destino resuelto por id: la lista corta (fetchDestinations, 5)
@@ -973,7 +985,7 @@ struct InicioView: View {
     @ViewBuilder private var homeComposer: some View {
         HomeRowsView(
             cards: exploreCards,
-            placeName: resolvedLocation?.destinationName ?? locationService.currentCity,
+            placeName: resolvedLocation?.destinationName ?? locationService.currentCity ?? (lastHeroName.isEmpty ? nil : lastHeroName),
             reshuffleToken: reshuffleToken,
             showsLocationPrompt: effectiveTripJourney == nil && effectiveHomeContext == nil,
             locationPrompt: AnyView(locationContext),
@@ -3703,6 +3715,36 @@ struct HomeRowsView: View {
         productHits = Dictionary(hits.map { ($0.spotId.lowercased(), $0.products) }, uniquingKeysWith: { a, _ in a })
     }
 
+    /// Categorías de lugares públicos, sin un negocio detrás.
+    static let touristCategories: Set<String> = ["Naturaleza", "Miradores", "Plaza y centro"]
+    /// Salen de la guía del destino (todos los lugares curados), no del feed:
+    /// el feed solo trae lugares con fotos de viajeros y las cataratas no
+    /// tienen. Respaldo: los del feed con esas categorías.
+    @State private var guideTourist: [APIPlaceCard] = []
+    private var touristPlaces: [APIPlaceCard] {
+        guideTourist.isEmpty ? local.filter { Self.touristCategories.contains(Self.categoryName($0)) } : guideTourist
+    }
+    private var touristDestinationId: String? {
+        let ids = local.compactMap(\.destinationId)
+        return Dictionary(grouping: ids, by: { $0 }).max { $0.value.count < $1.value.count }?.key
+    }
+    private func loadTouristPlaces(destinationId id: String) async {
+        let store = RouteStore.shared(forDestination: id)
+        _ = await store.ensureLoaded(destinationId: id)
+        let destName = local.first { $0.destinationId == id }?.destinationName
+        let origin = LocationService.current?.userLocation
+        guideTourist = store.route.places
+            .filter { Self.touristCategories.contains($0.categoryName ?? "") }
+            .map { p in
+                let d = origin.map { Int($0.distance(from: CLLocation(latitude: p.latitude, longitude: p.longitude))) }
+                return APIPlaceCard(id: p.id.uuidString.lowercased(), name: p.name, destinationId: id, destinationName: destName,
+                                    lat: p.latitude, lng: p.longitude, distanceMeters: d,
+                                    coverUrl: p.coverUrl, coverUrls: p.coverUrl.map { [$0] }, coverPhotos: nil,
+                                    coverAuthorName: nil, coverAuthorAvatarUrl: nil, category: p.categoryName,
+                                    photoCount: p.coverUrl == nil ? 0 : 1, isNew: false, buddyCount: 0, buddies: [])
+            }
+    }
+
     static func categoryName(_ card: APIPlaceCard) -> String {
         let c = card.category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return c.isEmpty ? "Otros lugares" : c
@@ -3750,13 +3792,16 @@ struct HomeRowsView: View {
             for id in prefetchKey.split(separator: ",") { RouteStore.prefetch(destinationId: String(id)) }
         }
         .task(id: localProductsKey) { await loadLocalProducts() }
+        .task(id: touristDestinationId) { if let id = touristDestinationId { await loadTouristPlaces(destinationId: id) } }
     }
 
     private var rowsBody: some View {
         GeometryReader { geo in
+          ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     hero(topInset: geo.safeAreaInsets.top, width: geo.size.width)
+                        .id("inicioTop")
 
                     if !query.isEmpty {
                         searchSection
@@ -3776,6 +3821,12 @@ struct HomeRowsView: View {
                                     items: nearby, large: true, category: Self.nearbyRoute, capsuleAction: true)
                             }
                             if !localProducts.isEmpty { productsRow }
+                            // Lugares turísticos sin dueño (cataratas, miradores,
+                            // plaza), justo después de los productos (Keyla, 24 Nov 2026).
+                            if !touristPlaces.isEmpty {
+                                row(title: "Lugares turísticos", subtitle: "Cataratas, miradores y naturaleza",
+                                    items: rotated(touristPlaces), large: false, category: nil, tall: true)
+                            }
                             // Sin filas por categoría (Keyla, 23 Nov 2026).
                             // Siempre al final: una mezcla de todos los lugares de
                             // la zona, en orden rotativo.
@@ -3802,6 +3853,11 @@ struct HomeRowsView: View {
             // llega a este ScrollView (probado en el simulador: el último lugar
             // quedaba debajo), así que el Home reserva el alto de la barra aquí.
             .contentMargins(.bottom, 96, for: .scrollContent)
+            // Tocar Inicio otra vez sube al principio, como Comunidad (Keyla, 24 Nov 2026).
+            .onChange(of: reshuffleToken) { _, _ in
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("inicioTop", anchor: .top) }
+            }
+          }
         }
         .background(Color.canvas)
     }

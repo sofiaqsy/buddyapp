@@ -1,4 +1,5 @@
 import SwiftUI
+import GoogleSignIn
 
 @main
 struct BuddyAppApp: App {
@@ -25,6 +26,8 @@ struct BuddyAppApp: App {
         print("🚀 [AppLaunch] ─────────────────────────────────────")
     }
 
+    @State private var joinInvite: JoinInvite? = nil
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -48,6 +51,15 @@ struct BuddyAppApp: App {
                 // AuthState lo marca y la UI transiciona a estado anónimo.
                 .task { await authState.validate() }
                 .onAppear { PerfLog.ms("primera-pantalla", since: Cronometro.arranque) }
+                // Enlace de invitación a un negocio (Keyla, 24 Nov 2026). Los demás
+                // enlaces (Google) siguen yendo a su manejador.
+                .onOpenURL { url in
+                    if let invite = JoinInvite.from(url) { joinInvite = invite }
+                    else { _ = GIDSignIn.sharedInstance.handle(url) }
+                }
+                .fullScreenCover(item: $joinInvite) { invite in
+                    JoinBusinessView(invite: invite) { joinInvite = nil }
+                }
                 .tint(Color.brand)
                 .preferredColorScheme(.light)
                 .animation(.easeInOut(duration: 0.3), value: authState.isLoggedIn)

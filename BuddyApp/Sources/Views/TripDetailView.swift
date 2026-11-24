@@ -210,6 +210,7 @@ struct TripDetailView: View {
     /// Alto actual del panel (lista o detalle). Lo usan el panel y el botón de
     /// "mi ubicación", que debe quedar siempre por encima del panel.
     private var panelHeight: CGFloat {
+        if panelMinimized && !detailExpanded && !listExpanded { return Self.peekHeight + bottomClearance }
         if detailExpanded && selectedPlace != nil { return expandedHeight }
         if listExpanded && selectedPlace == nil { return expandedHeight }
         return (selectedPlace != nil || (focusPlaceId != nil && !focusHandled)
@@ -219,6 +220,10 @@ struct TripDetailView: View {
     /// Detalle de un lugar a pantalla casi completa (Keyla, 20 Nov 2026): se
     /// jala hacia arriba y tapa el mapa; hacia abajo vuelve al alto normal.
     @State private var detailExpanded = false
+    /// Tercer alto, abajo del todo: solo el título, para ver el mapa entero
+    /// (Keyla, 24 Nov 2026). Deslizar hacia abajo desde el alto normal.
+    @State private var panelMinimized = false
+    static let peekHeight: CGFloat = 56
     /// La lista "Lugares en esta zona" también se abre a pantalla completa
     /// (Keyla, 23 Nov 2026), igual que el detalle con sus productos.
     @State private var listExpanded = false
@@ -242,6 +247,7 @@ struct TripDetailView: View {
             .frame(maxWidth: .infinity).frame(height: 30)
             .contentShape(Rectangle())
             .onTapGesture { withAnimation(Self.panelSpring) {
+                if panelMinimized { panelMinimized = false; return }
                 if selectedPlace == nil { listExpanded.toggle() } else { detailExpanded.toggle() }
             } }
             .highPriorityGesture(panelDrag)
@@ -261,12 +267,16 @@ struct TripDetailView: View {
     private func endPanelDrag(_ predicted: CGFloat) {
         // Más sensible: basta un deslizar corto hacia arriba o abajo.
         withAnimation(Self.panelSpring) {
-            if selectedPlace == nil {
-                if predicted < -30 { listExpanded = true }
-                else if predicted > 30 { listExpanded = false }
-            } else {
-                if predicted < -30 { detailExpanded = true }
-                else if predicted > 30 { detailExpanded = false }
+            let expanded = selectedPlace == nil ? listExpanded : detailExpanded
+            if predicted < -30 {
+                // Arriba: de mínimo a normal, de normal a completo.
+                if panelMinimized { panelMinimized = false }
+                else if selectedPlace == nil { listExpanded = true } else { detailExpanded = true }
+            } else if predicted > 30 {
+                // Abajo: de completo a normal, de normal a mínimo.
+                if expanded {
+                    if selectedPlace == nil { listExpanded = false } else { detailExpanded = false }
+                } else { panelMinimized = true }
             }
             dragOffset = 0
         }
@@ -358,7 +368,17 @@ struct TripDetailView: View {
                 }
                 .annotationTitles(.hidden)
             }
-            UserAnnotation()
+            // Punto azul de "tu ubicación": el tinte verde del mapa lo volvía un
+            // círculo oscuro que parecía un pin (Keyla, 24 Nov 2026).
+            UserAnnotation {
+                ZStack {
+                    Circle().fill(Color.blue.opacity(0.18)).frame(width: 44, height: 44)
+                    Circle().fill(.white).frame(width: 22, height: 22)
+                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                    Circle().fill(Color(red: 0.0, green: 0.48, blue: 1.0)).frame(width: 16, height: 16)
+                }
+                .accessibilityLabel("Tu ubicación")
+            }
         }
         // Mapa de contexto: sin comercios, pero con carreteras / ríos / nombres de ciudad.
         // .excludingAll elimina demasiadas referencias visuales y desorienta al usuario.
@@ -759,13 +779,18 @@ struct TripDetailView: View {
             width: geo.size.width,
             // Mientras se jala, el panel sigue al dedo (sin pasarse de los topes).
             height: selectedPlace == nil
-                ? min(expandedHeight, max(sheetHeight + bottomClearance, panelHeight - dragOffset))
-                : min(expandedHeight, max(detalleHeight + bottomClearance, panelHeight - dragOffset)),
+                ? min(expandedHeight, max(Self.peekHeight + bottomClearance, panelHeight - dragOffset))
+                : min(expandedHeight, max(Self.peekHeight + bottomClearance, panelHeight - dragOffset)),
             alignment: .top,
         )
 
         // Superficie blanca sólida con esquinas superiores redondeadas, como las
         // tarjetas de Inicio: el mapa ya no se transparenta detrás del texto.
+        // En el alto mínimo solo se ve la barrita y el título con "Cómo
+        // llegar": las pestañas y las fotos se esconden (Keyla, 24 Nov 2026).
+        .mask(alignment: .top) {
+            Rectangle().frame(height: panelMinimized && dragOffset == 0 ? 104 : 4000)
+        }
         .background(
             UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22)
                 .fill(Color.surface)
@@ -774,6 +799,7 @@ struct TripDetailView: View {
         )
         .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
         .onChange(of: selectedPlace?.id) { _, id in
+            // Si el panel está al mínimo, sigue al mínimo al tocar otro lugar (Keyla, 24 Nov 2026).
             if id != nil { focusHandled = true; listExpanded = false } else { detailExpanded = false }
         }
     }
@@ -980,14 +1006,22 @@ struct TripDetailView: View {
             return
         }
 
-        let minLat = coords.map(\.latitude).min()!
-        let maxLat = coords.map(\.latitude).max()!
-        let minLon = coords.map(\.longitude).min()!
-        let maxLon = coords.map(\.longitude).max()!
-
         // 1° lat ≈ 111 km — radius as cap so we never zoom out past the zone
         let radiusKm  = Double(routeStore.route.radiusMeters ?? 5000) / 1000.0
         let maxDeg    = (radiusKm / 111.0) * 2.4   // full diameter + 20 % padding
+
+        // Encuadre centrado donde están la mayoría de lugares: la mediana no se
+        // deja arrastrar por un lugar lejano, que antes empujaba los pines hacia
+        // arriba del mapa (Keyla, 24 Nov 2026). Los lugares fuera de la zona no
+        // cuentan para el encuadre (siguen en el mapa).
+        let lats = coords.map(\.latitude).sorted(), lons = coords.map(\.longitude).sorted()
+        let midLat = lats[lats.count / 2], midLon = lons[lons.count / 2]
+        let near = coords.filter { abs($0.latitude - midLat) <= maxDeg / 2 && abs($0.longitude - midLon) <= maxDeg / 2 }
+        let fit = near.isEmpty ? coords : near
+        let minLat = fit.map(\.latitude).min()!
+        let maxLat = fit.map(\.latitude).max()!
+        let minLon = fit.map(\.longitude).min()!
+        let maxLon = fit.map(\.longitude).max()!
 
         // Fit actual pins with padding, capped at zone diameter
         let rawLat = (maxLat - minLat) * 1.6
@@ -1323,6 +1357,12 @@ struct PlaceGuideDetailSheet: View {
     }
     @State private var tab: Tab = .productos
     @State private var userPickedTab = false
+    /// Sin productos, Fotos va primero y Productos al final (Keyla, 24 Nov 2026).
+    private var noProducts: Bool { (productsState == .loaded || productsState == .notLinked || productsState == .failed) && products.isEmpty }
+    private var visibleTabs: [Tab] {
+        guard noProducts else { return Tab.visible }
+        return [.fotos, .info, .productos] + Tab.visible.filter { $0 == .buddies }
+    }
     @State private var products: [FincasProduct] = []
     @State private var productToRemove: FincasProduct? = nil
     @State private var productRemoveError: String? = nil
@@ -1538,7 +1578,7 @@ struct PlaceGuideDetailSheet: View {
         // quedaban con las del lugar anterior: un .task sin id corre UNA sola
         // vez por instancia de vista, y bottomSection reusa la misma vista al
         // cambiar selectedPlace, así que nunca volvía a pedir la galería.
-        .task(id: place.id) { tab = startOnPhotos ? .fotos : .productos; await loadProducts() }
+        .task(id: place.id) { userPickedTab = false; tab = startOnPhotos ? .fotos : .productos; await loadProducts() }
         .navigationDestination(item: $ownerEditRoute) { r in FincasProductEditView(route: r) }
         // Al guardar en el editor, las tarjetas muestran la foto y el precio nuevos.
         .onReceive(NotificationCenter.default.publisher(for: .fincasProductsChanged)) { _ in
@@ -1558,7 +1598,10 @@ struct PlaceGuideDetailSheet: View {
         .fullScreenCover(item: $productViewer) { set in
             // Al cerrar vuelve a la tarjeta de la foto que se ve, y la fila o la
             // cuadrícula se mueve hasta ella (regla 26, Keyla, 23 Nov 2026).
-            PlacePhotoViewer(photos: set.photos, inicial: set.start, systemDismiss: PhotoZoom.systemAvailable,
+            // Arrastre propio para cerrar (Keyla, 24 Nov 2026): el del sistema
+            // solo responde si el visor nació de una miniatura, y al abrirse
+            // solo (producto tocado en Inicio) no se podía cerrar deslizando.
+            PlacePhotoViewer(photos: set.photos, inicial: set.start, systemDismiss: false,
                              onShowing: { i in
                                  guard set.photos.indices.contains(i) else { return }
                                  if let id = entryFor(photo: set.photos[i]) { productShownId = id }
@@ -1801,6 +1844,25 @@ struct PlaceGuideDetailSheet: View {
 
     /// Producto que se tocó en "Productos locales" para abrir este lugar.
     @State private var focusEntryId: String? = ProductFocus.take()
+    @State private var focusViewerOpened = false
+
+    /// Tocar un producto en Inicio abre el lugar con ese producto primero y,
+    /// encima, su foto a pantalla completa (Keyla, 24 Nov 2026). Una sola vez:
+    /// al cerrar el visor queda la ficha con el producto primero.
+    private func openFocusedProductViewer() {
+        guard !focusViewerOpened, let f = focusEntryId,
+              let e = productEntries.first(where: { $0.id == f }) else { return }
+        focusViewerOpened = true
+        let all = allProductPhotos
+        guard !all.isEmpty else { return }
+        let cover = presCover(e.product, e.pres)
+        let start = cover.flatMap { c in all.firstIndex(of: c) } ?? 0
+        // Un instante para que la tarjeta exista y el visor crezca desde ella.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            productShownId = entryId(e.product, e.pres)
+            productViewer = ProductPhotoSet(photos: all, productId: e.product.id, start: start)
+        }
+    }
 
     private func presCover(_ p: FincasProduct, _ pr: FincasProduct.Presentation?) -> String? {
         guard let pr else { return p.coverUrl }
@@ -1961,8 +2023,9 @@ struct PlaceGuideDetailSheet: View {
     private var allProductPhotos: [String] {
         var out: [String] = []
         for e in productEntries {
-            let first = presCover(e.product, e.pres)
-            for u in [first].compactMap({ $0 }) + productPhotos(e.product) where !u.isEmpty && !out.contains(u) { out.append(u) }
+            // Una foto por tarjeta, la misma que se ve en el panel (Keyla, 24 Nov
+            // 2026): antes salían también la portada y las demás fotos del producto.
+            if let u = presCover(e.product, e.pres), !u.isEmpty, !out.contains(u) { out.append(u) }
         }
         return out
     }
@@ -2017,10 +2080,13 @@ struct PlaceGuideDetailSheet: View {
             products = page.items
             productsState = page.linked == false ? .notLinked : .loaded
             // Con productos, la ficha abre en Productos; sin ellos, en Información.
-            // Siempre abre en Productos (Keyla, 20 Nov 2026).
+            // Sin productos abre en Fotos (Keyla, 24 Nov 2026).
+            if products.isEmpty && !userPickedTab && tab == .productos { tab = .fotos }
+            openFocusedProductViewer()
         } catch {
             dlog("🛍️ [PlaceProducts] \(error)")
             products = []
+            if !userPickedTab && tab == .productos { tab = .fotos }
             // Integración apagada (404) o sin dueño: se muestra como "aún no muestra productos".
             productsState = .notLinked
         }
@@ -2102,7 +2168,7 @@ struct PlaceGuideDetailSheet: View {
     // de cada pestaña, no compitiendo aquí arriba.
     private var tabBar: some View {
         HStack(spacing: 0) {
-            ForEach(Tab.visible, id: \.self) { t in
+            ForEach(visibleTabs, id: \.self) { t in
                 Button {
                     guard !justDragged else { return }
                     Haptic.select()

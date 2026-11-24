@@ -64,7 +64,9 @@ final class SpotsStore: ObservableObject {
         let task = Task { [weak self] in
             let t0 = Date()
             do {
-                let cards = try await APIClient.shared.fetchPlaceCards(lat: lat, lng: lng)
+                // 30 (el máximo del servidor): con 12 solo llegaban los más cercanos y
+                // faltaban los lugares turísticos de las afueras (Keyla, 24 Nov 2026).
+                let cards = try await APIClient.shared.fetchPlaceCards(lat: lat, lng: lng, limit: 30)
                 dlog("⏱️ [tiempo] spots \(reason) \(Cronometro.ms(desde: t0))ms → \(cards.count) lugar(es)")
                 guard let self else { return }
                 guard gen == self.generation else {

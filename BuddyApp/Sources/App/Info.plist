@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.3</string>
+	<string>1.1.4</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -26,6 +26,16 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.googleusercontent.apps.975826303754-eraadkk8jh9u68q366l3bhc7d1dleriq</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>biz.buddyapp.invite</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>buddyvr</string>
 			</array>
 		</dict>
 	</array>
