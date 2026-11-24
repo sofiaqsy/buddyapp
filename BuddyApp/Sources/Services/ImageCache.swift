@@ -19,6 +19,11 @@ final class ImageCache {
         memory.countLimit = 120
     }
 
+    /// Solo memoria, sin disco: barato para leer en el main al crear la vista.
+    func memoryImage(_ url: URL) -> UIImage? {
+        memory.object(forKey: cacheKey(url) as NSString)
+    }
+
     func get(_ url: URL) -> UIImage? {
         let key = cacheKey(url)
         if let img = memory.object(forKey: key as NSString) {
@@ -212,6 +217,9 @@ struct CachedImage<Content: View, Placeholder: View>: View {
         self.url = url
         self.content = content
         self.placeholder = placeholder
+        // Si ya está en memoria, se dibuja en el primer cuadro (Keyla, 23 Nov 2026:
+        // al deslizar el panel las fotos pasaban por blanco un instante).
+        _uiImage = State(initialValue: url.flatMap { ImageCache.shared.memoryImage($0) })
     }
 
     var body: some View {
@@ -240,6 +248,7 @@ struct CachedImage<Content: View, Placeholder: View>: View {
 
     private func loadImage() async {
         guard let url else { return }
+        if uiImage != nil, ImageCache.shared.memoryImage(url) === uiImage { return }
         // Hit de memoria/disco — disco + decodificación SIEMPRE fuera del main;
         // la asignación de @State, en main.
         if let cached = await Task.detached(priority: .userInitiated, operation: {

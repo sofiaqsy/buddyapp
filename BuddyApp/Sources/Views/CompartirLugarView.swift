@@ -146,22 +146,8 @@ struct CompartirLugarSheet: View {
                 }
             }
 
-            // Siempre presente, haya o no lista: el buddy puede estar en un
-            // local que el catálogo todavía no conoce, y buscarlo por texto no
-            // sirve — si no está aquí, tampoco está en OpenStreetMap.
-            Button { useCurrentLocation() } label: {
-                optionRow(
-                    icon: "plus.circle.fill",
-                    title: "Registrar lugar de la ubicación actual",
-                    subtitle: nearbySpots.isEmpty
-                        ? (isPrefetching ? "buscando…" : "nombra dónde estás")
-                        : "ninguno de estos es",
-                    isLoading: false
-                )
-            }
-            .buttonStyle(.pressable)
-            .disabled(isSubmitting || isPrefetching)
-
+            // "Registrar lugar de la ubicación actual" quitado (Keyla, 21 Nov 2026):
+            // un lugar nuevo se marca en "Buscar en el mapa".
             Button {
                 mapStart = currentCoords ?? LocationService.current?.userLocation.map {
                     ($0.coordinate.latitude, $0.coordinate.longitude)
@@ -187,30 +173,7 @@ struct CompartirLugarSheet: View {
     }
 
     private func optionRow(icon: String, title: String, subtitle: String?, isLoading: Bool) -> some View {
-        HStack(spacing: Spacing.md) {
-            AppIcon(name: icon, size: 18)
-                .font(.system(size: 18))
-                .foregroundStyle(Color.brand)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(BT.headline).foregroundStyle(Color.ink)
-                if let subtitle {
-                    Text(subtitle).font(BT.caption1).foregroundStyle(Color.inkMuted)
-                }
-            }
-            Spacer()
-            if isLoading {
-                ProgressView().scaleEffect(0.8)
-            } else {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.inkMuted)
-            }
-        }
-        .padding(Spacing.md)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
-        .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+        PlaceOptionRow(icon: icon, title: title, subtitle: subtitle, isLoading: isLoading)
     }
 
     /// Consulta el catálogo al abrir el sheet, no al tocar un botón: los locales
@@ -476,6 +439,21 @@ struct ElegirLugarEnMapaView: View {
     /// nadie los haya recomendado en Buddy. Tocar uno pone su nombre y centra
     /// el pin ahí (Keyla, 20 Nov 2026: ubicaciones del negocio).
     var suggestMapPlaces = false
+    /// Nombre ya conocido (la sede se llama como el negocio): sin campo de texto.
+    var fixedName: String? = nil
+    /// Lugar a mostrar primero (tocado en la lista): el mapa abre ahí y, si es
+    /// de Buddy, lo deja elegido con su foto. Nada se guarda sin el botón.
+    var focusSpotId: String? = nil
+    /// Deslizar a la derecha sobre el panel vuelve atrás, como el mapa de un lugar.
+    var onSwipeBack: (() -> Void)? = nil
+    /// Panel jalado hacia arriba: tapa el mapa, como el detalle de un lugar.
+    @State private var detailExpanded = false
+    /// Abrir o cerrar el panel cambia el tamaño del mapa: eso no es un arrastre.
+    @State private var ignoreCameraUntil = Date.distantPast
+    private func setExpanded(_ v: Bool) {
+        ignoreCameraUntil = Date().addingTimeInterval(0.8)
+        withAnimation(TripDetailView.panelSpring) { detailExpanded = v }
+    }
     @State private var mapPlaces: [MKMapItem] = []
     @State private var poiTask: Task<Void, Never>?
     private let openedAt = Date()
@@ -502,6 +480,12 @@ struct ElegirLugarEnMapaView: View {
     // Búsqueda por texto: mueve el mapa, no elige nada por sí sola.
     @State private var searchText = ""
     @State private var searchResults: [MKMapItem] = []
+    /// Lugares de Buddy que coinciden: van primero (Keyla, 21 Nov 2026).
+    @State private var buddyResults: [APINearbySpot] = []
+    @State private var pendingSelectId: String?
+    /// Movimiento del mapa hecho por la app (centrar el lugar elegido): no
+    /// debe soltar la selección como lo hace un arrastre del usuario.
+    @State private var programmaticMove = false
     @State private var searchTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
 
@@ -516,9 +500,17 @@ struct ElegirLugarEnMapaView: View {
         proposeTitle: String = "Compartir aquí",
         newEyebrow: String = "NUEVO LUGAR",
         namePlaceholder: String = "¿Cómo se llama? Ej. Cafetería Rosal",
-        suggestMapPlaces: Bool = false
+        suggestMapPlaces: Bool = false,
+        fixedName: String? = nil,
+        focus: (lat: Double, lng: Double)? = nil,
+        focusSpotId: String? = nil,
+        onSwipeBack: (() -> Void)? = nil
     ) {
+        self.onSwipeBack = onSwipeBack
         self.suggestMapPlaces = suggestMapPlaces
+        self.fixedName = fixedName
+        self.focusSpotId = focusSpotId
+        let initialCoords = focus ?? initialCoords
         self.pickTitle = pickTitle
         self.proposeTitle = proposeTitle
         self.newEyebrow = newEyebrow
@@ -534,6 +526,12 @@ struct ElegirLugarEnMapaView: View {
             _camera = State(initialValue: .region(MKCoordinateRegion(
                 center: coord, span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
             )))
+            _center = State(initialValue: coord)
+        } else if fixedName != nil {
+            // Sin ubicación del teléfono: empezar en Villa Rica, no en el océano.
+            let coord = CLLocationCoordinate2D(latitude: -10.7395, longitude: -75.2698)
+            _camera = State(initialValue: .region(MKCoordinateRegion(
+                center: coord, span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))))
             _center = State(initialValue: coord)
         } else {
             _camera = State(initialValue: .automatic)
@@ -561,6 +559,7 @@ struct ElegirLugarEnMapaView: View {
                                     Haptic.select()
                                     dlog("📍 [ElegirLugarMapa] pin existente tocado \(spot.id.prefix(8)) \"\(spot.name)\" pendiente=\(spot.isPendingApproval)")
                                     selectedId = spot.id
+                                    centerOn(spot)
                                 })
                         }
                         .annotationTitles(.hidden)
@@ -571,12 +570,18 @@ struct ElegirLugarEnMapaView: View {
                 // Mientras se arrastra: el pin se levanta. Al soltar: baja,
                 // se toma el centro y se carga la dirección.
                 .onMapCameraChange(frequency: .continuous) { _ in
-                    guard !isMoving else { return }
+                    guard !isMoving, !programmaticMove, !detailExpanded, Date() > ignoreCameraUntil else { return }
                     isMoving = true
                     selectedId = nil
                 }
                 .onMapCameraChange(frequency: .onEnd) { context in
                     isMoving = false
+                    if programmaticMove {
+                        programmaticMove = false; lastRegion = context.region
+                        // Elegido desde la búsqueda: queda seleccionado al llegar.
+                        if let id = pendingSelectId, spots.contains(where: { $0.id == id }) { selectedId = id; pendingSelectId = nil }
+                        return
+                    }
                     lastRegion = context.region
                     // Menos de 3 m respecto al último centro atendido: es el
                     // mismo reposo repetido, no un movimiento nuevo.
@@ -596,9 +601,12 @@ struct ElegirLugarEnMapaView: View {
 
                 if selected == nil { centerPin }
             }
-            .overlay(alignment: .top) { topBar }
+            .overlay(alignment: .top) { if !detailExpanded { topBar } }
+            // Ubicación de un negocio: el panel va ENCIMA del mapa, como el mapa de
+            // un lugar. Así al jalarlo hacia arriba tapa el mapa sin encogerlo.
+            .overlay(alignment: .bottom) { if fixedName != nil { panel } }
 
-            panel
+            if fixedName == nil { panel }
         }
         .onAppear {
             dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] abierto — ubicación=\(initialCoords.map { "(\($0.lat),\($0.lng))" } ?? "AÚN NO") categorias=\(categories.count)")
@@ -641,8 +649,26 @@ struct ElegirLugarEnMapaView: View {
             .background(Color.surface, in: Capsule())
             .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
 
-            if !searchResults.isEmpty {
+            if !searchResults.isEmpty || !buddyResults.isEmpty {
                 VStack(spacing: 0) {
+                    ForEach(buddyResults.prefix(5)) { spot in
+                        Button { goTo(spot) } label: {
+                            HStack(spacing: 10) {
+                                LocationPin(size: 14)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(spot.name).font(BT.footnoteBold).foregroundStyle(Color.ink).lineLimit(1)
+                                    if let d = spot.destination?.name ?? (spot.distanceMeters != nil ? spot.distanceLabel : nil) {
+                                        Text(d).font(BT.caption1).foregroundStyle(Color.inkMuted).lineLimit(1)
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Spacing.md).padding(.vertical, 10)
+                            .contentShape(Rectangle())   // toda la fila se puede tocar
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
                     ForEach(Array(searchResults.enumerated()), id: \.offset) { i, item in
                         Button { goTo(item) } label: {
                             VStack(alignment: .leading, spacing: 1) {
@@ -653,6 +679,7 @@ struct ElegirLugarEnMapaView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, Spacing.md).padding(.vertical, 10)
+                            .contentShape(Rectangle())   // toda la fila se puede tocar
                         }
                         .buttonStyle(.plain)
                         if i < searchResults.count - 1 { Divider() }
@@ -680,7 +707,7 @@ struct ElegirLugarEnMapaView: View {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else {
             if !searchResults.isEmpty { dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] búsqueda vacía/corta — limpio resultados") }
-            searchResults = []
+            searchResults = []; buddyResults = []
             return
         }
         searchTask = Task {
@@ -692,10 +719,25 @@ struct ElegirLugarEnMapaView: View {
             let around = lastRegion?.center ?? center
             if let r = lastRegion { request.region = r }
             dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] búsqueda \"\(q)\" iniciada — región=\(lastRegion.map { "centro (\($0.center.latitude),\($0.center.longitude)) span \($0.span.latitudeDelta)°" } ?? "ninguna")")
+            let c0 = around
+            async let buddyTask = try? await APIClient.shared.searchCuratedSpots(query: q, lat: c0?.latitude, lng: c0?.longitude)
             do {
-                let items = try await MKLocalSearch(request: request).start().mapItems
+                let raw = try await MKLocalSearch(request: request).start().mapItems
+                let buddy = await buddyTask ?? []
                 guard !Task.isCancelled else { return }
-                await MainActor.run { searchResults = Array(items.prefix(5)) }
+                // De Apple solo lo cercano (50 km): "Finca Rosal" no debe traer Colombia.
+                let taken = Set(buddy.map { $0.name.lowercased() })
+                let items = raw.filter { item in
+                    guard let a = around else { return true }
+                    let c = item.placemark.coordinate
+                    let near = CLLocation(latitude: a.latitude, longitude: a.longitude)
+                        .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude)) < 50_000
+                    return near && !taken.contains((item.name ?? "").lowercased())
+                }
+                await MainActor.run {
+                    buddyResults = buddy
+                    searchResults = Array(items.prefix(max(0, 5 - min(buddy.count, 5))))
+                }
                 dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] búsqueda \"\(q)\" → \(items.count) resultado(s) en \(ms(started))ms (mostrando \(min(items.count, 5)))")
                 for (i, item) in items.prefix(5).enumerated() {
                     let c = item.placemark.coordinate
@@ -711,6 +753,40 @@ struct ElegirLugarEnMapaView: View {
                 dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] búsqueda \"\(q)\" FALLÓ en \(ms(started))ms: \(error.localizedDescription)")
                 await MainActor.run { searchResults = [] }
             }
+        }
+    }
+
+    private var expandedHeight: CGFloat {
+        let top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.safeAreaInsets.top ?? 0
+        // Debajo del título y del botón de volver.
+        return UIScreen.main.bounds.height - max(top, 54) - 110
+    }
+
+    /// Como en el mapa de un lugar: el pin elegido queda a la vista, arriba del panel.
+    private func centerOn(_ spot: APIPlaceGuideSpot) {
+        guard fixedName != nil else { return }
+        programmaticMove = true
+        let span = 0.004
+        withAnimation(.easeInOut(duration: 0.3)) {
+            camera = .region(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: spot.lat - span * 0.25, longitude: spot.lng),
+                span: MKCoordinateSpan(latitudeDelta: span, longitudeDelta: span)))
+        }
+    }
+
+    private func goTo(_ spot: APINearbySpot) {
+        guard let lat = spot.lat, let lng = spot.lng else { return }
+        Haptic.select()
+        searchFocused = false
+        searchText = ""
+        searchResults = []; buddyResults = []
+        pendingSelectId = spot.id
+        programmaticMove = true
+        let span = 0.004
+        withAnimation(.easeInOut(duration: 0.3)) {
+            camera = .region(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: lat - span * 0.25, longitude: lng),
+                                                span: MKCoordinateSpan(latitudeDelta: span, longitudeDelta: span)))
         }
     }
 
@@ -844,11 +920,61 @@ struct ElegirLugarEnMapaView: View {
 
     @ViewBuilder
     private var panel: some View {
-        if let spot = selected {
+        if let spot = selected, fixedName != nil {
+            // Ubicación de un negocio: el mismo panel del mapa de siempre, en Fotos.
+            VStack(spacing: 0) {
+                // El mismo tirador del panel del mapa: tocarlo abre o cierra.
+                Capsule().fill(Color.border).frame(width: 40, height: 5)
+                    .frame(maxWidth: .infinity).frame(height: 30)
+                    .contentShape(Rectangle())
+                    .onTapGesture { setExpanded(!detailExpanded) }
+                    .padding(.bottom, -14)
+                PlaceGuideDetailSheet(
+                    place: spot.asPlace, destinationId: nil, buddyPresenceText: nil,
+                    isFavorite: false, onToggleFavorite: {},
+                    onNavigate: { onPickSpot(spot) },
+                    onClose: { setExpanded(false); selectedId = nil },
+                    expanded: detailExpanded,
+                    actionTitle: pickTitle, actionIcon: "checkmark.circle", startOnPhotos: true
+                )
+                if detailExpanded { Spacer(minLength: 0) }
+            }
+            .fixedSize(horizontal: false, vertical: !detailExpanded)
+            // Mismo alto mínimo que el detalle del mapa: no cambia al pasar de pestaña.
+            .frame(minHeight: PlaceGuideDetailSheet.minHeight + 30, alignment: .top)
+            .frame(height: detailExpanded ? expandedHeight : nil, alignment: .top)
+            // El blanco llega hasta el borde de abajo, como el panel del mapa de un lugar.
+            .background(UnevenRoundedRectangle(topLeadingRadius: Radius.lg, topTrailingRadius: Radius.lg)
+                .fill(Color.surface).ignoresSafeArea(edges: .bottom))
+            // Arriba: tapa el mapa. Abajo: vuelve. Derecha: atrás. Igual que el mapa de un lugar.
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onEnded { v in
+                        let w = v.translation.width, h = v.predictedEndTranslation.height
+                        if abs(v.translation.height) > abs(w) {
+                            // Igual de sensible que el mapa de un lugar (Keyla, 23 Nov 2026).
+                            if h < -30 { setExpanded(true) }
+                            else if h > 30 { setExpanded(false) }
+                        } else if w > 90, w > abs(h) * 2 || v.predictedEndTranslation.width > 220 && w > abs(h) * 2 {
+                            Haptic.light(); onSwipeBack?()
+                        }
+                    }
+            )
+        } else if let spot = selected {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text(spot.isPendingApproval ? "LUGAR POR REVISAR" : "LUGAR EN EL MAPA")
                     .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
-                Text(spot.name).font(BT.title3).foregroundStyle(Color.ink).lineLimit(2)
+                if spot.coverUrl != nil {
+                    // La tarjeta de Inicio, con su foto: el dueño reconoce su lugar.
+                    HomePlaceCard(card: APIPlaceCard(id: spot.id, name: spot.name, destinationId: nil, destinationName: nil,
+                                                     lat: spot.lat, lng: spot.lng, distanceMeters: nil,
+                                                     coverUrl: spot.coverUrl, coverUrls: nil, coverPhotos: nil,
+                                                     coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+                                                     category: nil, photoCount: 0, isNew: false, buddyCount: 0, buddies: []),
+                                  large: true)
+                } else {
+                    Text(spot.name).font(BT.title3).foregroundStyle(Color.ink).lineLimit(2)
+                }
                 if let errorMessage {
                     Text(errorMessage).font(BT.caption1).foregroundStyle(Color.red)
                 }
@@ -860,8 +986,10 @@ struct ElegirLugarEnMapaView: View {
             .panelStyle()
         } else {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text(newEyebrow).font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
-                if suggestMapPlaces && !mapPlaces.isEmpty {
+                if !newEyebrow.isEmpty {
+                    Text(newEyebrow).font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                }
+                if suggestMapPlaces && fixedName == nil && !mapPlaces.isEmpty {
                     Text("¿Es uno de estos lugares cercanos?").font(BT.caption1).foregroundStyle(Color.inkMuted)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: Spacing.sm) {
@@ -880,12 +1008,14 @@ struct ElegirLugarEnMapaView: View {
                         .padding(.horizontal, 1)
                     }
                 }
+                // Nombre editable, ya con el del negocio (Keyla, 21 Nov 2026).
                 TextField(namePlaceholder, text: $name)
                     .font(BT.callout)
                     .padding(.horizontal, Spacing.md).padding(.vertical, 14)
                     .background(Color.surface)
                     .clipShape(RoundedRectangle(cornerRadius: Radius.md))
                     .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+                    .onAppear { if name.isEmpty, let fixedName { name = fixedName } }
                 if !categories.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: Spacing.sm) {
@@ -971,6 +1101,7 @@ struct ElegirLugarEnMapaView: View {
                                          maxLat: pedido.maxLat, maxLng: pedido.maxLng,
                                          truncated: res.truncated == true)
                     if res.spots.map(\.id) != spots.map(\.id) { spots = res.spots }
+                    if selectedId == nil, let f = pendingSelectId ?? focusSpotId, res.spots.contains(where: { $0.id == f }) { selectedId = f; pendingSelectId = nil }
                 }
                 dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] en pantalla: \(res.spots.count) lugar(es)\(res.tooWide == true ? " (demasiado lejos)" : "") — red \(ms(requestedAt))ms")
             } catch is CancellationError {
@@ -992,5 +1123,41 @@ private extension View {
             .background(Color.surface)
             .clipShape(UnevenRoundedRectangle(topLeadingRadius: Radius.lg, topTrailingRadius: Radius.lg))
             .shadow(color: .black.opacity(0.12), radius: 10, y: -2)
+    }
+}
+
+/// Fila de opción de "Añadir lugar" (Lugares que recomiendas). Compartida con
+/// las ubicaciones del negocio (Keyla, 21 Nov 2026: reusar esa experiencia).
+struct PlaceOptionRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String?
+    var isLoading = false
+    var body: some View {
+
+        HStack(spacing: Spacing.md) {
+            AppIcon(name: icon, size: 18)
+                .font(.system(size: 18))
+                .foregroundStyle(Color.brand)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(BT.headline).foregroundStyle(Color.ink)
+                if let subtitle {
+                    Text(subtitle).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                }
+            }
+            Spacer()
+            if isLoading {
+                ProgressView().scaleEffect(0.8)
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted)
+            }
+        }
+        .padding(Spacing.md)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+        .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
     }
 }

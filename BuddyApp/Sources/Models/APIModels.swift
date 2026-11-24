@@ -154,6 +154,9 @@ struct APIDestination: Decodable, Identifiable {
     let coverUrl: String?
     /// Frase corta del destino para el Inicio (migración 025). nil = sin frase.
     var slogan: String? = nil
+    /// "destination" | "place": la búsqueda de destinos mezcla lugares
+    /// geográficos (tabla place). La cobertura solo acepta destinos.
+    var source: String? = nil
     let active: Bool
     let places: [APIPlace]?
     let howToGetThere: String?
@@ -541,6 +544,11 @@ struct APIPlaceCard: Codable, Identifiable, Hashable {
     /// descubrimiento disponible. Sirve para UNA cosa: descartar, por coincidencia
     /// EXACTA, la tarjeta de Google que esta tarjeta de la comunidad ya representa.
     var googlePlaceId: String? = nil
+    /// Entrega en este destino aunque su lugar esté en otro (cobertura del
+    /// negocio, Keyla 22 Nov 2026). La tarjeta dice "A domicilio" y no la distancia.
+    var delivers: Bool? = nil
+    /// Negocio sin local físico: se abre el panel sin mapa, con "Pedir por chat".
+    var noPlace: Bool? = nil
 
     var photoLabel: String { "\(photoCount) foto\(photoCount == 1 ? "" : "s")" }
 

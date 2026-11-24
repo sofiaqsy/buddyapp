@@ -512,7 +512,7 @@ struct ConexionesView: View {
                         .font(.system(.largeTitle).weight(.bold))
                         .foregroundStyle(Color.brand)
                         .accessibilityAddTraits(.isHeader)
-                    Text(accounts.active == nil ? "Las personas que te acompañaron en tus trips" : "Las preguntas de los visitantes a tu negocio")
+                    Text(accounts.active == nil ? "Tus conversaciones con los negocios" : "Las preguntas de los visitantes a tu negocio")
                         .font(BT.footnote)
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -526,6 +526,10 @@ struct ConexionesView: View {
                     // ── Estado anónimo: el tab muestra una invitación, no está vacío ──
                     } else if !authState.isLoggedIn {
                         anonymousConnectionState
+                    // Villa Rica V1 sin buddies: el visitante ve sus conversaciones
+                    // con negocios, no las listas de buddies (Keyla, 23 Nov 2026).
+                    } else if !HomeRowsView.showsBuddyTools {
+                        BusinessInboxView(business: nil, onExplore: { router.switchTo(.inicio) })
                     // Spinner SOLO antes de la primera carga — después, vacío
                     // significa empty state y las recargas son silenciosas
                     } else if !chatStore.hasLoadedOnce && chatStore.connections.isEmpty {
@@ -598,7 +602,7 @@ struct ConexionesView: View {
             }
         }
         .sheet(isPresented: $showIdentitySheet) {
-            IdentitySheet(purpose: .buddy) {
+            IdentitySheet(purpose: HomeRowsView.showsBuddyTools ? .buddy : .profile) {
                 Task { await chatStore.load() }
                 chatStore.startEventStream()
             }
@@ -635,15 +639,18 @@ struct ConexionesView: View {
                         .padding(.bottom, Spacing.lg)
 
                     VStack(alignment: .leading, spacing: Spacing.md) {
+                        // Sin buddies en Villa Rica V1 (Keyla, 23 Nov 2026).
                         anonymousBenefit(icon: "bubble.left.and.bubble.right",
                                          title: "Tus conversaciones",
-                                         subtitle: "Consulta el historial de lo que hablaste con tus buddies.")
+                                         subtitle: "Consulta el historial de lo que hablaste con los negocios.")
+                        if HomeRowsView.showsBuddyTools {
                         anonymousBenefit(icon: "person.badge.shield.checkmark",
                                          title: "Tus buddies",
                                          subtitle: "Las personas que te ayudaron, siempre a un mensaje de distancia.")
                         anonymousBenefit(icon: "heart",
                                          title: "Tu impacto",
                                          subtitle: "Recuerda también a quienes ayudaste tú.")
+                        }
                     }
                     .padding(.bottom, Spacing.md)
 
@@ -1040,18 +1047,19 @@ struct ConexionesView: View {
                 .background(Color.paleSage, in: Circle())
                 .accessibilityHidden(true)
             VStack(spacing: 4) {
-                Text("Las conexiones nacen de un trip")
+                Text("Todavía no tienes conversaciones")
                     .font(.system(.title3).weight(.bold))
                     .foregroundStyle(Color.ink)
-                Text("Cuando llegues a tu destino, un buddy te estará esperando.")
+                Text("Pregúntale a un negocio desde su página y la conversación aparecerá aquí.")
                     .font(BT.footnote)
                     .foregroundStyle(Color.inkMuted)
                     .multilineTextAlignment(.center)
             }
             Button {
-                router.openMyTrips()
+                // Sin trips en Conexiones (Keyla, 23 Nov 2026): lleva a Inicio.
+                router.switchTo(.inicio)
             } label: {
-                Text("Crear mi trip")
+                Text("Explorar lugares")
                     .font(BT.footnoteBold)
                     .padding(.horizontal, Spacing.lg)
                     .frame(height: 44)
@@ -1503,7 +1511,10 @@ struct ConnectionAvatar: View {
 
 // MARK: – Bandeja del negocio: preguntas de los visitantes (Keyla, 20 Nov 2026)
 struct BusinessInboxView: View {
-    let business: ProtoBusiness
+    /// nil = la bandeja del VISITANTE: sus conversaciones con negocios
+    /// (Keyla, 23 Nov 2026: sin buddies, Conexiones es esto).
+    let business: ProtoBusiness?
+    var onExplore: () -> Void = {}
     @State private var items: [BizConversation] = []
     @State private var loading = true
     @State private var errorText: String? = nil
@@ -1511,12 +1522,14 @@ struct BusinessInboxView: View {
 
     var body: some View {
         Group {
-            if !business.isLinkedAccount {
+            if let business, !business.isLinkedAccount {
                 empty(icon: "hourglass", title: "Tu negocio está en revisión",
                       text: "Cuando lo aprobemos, aquí verás las preguntas de los visitantes.")
             } else if loading {
                 ProgressView().tint(Color.brand).frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if items.isEmpty {
+            } else if items.isEmpty, business == nil {
+                visitorEmpty
+            } else if items.isEmpty, let business {
                 empty(icon: "bubble.left.and.text.bubble.right", title: "Aún no hay preguntas",
                       text: errorText ?? "Cuando un visitante pregunte por \(business.name) o uno de tus productos, aparecerá aquí.")
             } else {
@@ -1524,7 +1537,7 @@ struct BusinessInboxView: View {
                     VStack(spacing: 0) {
                         ForEach(items) { c in
                             Button {
-                                open = BusinessChatTarget(conversationId: c.id, title: c.travelerName ?? "Visitante")
+                                open = BusinessChatTarget(conversationId: c.id, title: name(c))
                             } label: { row(c) }
                             .buttonStyle(.plain)
                             Divider().overlay(Color.hairline).padding(.leading, 72)
@@ -1537,18 +1550,18 @@ struct BusinessInboxView: View {
                 .refreshable { await load() }
             }
         }
-        .task(id: business.id) { await load() }
+        .task(id: business?.id ?? "visitor") { await load() }
         .fullScreenCover(item: $open, onDismiss: { Task { await load() } }) { t in BusinessChatView(target: t) }
     }
 
     private func row(_ c: BizConversation) -> some View {
         HStack(spacing: 12) {
-            Text(String((c.travelerName ?? "V").prefix(1)))
+            Text(String(name(c).prefix(1)))
                 .font(.system(size: 18, weight: .bold)).foregroundStyle(Color.brand)
                 .frame(width: 44, height: 44).background(Color.paleSage, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
-                Text(c.travelerName ?? "Visitante").font(BT.headline).foregroundStyle(Color.ink)
-                Text((c.lastSender == "business" ? "Tú: " : "") + (c.lastMessage ?? ""))
+                Text(name(c)).font(BT.headline).foregroundStyle(Color.ink)
+                Text((c.lastSender == (business == nil ? "traveler" : "business") ? "Tú: " : "") + (c.lastMessage ?? ""))
                     .font(BT.footnote).foregroundStyle(Color.inkMuted).lineLimit(2)
             }
             Spacer(minLength: 4)
@@ -1569,10 +1582,33 @@ struct BusinessInboxView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func name(_ c: BizConversation) -> String {
+        business == nil ? (c.businessName ?? "Negocio") : (c.travelerName ?? "Visitante")
+    }
+
+    /// Visitante sin conversaciones: cómo empezar una.
+    private var visitorEmpty: some View {
+        VStack(spacing: Spacing.md) {
+            Image(systemName: "bubble.left.and.text.bubble.right").font(.system(size: 22)).foregroundStyle(Color.brand)
+                .frame(width: 56, height: 56).background(Color.paleSage, in: Circle())
+            Text("Todavía no tienes conversaciones").font(.system(.title3).weight(.bold)).foregroundStyle(Color.ink)
+                .multilineTextAlignment(.center)
+            Text(errorText ?? "Pregúntale a un negocio desde su página y la conversación aparecerá aquí.")
+                .font(BT.footnote).foregroundStyle(Color.inkMuted).multilineTextAlignment(.center)
+            Button(action: onExplore) {
+                Text("Explorar lugares").font(BT.footnoteBold).padding(.horizontal, Spacing.lg).frame(height: 44)
+                    .background(Color.brand).foregroundStyle(Color.inkInverse).clipShape(Capsule())
+            }
+            .buttonStyle(.plain).padding(.top, Spacing.sm)
+        }
+        .padding(.horizontal, Spacing.xl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func load() async {
-        guard business.isLinkedAccount else { loading = false; return }
+        if let business, !business.isLinkedAccount { loading = false; return }
         do {
-            items = try await APIClient.shared.businessConversations(farmId: business.id)
+            items = try await APIClient.shared.businessConversations(farmId: business?.id)
             errorText = nil
         } catch {
             errorText = "No pudimos cargar las preguntas. Desliza hacia abajo para intentar de nuevo."

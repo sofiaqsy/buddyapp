@@ -440,7 +440,7 @@ extension FincasAuth {
 
     /// Foto de una presentación (máx. 3): pedir URL firmada, subir los bytes, registrar.
     static func uploadPresentationPhoto(farmId: String, productId: String, presentationId: String,
-                                        jpeg: Data, key: String) async throws -> String {
+                                        jpeg: Data, key: String) async throws -> (id: String?, url: String) {
         let base = "/api/v1/farms/\(farmId)/products/\(productId)/presentations/\(presentationId)/photos"
         let signed = try await write("POST", base + "/sign", body: ["mimeType": "image/jpeg"])
         guard let urlString = signed["signedUrl"] as? String, let url = URL(string: urlString),
@@ -455,10 +455,21 @@ extension FincasAuth {
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(code) else { throw FincasError.server("No pudimos subir la foto (\(code)).") }
         let reg = try await write("POST", base, body: ["path": path, "mimeType": "image/jpeg"], key: key)
-        return (reg["url"] as? String) ?? ""
+        return (reg["id"] as? String, (reg["url"] as? String) ?? "")
     }
 
-    static func createPresentation(farmId: String, productId: String, fields: [String: Any], key: String) async throws {
-        try await write("POST", "/api/v1/farms/\(farmId)/products/\(productId)/presentations", body: fields, key: key)
+    /// Quita una foto equivocada de una presentación (fincas, 23 Nov 2026).
+    static func deletePresentationPhoto(farmId: String, productId: String, presentationId: String, photoId: String) async throws {
+        try await write("DELETE", "/api/v1/farms/\(farmId)/products/\(productId)/presentations/\(presentationId)/photos/\(photoId)", body: [:])
+    }
+    /// "Quitar producto": se archiva (nada se borra) y queda como "Oculto" para poder volver.
+    static func archiveProduct(farmId: String, productId: String) async throws {
+        try await updateProduct(farmId: farmId, productId: productId, fields: ["status": "archived"])
+    }
+
+    @discardableResult
+    static func createPresentation(farmId: String, productId: String, fields: [String: Any], key: String) async throws -> String? {
+        let json = try await write("POST", "/api/v1/farms/\(farmId)/products/\(productId)/presentations", body: fields, key: key)
+        return json["id"] as? String
     }
 }

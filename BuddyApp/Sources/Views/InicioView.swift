@@ -402,7 +402,7 @@ struct InicioView: View {
             // Si el usuario cerró sin autenticarse, descarta la acción pendiente
             if !authState.isLoggedIn { pendingIdentityAction = nil }
         }) {
-            IdentitySheet(purpose: .buddy) {
+            IdentitySheet(purpose: HomeRowsView.showsBuddyTools ? .buddy : .profile) {
                 // Autenticado: ejecutar la acción que estaba esperando
                 pendingIdentityAction?()
                 pendingIdentityAction = nil
@@ -2153,6 +2153,8 @@ struct PublishedTripCard: View {
     var featured: Bool = false
     var matchesMyDestination: Bool = false
     var nearby: Bool = false
+    /// La lista donde está la tarjeta: el visor sigue con la siguiente al deslizar.
+    var siblings: [APIJourney] = []
 
     @State private var showStory = false
     @State private var page = 0
@@ -2188,7 +2190,7 @@ struct PublishedTripCard: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
         .padding(.horizontal, Spacing.edge)
-        .fullScreenCover(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+        .fullScreenCover(isPresented: $showStory) { StoryViewerSheet(journeys: siblings, start: journey) }
 
         .onAppear { print("🖼️ [StoryCard] aparece id=\(journey.id.prefix(8)) fotos=\(thumbs.count)") }
     }
@@ -2574,13 +2576,26 @@ struct PlaceGuideMapSheet: View {
         self.init(destinationId: place.destinationId, focusPlaceId: place.id,
                   name: place.name, lat: place.lat, lng: place.lng,
                   muestraCerrar: muestraCerrar)
+        // Sin local físico: el panel a pantalla completa, sin mapa (Keyla, 22 Nov 2026).
+        if place.noPlace == true { noPlaceCard = place }
     }
+
+    private var noPlaceCard: APIPlaceCard? = nil
 
     @StateObject private var routeStore: RouteStore
     @State private var loadState: MapLoadState = .loading
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        if let card = noPlaceCard {
+            NoPlacePanelScreen(spotId: card.id, name: card.name, category: card.category,
+                               cover: card.coverUrl, lat: card.lat ?? 0, lng: card.lng ?? 0)
+        } else {
+            mapBody
+        }
+    }
+
+    @ViewBuilder private var mapBody: some View {
         Group {
             switch loadState {
             case .loading:
@@ -2645,86 +2660,191 @@ struct StoryViewerSheet: View {
     // Visor de fotos a pantalla completa (Keyla, 19 Nov 2026): fondo oscuro,
     // barras de progreso, autor y destino arriba, miniaturas abajo.
     // Toque a la izquierda/derecha cambia de foto; deslizar hacia abajo cierra.
-    let journey: APIJourney
+    //
+    // Publicaciones seguidas (Keyla, 21 Nov 2026): al deslizar después de la
+    // última foto pasa a la SIGUIENTE publicación de la lista (y antes de la
+    // primera, a la anterior), como en las historias. Todas las fotos de la
+    // lista van en un solo carrusel; arriba se ve la publicación actual.
+    let journeys: [APIJourney]
+    let startIndex: Int
     @Environment(\.dismiss) private var dismiss
-    @State private var thumbs: [String] = []
+    @State private var thumbsById: [String: [String]] = [:]
     @State private var current = 0
-    @State private var dragY: CGFloat = 0
+    @State private var drag: CGSize = .zero
+    @State private var fading = false
+    @State private var positioned = false
+    /// true cuando quien abre el visor usa la transición nativa de zoom (iOS 18+):
+    /// entonces abrir/cerrar y el arrastre hacia abajo los maneja el sistema.
+    var systemDismiss = false
+    /// Avisa qué publicación se está viendo: al cerrar, la foto vuelve a SU miniatura.
+    var onShowing: (String) -> Void = { _ in }
+    /// Con zoom no se cambia de trip ni se cierra al arrastrar: se mira la foto.
+    @State private var zoomed = false
+
+    /// Una sola publicación (como antes).
+    init(journey: APIJourney) { self.init(journeys: [journey], start: journey) }
+
+    /// Con miniatura de origen (zoom nativo en iOS 18+).
+    init(journeys: [APIJourney], start: APIJourney, systemDismiss: Bool, onShowing: @escaping (String) -> Void = { _ in }) {
+        self.init(journeys: journeys, start: start)
+        self.systemDismiss = systemDismiss
+        self.onShowing = onShowing
+    }
+
+    /// Una lista (perfil, Comunidad): se abre en `start` y sigue con las demás.
+    init(journeys: [APIJourney], start: APIJourney) {
+        let list = journeys.isEmpty ? [start] : journeys
+        self.journeys = list
+        self.startIndex = list.firstIndex(where: { $0.id == start.id }) ?? 0
+    }
+
+    /// Una página por foto: (publicación, foto dentro de ella, url).
+    struct Page: Hashable { let j: Int; let p: Int; let url: String? }
+
+    private var pages: [Page] {
+        StoryPages.make(counts: journeys.map { thumbs(of: $0).count }) { j, p in
+            let t = thumbs(of: journeys[j]); return t.isEmpty ? journeys[j].destination?.coverUrl : t[p]
+        }
+    }
+
+    private func thumbs(of j: APIJourney) -> [String] { thumbsById[j.id] ?? j.pageThumbs ?? [] }
+
+    private var page: Page? { pages.indices.contains(current) ? pages[current] : nil }
+    private var journey: APIJourney { journeys[page?.j ?? startIndex] }
+    private var thumbs: [String] { thumbs(of: journey) }
+    private var photoIndex: Int { page?.p ?? 0 }
 
     private var destName: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Mi viaje" }
     private var authorName: String { (journey.users?.fullName ?? "Viajero").capitalized }
 
+    private var backdrop: Double { fading ? 0 : PhotoDismissPhysics.backdrop(forDrag: drag.height) }
+    private var chrome: Double { zoomed || fading ? 0 : max(0, 1 - Double(max(drag.height, 0)) / 150) }
+
     var body: some View {
         ZStack {
-            Color.black.opacity(1 - min(abs(dragY) / 600, 0.6)).ignoresSafeArea()
+            Color.black.opacity(backdrop).ignoresSafeArea()
 
+            // La foto sigue al dedo (también de lado) y se achica al bajar.
             photos
-                .offset(y: dragY)
-                .scaleEffect(1 - min(abs(dragY) / 2000, 0.1))
+                .offset(drag)
+                .scaleEffect(PhotoDismissPhysics.scale(forDrag: drag.height))
 
             VStack(spacing: 0) {
                 topBar
                 Spacer()
                 if thumbs.count > 1 { thumbStrip }
             }
-            .opacity(dragY == 0 ? 1 : 0.3)
+            .opacity(chrome)
+            .allowsHitTesting(!zoomed)
+            .animation(.easeInOut(duration: 0.2), value: zoomed)
         }
         .statusBarHidden()
-        .gesture(
-            DragGesture()
-                .onChanged { v in if v.translation.height > 0 { dragY = v.translation.height } }
+        // Fondo transparente: al arrastrar se ve la pantalla de abajo.
+        .presentationBackground(.clear)
+        // Vertical (Keyla, 21 Nov 2026): arriba = siguiente trip, abajo = cerrar,
+        // siempre. Con zoom nativo (iOS 18+) el cierre hacia abajo lo hace el
+        // sistema y la foto vuelve a su miniatura; aquí solo se maneja "arriba".
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 15)
+                .onChanged { v in
+                    guard !zoomed, !systemDismiss, v.translation.height > 0,
+                          abs(v.translation.height) > abs(v.translation.width) || drag != .zero else { return }
+                    drag = v.translation
+                }
                 .onEnded { v in
-                    if v.translation.height > 140 { dismiss() }
-                    else { withAnimation(.spring(duration: 0.3)) { dragY = 0 } }
+                    guard !zoomed else { return }
+                    let vertical = abs(v.translation.height) > abs(v.translation.width) * 1.5
+                    if vertical, v.translation.height < -90 { jumpPublication(1); return }
+                    guard !systemDismiss, drag != .zero else { return }
+                    if PhotoDismissPhysics.shouldDismiss(dy: v.translation.height, predictedDy: v.predictedEndTranslation.height) {
+                        closeSmoothly()
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { drag = .zero }
+                    }
                 }
         )
-        .task {
-            if let pt = journey.pageThumbs, !pt.isEmpty {
-                thumbs = pt
-            } else {
-                thumbs = (try? await APIClient.shared.fetchJourneyPages(journeyId: journey.id))?
-                    .map(\.thumbnailUrl) ?? []
+        .onChange(of: journey.id) { _, id in onShowing(id) }
+        .onAppear {
+            // Empieza en la primera foto de la publicación tocada.
+            if !positioned {
+                current = pages.firstIndex(where: { $0.j == startIndex }) ?? 0
+                positioned = true
             }
-            ImagePrefetcher.prefetch(thumbs)
+        }
+        .task { await loadThumbs() }
+    }
+
+    /// Fotos que faltan: primero la publicación abierta, luego sus vecinas.
+    private func loadThumbs() async {
+        let order = [startIndex, startIndex + 1, startIndex - 1] + Array(journeys.indices)
+        var seen = Set<Int>()
+        for i in order where journeys.indices.contains(i) && seen.insert(i).inserted {
+            let j = journeys[i]
+            if let pt = j.pageThumbs, !pt.isEmpty { ImagePrefetcher.prefetch(Array(pt.prefix(3))); continue }
+            guard thumbsById[j.id] == nil else { continue }
+            let fetched = (try? await APIClient.shared.fetchJourneyPages(journeyId: j.id))?.map(\.thumbnailUrl) ?? []
+            if Task.isCancelled { return }
+            // Mantener la foto que se está viendo aunque cambie el número de páginas.
+            let keep = page
+            thumbsById[j.id] = fetched
+            if let keep, let n = pages.firstIndex(where: { $0.j == keep.j && ($0.p == keep.p || keep.url == nil) }) { current = n }
+            ImagePrefetcher.prefetch(Array(fetched.prefix(3)))
         }
     }
 
     @ViewBuilder private var photos: some View {
-        if thumbs.isEmpty {
-            CachedImage(urlString: journey.destination?.coverUrl) { img in
-                img.resizable().scaledToFit()
-            } placeholder: { ProgressView().tint(.white) }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            TabView(selection: $current) {
-                ForEach(Array(thumbs.enumerated()), id: \.offset) { i, url in
-                    CachedImage(urlString: url) { img in
-                        img.resizable().scaledToFit()
-                    } placeholder: { ProgressView().tint(.white) }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .tag(i)
-                }
+        TabView(selection: $current) {
+            ForEach(Array(pages.enumerated()), id: \.offset) { i, pg in
+                // Foto con zoom (pellizcar o doble toque), la misma en todos los
+                // visores. Toque izquierda atrás, derecha adelante; va en la
+                // página y no encima: una capa encima se tragaba el deslizar.
+                ZoomablePhoto(urlString: pg.url,
+                              onZoomChange: { zoomed = $0 },
+                              onTap: { x in step(x < 0.5 ? -1 : 1) })
+                .tag(i)
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .ignoresSafeArea()
-            .overlay {
-                // Zonas de toque como en las historias: izquierda atrás, derecha adelante.
-                HStack(spacing: 0) {
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture { step(-1) }
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture { step(1) }
-                }
-                .padding(.vertical, 120)
-            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .ignoresSafeArea()
+        .onChange(of: current) { old, new in
+            if pages.indices.contains(old), pages.indices.contains(new), pages[old].j != pages[new].j { Haptic.medium() }
         }
     }
 
     private func step(_ d: Int) {
         let n = current + d
-        guard thumbs.indices.contains(n) else { if d > 0 { dismiss() }; return }
+        // Después de la última foto de la última publicación, se cierra.
+        guard pages.indices.contains(n) else { if d > 0 { closeSmoothly() }; return }
         Haptic.light()
         withAnimation(.easeInOut(duration: 0.25)) { current = n }
+    }
+
+    /// Cierre suave sin transición nativa: la foto baja y se desvanece con el
+    /// fondo, y recién entonces se quita la pantalla (sin el deslizar genérico).
+    private func closeSmoothly() {
+        if systemDismiss { dismiss(); return }
+        withAnimation(.easeOut(duration: 0.22)) {
+            drag.height += 260
+            fading = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { dismiss() }
+        }
+    }
+
+    /// Primera foto de la publicación siguiente (+1) o anterior (-1).
+    private func jumpPublication(_ d: Int) {
+        let j = (page?.j ?? startIndex) + d
+        guard let n = pages.firstIndex(where: { $0.j == j }) else { if d > 0 { closeSmoothly() }; return }
+        Haptic.medium()
+        withAnimation(.easeInOut(duration: 0.25)) { current = n }
+    }
+
+    private func goTo(photo p: Int) {
+        if let n = pages.firstIndex(where: { $0.j == (page?.j ?? startIndex) && $0.p == p }) {
+            Haptic.light(); withAnimation { current = n }
+        }
     }
 
     private var topBar: some View {
@@ -2733,11 +2853,11 @@ struct StoryViewerSheet: View {
                 HStack(spacing: 4) {
                     ForEach(0..<thumbs.count, id: \.self) { i in
                         Capsule()
-                            .fill(i <= current ? Color.white : Color.white.opacity(0.3))
+                            .fill(i <= photoIndex ? Color.white : Color.white.opacity(0.3))
                             .frame(height: 3)
                     }
                 }
-                .animation(.easeInOut(duration: 0.2), value: current)
+                .animation(.easeInOut(duration: 0.2), value: photoIndex)
             }
             HStack(spacing: 10) {
                 Circle().fill(Color.paleSage).frame(width: 36, height: 36)
@@ -2751,11 +2871,12 @@ struct StoryViewerSheet: View {
                     }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(authorName).font(BT.footnoteBold).foregroundStyle(.white)
-                    Text(thumbs.count > 1 ? "\(destName) · \(current + 1) de \(thumbs.count)" : destName)
+                        .id(journey.id)
+                    Text(thumbs.count > 1 ? "\(destName) · \(photoIndex + 1) de \(thumbs.count)" : destName)
                         .font(BT.caption1).foregroundStyle(.white.opacity(0.75))
                 }
                 Spacer()
-                Button { dismiss() } label: {
+                Button { closeSmoothly() } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 36, height: 36)
@@ -2783,16 +2904,16 @@ struct StoryViewerSheet: View {
                         .frame(width: 52, height: 52)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(i == current ? Color.white : .clear, lineWidth: 2))
-                        .opacity(i == current ? 1 : 0.55)
+                            .strokeBorder(i == photoIndex ? Color.white : .clear, lineWidth: 2))
+                        .opacity(i == photoIndex ? 1 : 0.55)
                         .id(i)
-                        .onTapGesture { Haptic.light(); withAnimation { current = i } }
+                        .onTapGesture { goTo(photo: i) }
                     }
                 }
                 .padding(.horizontal, Spacing.edge)
                 .padding(.vertical, 12)
             }
-            .onChange(of: current) { _, n in withAnimation { proxy.scrollTo(n, anchor: .center) } }
+            .onChange(of: photoIndex) { _, n in withAnimation { proxy.scrollTo(n, anchor: .center) } }
         }
         .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
             .ignoresSafeArea())
@@ -3550,34 +3671,20 @@ struct HomeRowsView: View {
     var heroSlogan: String? = nil
 
     @State private var query = ""
+    /// Fila "Productos locales" (Keyla, 23 Nov 2026): una tarjeta por
+    /// presentación de los negocios de la zona, como en su panel.
+    @State private var localProducts: [LocalProductTile] = []
     /// Coincidencias en productos: id del lugar -> productos que coinciden.
     @State private var productHits: [String: [ProductSearchHit.P]] = [:]
     /// Cuánto subió la portada. Cuando la foto ya pasó, una franja tapa la
     /// zona de la hora para que el contenido no se lea debajo de ella.
     @State private var heroScroll: CGFloat = 0
 
-    /// Una fila por cada categoría con al menos un lugar en la zona (Keyla,
-    /// 19 Nov 2026: "Restaurantes y la lista de restaurantes, Tiendas y las
-    /// tiendas"). Antes la fila pedía 3 o más.
-    static let minRowItems = 1
     /// Herramientas de BuddyApp (buddies, QR, recuerdos) que Villa Rica V1 no
     /// muestra. Un solo interruptor para volver a encenderlas.
     static let showsBuddyTools = false
     /// Ruta de "Ver todos" en Cerca de ti (no es una categoría real).
     static let nearbyRoute = "Cerca de ti"
-
-    /// Título de la fila en plural: "Restaurantes", "Tiendas".
-    static func rowTitle(_ category: String) -> String {
-        let n = category.lowercased()
-        switch n {
-        case "otro", "otros": return "Otros lugares"
-        case "hospedaje", "alojamiento", "naturaleza", "cultura", "transporte": return category
-        default: break
-        }
-        if n.hasSuffix("s") || n.contains(" y ") { return category }
-        if let last = n.last, "aeiouáéíóú".contains(last) { return category + "s" }
-        return category + "es"
-    }
 
     /// Búsqueda inteligente (Keyla, 20 Nov 2026): sin tildes ni mayúsculas,
     /// todas las palabras, y también en los productos de cada lugar.
@@ -3618,41 +3725,18 @@ struct HomeRowsView: View {
     /// Lugares de la zona. Si no hay ninguno cerca (otra ciudad, sin GPS), se
     /// muestra todo para no dejar el Home vacío.
     private var local: [APIPlaceCard] {
-        let near = cards.filter { ($0.distanceMeters ?? 0) <= Self.localRadiusMeters }
+        // Los que ENTREGAN aquí cuentan como de la zona aunque estén lejos
+        // (cobertura del negocio, Keyla 22 Nov 2026): salen en su fila de
+        // categoría con "A domicilio".
+        let near = cards.filter { $0.delivers == true || ($0.distanceMeters ?? 0) <= Self.localRadiusMeters }
         return near.isEmpty ? cards : near
     }
 
     private var nearby: [APIPlaceCard] {
-        Array(local.filter { $0.distanceMeters != nil }
+        // "Cerca de ti" es distancia: los que solo entregan aquí no van en esta fila.
+        Array(local.filter { $0.distanceMeters != nil && $0.delivers != true }
             .sorted { ($0.distanceMeters ?? .max) < ($1.distanceMeters ?? .max) }
             .prefix(10))
-    }
-
-    private var groups: [(name: String, items: [APIPlaceCard])] {
-        let dict = Dictionary(grouping: local, by: Self.categoryName)
-        return dict.map { (name: $0.key, items: $0.value) }
-            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
-    }
-
-    /// Nombres que no son una categoría real ("Otro", o lugares sin
-    /// categoría): no tienen acceso directo ni fila propia (Keyla, 19 Nov
-    /// 2026). Sus lugares siguen en Cerca de ti y Más para descubrir.
-    static func isCatchAll(_ name: String) -> Bool {
-        ["otro", "otros", "otros lugares"].contains(name.lowercased())
-    }
-
-    /// Accesos rápidos de "Explora por categoría": solo categorías reales.
-    private var shortcutGroups: [(name: String, items: [APIPlaceCard])] {
-        groups.filter { !Self.isCatchAll($0.name) }
-    }
-
-    private var bigGroups: [(name: String, items: [APIPlaceCard])] {
-        // "Otro" no es una categoría que alguien busque: sus lugares van al
-        // final, en "Más para descubrir" (Keyla, 19 Nov 2026).
-        groups.filter {
-            $0.items.count >= Self.minRowItems
-                && !Self.isCatchAll($0.name)
-        }
     }
 
     /// Velocidad: baja por adelantado la guía de los destinos que se ven en
@@ -3665,6 +3749,7 @@ struct HomeRowsView: View {
         rowsBody.task(id: prefetchKey) {
             for id in prefetchKey.split(separator: ",") { RouteStore.prefetch(destinationId: String(id)) }
         }
+        .task(id: localProductsKey) { await loadLocalProducts() }
     }
 
     private var rowsBody: some View {
@@ -3685,19 +3770,17 @@ struct HomeRowsView: View {
                         if cards.isEmpty {
                             emptyState
                         } else {
-                            if shortcutGroups.count > 1 { quickCategories }
+                            // Sin "Explora por categoría" (Keyla, 23 Nov 2026: innecesaria).
                             if !nearby.isEmpty {
                                 row(title: "Cerca de ti", subtitle: "Lugares a pocos minutos",
                                     items: nearby, large: true, category: Self.nearbyRoute, capsuleAction: true)
                             }
-                            ForEach(bigGroups, id: \.name) { g in
-                                row(title: Self.rowTitle(g.name), subtitle: Self.rowSubtitle(g.name), items: rotated(g.items),
-                                    large: false, category: g.name, icon: CategoryIcon.symbol(for: g.name))
-                            }
+                            if !localProducts.isEmpty { productsRow }
+                            // Sin filas por categoría (Keyla, 23 Nov 2026).
                             // Siempre al final: una mezcla de todos los lugares de
                             // la zona, en orden rotativo.
                             row(title: "Más para descubrir", subtitle: "Una selección de lugares de Villa Rica",
-                                items: rotated(local), large: false, category: nil)
+                                items: rotated(local), large: false, category: nil, tall: true)
                         }
                     }
                 }
@@ -3848,37 +3931,6 @@ struct HomeRowsView: View {
         }
     }
 
-    /// "Explora por categoría": una tarjeta compacta (80 pt) por categoría que
-    /// existe en la zona. Sin sombra: superficie blanca sobre el fondo cálido.
-    private var quickCategories: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            rowHeader("Explora por categoría", category: nil)
-            ScrollView(.horizontal) {
-                HStack(spacing: 10) {
-                    ForEach(shortcutGroups, id: \.name) { g in
-                        Button { onOpenCategory(g.name) } label: {
-                            VStack(spacing: 5) {
-                                CategoryIconBadge(category: g.name, diameter: 38)
-                                Text(g.name)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Color.ink)
-                                    .lineLimit(1)
-                            }
-                            .frame(minWidth: 80)
-                            .frame(height: 70)
-                            .padding(.horizontal, 8)
-                            .background(Color.surface, in: RoundedRectangle(cornerRadius: 10))
-                        }
-                        .buttonStyle(.pressable)
-                        .accessibilityLabel("Categoría \(g.name), \(g.items.count) lugares")
-                    }
-                }
-                .padding(.horizontal, Spacing.edge)
-            }
-            .scrollIndicators(.hidden)
-        }
-    }
-
     private func buddyRow(_ name: String) -> some View {
         Button(action: onOpenBuddyChat) {
             HStack {
@@ -3923,6 +3975,86 @@ struct HomeRowsView: View {
     /// Encabezado de sección. Con `icon`, una insignia cuadrada pale sage a la
     /// izquierda; la acción "ver todo" es un círculo con flecha (filas de
     /// categoría) o una cápsula "Ver todos" (Cerca de ti).
+    private var localProductsKey: String { local.prefix(20).map(\.id).joined(separator: ",") + "#\(reshuffleToken)" }
+
+    /// Lee los productos de los lugares de la zona (máx. 20 lugares, en paralelo).
+    /// Los lugares sin negocio responden vacío. Un error deja la fila oculta.
+    private func loadLocalProducts() async {
+        let spots = Array(local.prefix(20))
+        guard !spots.isEmpty else { localProducts = []; return }
+        let pages = await withTaskGroup(of: (APIPlaceCard, [FincasProduct]).self) { group in
+            for c in spots {
+                group.addTask {
+                    let items = (try? await APIClient.shared.fetchSpotProducts(spotId: c.id.lowercased()))?.items ?? []
+                    return (c, items)
+                }
+            }
+            var out: [String: (APIPlaceCard, [FincasProduct])] = [:]
+            for await r in group { out[r.0.id] = r }
+            return out
+        }
+        // Una lista por tienda, en el orden de los lugares de la zona.
+        // Tocar Inicio otra vez (reshuffleToken) vuelve a pedir los productos y
+        // cambia el orden de tiendas y productos (Keyla, 23 Nov 2026).
+        var perStore: [[LocalProductTile]] = []
+        for c in rotated(spots) {
+            guard let (card, items) = pages[c.id] else { continue }
+            var mine: [LocalProductTile] = []
+            for p in items {
+                let shown = (p.presentations ?? []).filter { $0.visible != false }
+                if shown.isEmpty { mine.append(LocalProductTile(id: "\(card.id)-\(p.id)", card: card, product: p, pres: nil)) }
+                for pr in shown { mine.append(LocalProductTile(id: "\(card.id)-\(p.id)-\(pr.id)", card: card, product: p, pres: pr)) }
+            }
+            if !mine.isEmpty { perStore.append(shuffled(mine)) }
+        }
+        // Intercaladas (Keyla, 23 Nov 2026): una de cada tienda por vuelta, para
+        // que dos productos de la misma tienda no salgan seguidos.
+        var tiles: [LocalProductTile] = []
+        var round = 0
+        while tiles.count < 20 {
+            let batch = perStore.compactMap { round < $0.count ? $0[round] : nil }
+            if batch.isEmpty { break }
+            // Solo queda una tienda: sus demás productos saldrían seguidos, así
+            // que la fila termina aquí (se ven todos en el panel de la tienda).
+            if batch.count == 1, tiles.last?.card.id == batch[0].card.id { break }
+            tiles += batch
+            round += 1
+        }
+        localProducts = Array(tiles.prefix(20))
+    }
+
+    private func shuffled(_ tiles: [LocalProductTile]) -> [LocalProductTile] {
+        tiles.sorted { a, b in
+            var ha = Hasher(); ha.combine(a.id); ha.combine(reshuffleToken)
+            var hb = Hasher(); hb.combine(b.id); hb.combine(reshuffleToken)
+            return ha.finalize() < hb.finalize()
+        }
+    }
+
+    private var productsRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            rowHeader("Productos locales", subtitle: "De los negocios de Villa Rica", category: nil,
+                      icon: CategoryIcon.symbol(for: "Productos locales"))
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    ForEach(localProducts) { t in
+                        Button {
+                            ProductFocus.set(spotId: t.card.id, productId: t.product.id, presentationId: t.pres?.id)
+                            onOpenPlace(t.card)
+                        } label: {
+                            ProductCardFace(product: t.product, pres: t.pres, side: 114)
+                        }
+                        .buttonStyle(.pressable)
+                        .accessibilityHint("Abre \(t.card.name)")
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+            }
+            .scrollIndicators(.hidden)
+            .id(reshuffleToken)
+        }
+    }
+
     private func rowHeader(_ title: String, subtitle: String? = nil, category: String?,
                            icon: String? = nil, capsuleAction: Bool = false) -> some View {
         HStack(alignment: .center, spacing: 12) {
@@ -3981,20 +4113,8 @@ struct HomeRowsView: View {
         .padding(.horizontal, Spacing.edge)
     }
 
-    /// Subtítulo neutral por categoría (sin "los mejores": no hay rankings).
-    static func rowSubtitle(_ category: String) -> String? {
-        let n = category.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .init(identifier: "es"))
-        if n.contains("cafe") { return "Para un buen café" }
-        if n.contains("restaur") || n.contains("comida") { return "Gastronomía local cerca de ti" }
-        if n.contains("tienda") || n.contains("producto") { return "Productos de la zona" }
-        if n.contains("hosped") || n.contains("aloja") { return "Dónde quedarte" }
-        if n.contains("natur") { return "Paisajes y aire libre" }
-        if n.contains("cultur") { return "Historia y tradición" }
-        return nil
-    }
-
     private func row(title: String, subtitle: String? = nil, items: [APIPlaceCard], large: Bool, category: String?,
-                     icon: String? = nil, capsuleAction: Bool = false) -> some View {
+                     icon: String? = nil, capsuleAction: Bool = false, tall: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             rowHeader(title, subtitle: subtitle, category: category, icon: icon, capsuleAction: capsuleAction)
             ScrollView(.horizontal) {
@@ -4003,7 +4123,7 @@ struct HomeRowsView: View {
                         Button { onOpenPlace(card) } label: {
                             // En filas de categoría (las que tienen ícono) no se
                             // repite la categoría en cada tarjeta.
-                            HomePlaceCard(card: card, large: large, showsCategory: icon == nil)
+                            HomePlaceCard(card: card, large: large, showsCategory: icon == nil, tall: tall)
                         }
                         .buttonStyle(.pressable)
                     }
@@ -4023,10 +4143,13 @@ struct HomePlaceCard: View {
     /// En una fila de categoría la categoría ya está en el título de la
     /// sección: la tarjeta muestra solo el nombre (Keyla, 19 Nov 2026).
     var showsCategory: Bool = true
+    /// Foto vertical 4:5 aunque muestre la categoría ("Más para descubrir",
+    /// Keyla 23 Nov 2026: "más alargado").
+    var tall: Bool = false
 
     /// Filas de categoría: foto vertical 4:5, más angosta y con esquinas más
     /// chicas (Keyla, 20 Nov 2026). Las demás filas siguen en 4:3.
-    private var portrait: Bool { !showsCategory && !large }
+    private var portrait: Bool { tall || (!showsCategory && !large) }
     private var width: CGFloat { large ? 264 : (portrait ? 150 : 168) }
     private var height: CGFloat { portrait ? width * 5 / 4 : width * 3 / 4 }
     /// Mismo radio en todas las tarjetas de lugar, menos curvo (Keyla, 20 Nov 2026).
@@ -4047,8 +4170,17 @@ struct HomePlaceCard: View {
             .frame(width: width, height: height)
             .clipped()
             .overlay(alignment: .topLeading) {
+                // Entrega aquí desde otro lugar: el mismo chip, sin distancia.
+                if card.delivers == true {
+                    Text("A domicilio")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Color.surface, in: Capsule())
+                        .padding(10)
                 // Distancia solo en "Cerca de ti" (las tarjetas grandes).
-                if large, let d = distanceText {
+                } else if large, let d = distanceText {
                     HStack(spacing: 5) {
                         LocationPinShape()
                             .fill(Color.brand, style: FillStyle(eoFill: true))
@@ -4250,5 +4382,18 @@ struct AppIcon: View {
         } else {
             Image(systemName: name).font(.system(size: size, weight: .semibold))
         }
+    }
+}
+
+/// Páginas del visor de publicaciones seguidas (probado en StoryPagesTests):
+/// una por foto, en orden; una publicación sin fotos ocupa una página (su portada).
+enum StoryPages {
+    static func make(counts: [Int], url: (Int, Int) -> String?) -> [StoryViewerSheet.Page] {
+        var out: [StoryViewerSheet.Page] = []
+        for (j, n) in counts.enumerated() {
+            if n == 0 { out.append(.init(j: j, p: 0, url: url(j, 0))) }
+            else { for p in 0..<n { out.append(.init(j: j, p: p, url: url(j, p))) } }
+        }
+        return out
     }
 }

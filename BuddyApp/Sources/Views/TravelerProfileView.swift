@@ -22,6 +22,9 @@ struct TravelerProfileView: View {
     @State private var tripsCursor: String? = nil
     @State private var isLoadingMore = false
     @State private var selectedStory: APIJourney? = nil
+    @State private var loadedOnce = false
+    @Namespace private var photoZoom
+    @State private var zoomId: String? = nil
     @State private var openPlace: APIPlaceCard? = nil
     @State private var failed = false
 
@@ -49,10 +52,21 @@ struct TravelerProfileView: View {
                 .padding(.top, Spacing.lg)
             }
             .background(Color.canvas)
+            // Jalar hacia abajo actualiza sin pantalla de carga.
+            .refreshable { await load(silent: true) }
             .navigationBarTitleDisplayMode(.inline)
-            .fullScreenCover(item: $selectedStory) { StoryViewerSheet(journey: $0) }
+            .fullScreenCover(item: $selectedStory) { j in
+                StoryViewerSheet(journeys: trips, start: j, systemDismiss: PhotoZoom.systemAvailable, onShowing: { zoomId = $0 })
+                    .photoZoomDestination(id: zoomId ?? j.id, in: photoZoom)
+            }
             .navigationDestination(item: $openPlace) { PlaceGuideMapSheet(place: $0) }
-            .task { await load() }
+            // Una sola vez: volver de un lugar o una foto no recarga el perfil ni
+            // mueve lo que se estaba viendo (Keyla, 21 Nov 2026).
+            .task {
+                guard !loadedOnce else { return }
+                loadedOnce = true
+                await load()
+            }
     }
 
     // MARK: – Cabecera
@@ -139,8 +153,10 @@ struct TravelerProfileView: View {
             SectionTitle(title: "Trips publicados", count: trips.count)
                 .padding(.horizontal, Spacing.edge)
             ProfileTripsGrid(journeys: trips, hasMore: tripsHasMore,
-                             onTap: { selectedStory = $0 },
-                             onReachEnd: { Task { await loadMoreTrips() } })
+                             onTap: { zoomId = $0.id; selectedStory = $0 },
+                             onReachEnd: { Task { await loadMoreTrips() } },
+                             zoomNamespace: photoZoom,
+                             visibleId: selectedStory == nil ? nil : zoomId)
         }
     }
 
@@ -190,8 +206,8 @@ struct TravelerProfileView: View {
     // Las tres llamadas son independientes: van juntas para que el perfil abra
     // en el tiempo de la más lenta, no en la suma.
 
-    private func load() async {
-        isLoading = true
+    private func load(silent: Bool = false) async {
+        if !silent { isLoading = true }
         failed = false
         async let userTask   = try? APIClient.shared.fetchUser(id: travelerId)
         async let sharesTask = try? APIClient.shared.fetchUserShares(travelerId: travelerId)
@@ -203,7 +219,7 @@ struct TravelerProfileView: View {
         trips  = t?.items ?? []
         tripsHasMore = t?.hasMore ?? false
         tripsCursor = t?.nextCursor
-        failed = (u == nil)
+        if !(silent && u == nil) { failed = (u == nil) }
         isLoading = false
     }
 

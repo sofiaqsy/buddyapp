@@ -1609,6 +1609,99 @@ extension APIClient {
         let _: Ok = try await request(path: "/integrations/fincas/spots/\(spotId)/claim/\(farmId)", method: "DELETE")
     }
 
+    // MARK: Categorías del negocio (principal + hasta 2)
+
+    struct FarmCategories: Decodable { let main: String?; let secondary: [String] }
+
+    struct FarmSpot: Decodable { let id: String; let name: String; let lat: Double; let lng: Double; let noPlace: Bool? }
+    private struct FarmSpotsResponse: Decodable { let spots: [FarmSpot] }
+    /// Los lugares del negocio en el servidor: la misma lista en todos los teléfonos.
+    func fetchFarmSpots(farmId: String) async throws -> [FarmSpot] {
+        let r: FarmSpotsResponse = try await request(path: "/integrations/fincas/farms/\(farmId)/spots")
+        return r.spots
+    }
+
+    func fetchFarmCategories(farmId: String) async throws -> FarmCategories {
+        try await request(path: "/integrations/fincas/farms/\(farmId)/categories")
+    }
+
+    func setFarmCategories(farmId: String, main: String, secondary: [String]) async throws {
+        struct Ok: Decodable { let main: String? }
+        let _: Ok = try await request(path: "/integrations/fincas/farms/\(farmId)/categories", method: "PUT",
+                                      body: ["main": main, "secondary": secondary])
+    }
+
+    // MARK: Negocio sin local físico
+
+    struct AreaSpot: Decodable { let id: String; let name: String; let lat: Double; let lng: Double; let destinationId: String? }
+
+    func createAreaSpot(farmId: String, name: String, destinationIds: [String]) async throws -> AreaSpot {
+        struct R: Decodable { let spot: AreaSpot }
+        let r: R = try await request(path: "/integrations/fincas/area-spots", method: "POST",
+                                     body: ["farmId": farmId, "name": name, "destinationIds": destinationIds])
+        return r.spot
+    }
+
+    // MARK: Cobertura de entrega por destino ("A domicilio")
+
+    func fetchCoverage(spotId: String) async throws -> [CoverageDestination] {
+        struct R: Decodable { let destinations: [CoverageDestination] }
+        let r: R = try await request(path: "/integrations/fincas/spots/\(spotId)/coverage")
+        return r.destinations
+    }
+
+    func setCoverage(spotId: String, farmId: String, destinationIds: [String]) async throws -> [CoverageDestination] {
+        struct R: Decodable { let destinations: [CoverageDestination] }
+        let r: R = try await request(path: "/integrations/fincas/spots/\(spotId)/coverage", method: "PUT",
+                                     body: ["farmId": farmId, "destinationIds": destinationIds])
+        return r.destinations
+    }
+
+    // MARK: Fotos del dueño (la primera es la portada del lugar en Inicio)
+
+    func fetchOwnerPhotos(spotId: String) async throws -> [OwnerPhoto] {
+        struct R: Decodable { let photos: [OwnerPhoto] }
+        let r: R = try await request(path: "/integrations/fincas/spots/\(spotId)/photos")
+        return r.photos
+    }
+
+    func uploadOwnerPhoto(spotId: String, farmId: String, imageData: Data) async throws -> OwnerPhoto {
+        let boundary = "BuddyBoundary.\(UUID().uuidString)"
+        var body = Data()
+        body.append("--\(boundary)\r\n")
+        body.append("Content-Disposition: form-data; name=\"farmId\"\r\n\r\n")
+        body.append(farmId)
+        body.append("\r\n")
+        body.appendMultipart(boundary: boundary, name: "photo", filename: "photo.jpg", mime: "image/jpeg", data: imageData)
+        body.append("--\(boundary)--\r\n")
+        let token = TravelerService.shared.token ?? anonKey
+        guard let url = URL(string: baseURL + "/integrations/fincas/spots/\(spotId)/photos") else { throw APIError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = body
+        let (data, response) = try await APIClient.session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.unknown }
+        dlog("🏪 [APIClient] POST owner photo spot=\(spotId.prefix(8)) → HTTP \(http.statusCode)")
+        guard (200..<300).contains(http.statusCode) else {
+            let msg = (try? JSONDecoder().decode(APIErrorResponse.self, from: data))?.error
+            throw APIError.server(http.statusCode, msg ?? "No pudimos subir la foto")
+        }
+        struct R: Decodable { let photo: OwnerPhoto }
+        return try JSONDecoder.buddy.decode(R.self, from: data).photo
+    }
+
+    func deleteOwnerPhoto(spotId: String, farmId: String, photoId: String) async throws {
+        struct Ok: Decodable { let deleted: Bool? }
+        let _: Ok = try await request(path: "/integrations/fincas/spots/\(spotId)/photos/\(photoId)?farmId=\(farmId)", method: "DELETE")
+    }
+
+    func setOwnerCover(spotId: String, farmId: String, photoId: String) async throws {
+        struct Ok: Decodable { let cover: String? }
+        let _: Ok = try await request(path: "/integrations/fincas/spots/\(spotId)/photos/\(photoId)/cover", method: "POST", body: ["farmId": farmId])
+    }
+
     /// Productos de un lugar vinculado a un negocio de Apartalo (solo lectura).
     /// linked=false: el lugar aún no tiene dueño en Apartalo.
     func fetchSpotProducts(spotId: String, offset: Int = 0) async throws -> SpotProductsPage {
@@ -1674,4 +1767,17 @@ struct ProductSearchHit: Decodable, Hashable {
     struct P: Decodable, Hashable { let id: String; let name: String; let price: Double? }
     let spotId: String
     let products: [P]
+}
+
+/// Foto que el dueño subió a su lugar. La de menor posición es la portada.
+struct OwnerPhoto: Decodable, Identifiable, Hashable {
+    let id: String
+    let url: String
+    let position: Int
+}
+
+/// Destino (distrito) donde un negocio entrega.
+struct CoverageDestination: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String?
 }

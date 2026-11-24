@@ -796,7 +796,7 @@ struct TripFeedCard: View {
             }
 
             // — La promesa sigue viva en destino: ayuda a un toque —
-            if isActive && hasBuddies && showBuddyHelp {
+            if HomeRowsView.showsBuddyTools && isActive && hasBuddies && showBuddyHelp {
                 Divider().padding(.leading, 56).padding(.horizontal, Spacing.md)
                 Button { showContactBuddy = true } label: {
                     HStack(spacing: Spacing.sm) {
@@ -1444,12 +1444,14 @@ struct PlanningHubCard: View {
                 saveChecklist()
             }
 
+            if HomeRowsView.showsBuddyTools {
             Text("Lo que dejes pendiente, un buddy puede ayudarte cuando llegues.")
                 .font(BT.caption1)
                 .foregroundStyle(Color.inkMuted)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, Spacing.md)
                 .padding(.top, Spacing.sm)
+            }
 
             // — Acción principal del día de llegada — al pie, alcanzable con el pulgar —
             if days < 1 {
@@ -1659,6 +1661,8 @@ struct TravelerStoriesSection: View {
     @State private var isLoadingMore = false
     @State private var failed = false
     @State private var seenIds = Set<String>()
+    /// El reloadToken con el que ya se cargó: aparecer de nuevo no recarga.
+    @State private var loadedToken: Int? = nil
 
     private var lat: Double? { LocationService.current?.userLocation?.coordinate.latitude }
     private var lng: Double? { LocationService.current?.userLocation?.coordinate.longitude }
@@ -1722,7 +1726,14 @@ struct TravelerStoriesSection: View {
                 }
             }
         }
-        .task(id: reloadToken) { await load() }
+        // Solo al aparecer la PRIMERA vez o al refrescar (reloadToken). Volver de
+        // un mapa o un perfil hacía aparecer la vista otra vez, se pedía todo
+        // de nuevo y el orden se movía un poco (Keyla, 21 Nov 2026).
+        .task(id: reloadToken) {
+            guard loadedToken != reloadToken else { return }
+            loadedToken = reloadToken
+            await load()
+        }
     }
 
     /// Primera página, con un reintento: un timeout puntual no puede dejar la
@@ -1805,6 +1816,14 @@ struct StoriesListRoute: Hashable {
 struct StoriesRowsView: View {
     let stories: [APIJourney]
 
+    /// Publicación abierta en el visor, con su fila (Keyla, 21 Nov 2026).
+    struct Presented: Identifiable { let id = UUID(); let row: String; let list: [APIJourney]; let start: APIJourney }
+    @State private var presented: Presented? = nil
+    @Namespace private var rowsZoom
+    /// "<fila>|<id>" de la publicación que se ve: su tarjeta se pone en pantalla y
+    /// al cerrar la foto vuelve a ella.
+    @State private var zoomKey: String = ""
+
     private func destName(_ j: APIJourney) -> String {
         j.destination?.name ?? j.place?.name ?? "Otros lugares"
     }
@@ -1848,6 +1867,11 @@ struct StoriesRowsView: View {
             if !singles.isEmpty {
                 row(title: "Más trips", subtitle: "Otros destinos de viajeros", items: singles, all: singles)
             }
+        }
+        .fullScreenCover(item: $presented) { p in
+            StoryViewerSheet(journeys: p.list, start: p.start, systemDismiss: PhotoZoom.systemAvailable,
+                             onShowing: { zoomKey = "\(p.row)|\($0)" })
+                .photoZoomDestination(id: zoomKey, in: rowsZoom)
         }
     }
 
@@ -1913,12 +1937,26 @@ struct StoriesRowsView: View {
                 // Sin "Ver todos" (Keyla, 19 Nov 2026): el carrusel ya muestra todo.
             }
             .padding(.horizontal, Spacing.edge)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 12) {
-                    ForEach(all) { StoryCarouselCard(journey: $0, showsPlace: showsPlace) }
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(all) { j in
+                            let key = "\(title)|\(j.id)"
+                            StoryCarouselCard(journey: j, showsPlace: showsPlace, siblings: all,
+                                              onOpen: { zoomKey = key; presented = Presented(row: title, list: all, start: j) },
+                                              zoomNamespace: rowsZoom, zoomKey: key)
+                                .id(key)
+                        }
+                    }
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.vertical, 6)
                 }
-                .padding(.horizontal, Spacing.edge)
-                .padding(.vertical, 6)
+                // La tarjeta de la publicación que se ve, en pantalla (sin animar: el visor la tapa).
+                .onChange(of: zoomKey) { _, key in
+                    guard presented != nil, key.hasPrefix("\(title)|") else { return }
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { proxy.scrollTo(key, anchor: .center) }
+                }
             }
         }
     }
@@ -1930,7 +1968,15 @@ struct StoryCarouselCard: View {
     let journey: APIJourney
     /// En una fila "En <destino>" el destino ya está en el título.
     var showsPlace: Bool = true
+    /// La fila entera: el visor sigue con la siguiente publicación al deslizar.
+    var siblings: [APIJourney] = []
+    /// Con estos, la FILA abre el visor (Comunidad): al cerrar, la foto vuelve a la
+    /// tarjeta de la publicación que se está viendo, no solo a la tocada.
+    var onOpen: (() -> Void)? = nil
+    var zoomNamespace: Namespace.ID? = nil
+    var zoomKey: String? = nil
     @State private var showStory = false
+    @Namespace private var photoZoom
 
     private var cover: String? { journey.pageThumbs?.first ?? journey.coverUrl ?? journey.destination?.coverUrl }
     private var place: String { journey.destination?.name ?? journey.place?.name ?? journey.title ?? "Trip" }
@@ -1939,7 +1985,7 @@ struct StoryCarouselCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button { Haptic.light(); showStory = true } label: {
+            Button { Haptic.light(); if let onOpen { onOpen() } else { showStory = true } } label: {
                 CachedImage(urlString: cover) { img in
                     img.resizable().scaledToFill()
                 } placeholder: { Color.paleSage }
@@ -1967,6 +2013,9 @@ struct StoryCarouselCard: View {
                 }
             }
             .buttonStyle(.pressable)
+            // La transición de zoom va en el botón y no dentro: dentro, el botón
+            // perdía su etiqueta para VoiceOver (y las pruebas no lo encontraban).
+            .modifier(OptionalZoomSource(id: zoomKey ?? journey.id, namespace: zoomNamespace ?? photoZoom))
             .accessibilityLabel("Trip de \(author) en \(place)")
             // El autor abre su perfil, a pantalla completa.
             if let id = journey.users?.id {
@@ -2008,7 +2057,10 @@ struct StoryCarouselCard: View {
         .background(Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
         .cardShadow()
-        .fullScreenCover(isPresented: $showStory) { StoryViewerSheet(journey: journey) }
+        .fullScreenCover(isPresented: $showStory) {
+            StoryViewerSheet(journeys: siblings, start: journey, systemDismiss: PhotoZoom.systemAvailable)
+                .photoZoomDestination(id: journey.id, in: photoZoom)
+        }
     }
 }
 
@@ -2022,7 +2074,7 @@ struct StoriesListView: View {
                     .font(.system(.largeTitle).weight(.bold))
                     .foregroundStyle(Color.brand)
                     .padding(.horizontal, Spacing.edge)
-                ForEach(route.journeys) { PublishedTripCard(journey: $0).equatable() }
+                ForEach(route.journeys) { PublishedTripCard(journey: $0, siblings: route.journeys).equatable() }
             }
             .padding(.bottom, 40)
         }

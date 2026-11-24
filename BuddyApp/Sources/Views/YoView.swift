@@ -28,6 +28,9 @@ struct YoView: View {
     @State private var tripsHasMore: Bool = false
     @State private var isLoadingMoreTrips: Bool = false
     @State private var selectedStory: APIJourney? = nil   // detalle de publicación
+    @Namespace private var photoZoom
+    /// La publicación que se ve en el visor: al cerrar, la foto vuelve a su celda.
+    @State private var zoomId: String? = nil
     /// Long-press en un trip del grid → confirmar eliminación de la publicación.
     @State private var deletePublicationTarget: APIJourney? = nil
     @State private var isLoading = true
@@ -171,6 +174,13 @@ struct YoView: View {
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.lg)
 
+                            // Entrada visible para negocios (antes solo en "⋯").
+                            if accounts.businesses.isEmpty {
+                                CreateBusinessEntryCard()
+                                    .padding(.horizontal, Spacing.edge)
+                                    .padding(.top, Spacing.md)
+                            }
+
                             // Sin "Perfil de Buddy" ni invitaciones a ser buddy en Yo
                             // (Keyla, 20 Nov 2026: no es necesario).
 
@@ -195,7 +205,10 @@ struct YoView: View {
             .navigationBarTitleDisplayMode(.inline)
             // Detalle de la publicación — mismo visor que en Home
             .fullScreenCover(item: $selectedStory) { journey in
-                StoryViewerSheet(journey: journey)
+                // Deslizar pasa a la siguiente publicación del perfil.
+                StoryViewerSheet(journeys: journeys, start: journey, systemDismiss: PhotoZoom.systemAvailable,
+                                 onShowing: { zoomId = $0 })
+                    .photoZoomDestination(id: zoomId ?? journey.id, in: photoZoom)
             }
             .confirmationDialog(
                 "¿Eliminar esta publicación?",
@@ -293,17 +306,22 @@ struct YoView: View {
                     .locations?.first { $0.id == route.locationId }?.name ?? "Sede")
                 .navigationBarTitleDisplayMode(.inline)
             }
+            .navigationDestination(for: BusinessPlaceRoute.self) { r in
+                // Igual que tocar el lugar en Inicio, en modo edición (Keyla, 21 Nov 2026).
+                BusinessPlaceScreen(route: r)
+            }
             .navigationDestination(for: BusinessLocationPickRoute.self) { route in
                 BusinessLocationPicker(businessId: route.businessId)
             }
             .navigationDestination(for: FincasProductRoute.self) { route in
-                FincasProductEditView(route: route)
+                if route.product == nil { NewProductFlow(farmId: route.farmId) } else { FincasProductEditView(route: route) }
             }
             .navigationDestination(for: LinkBusinessRoute.self) { _ in
                 LinkBusinessView { navPath = NavigationPath() }
             }
             .navigationDestination(for: RegisterBusinessRoute.self) { _ in
-                RegisterBusinessView { navPath = NavigationPath() }
+                // 3 pasos: dónde, qué ofreces, contacto (Keyla, 21 Nov 2026).
+                AddBusinessFlow { navPath = NavigationPath() }
             }
             .navigationDestination(for: MyTripsRoute.self) { _ in
                 TripsView(embedded: true, externalPath: $navPath)
@@ -791,12 +809,14 @@ struct YoView: View {
                 ProfileTripsGrid(
                     journeys: journeys,
                     hasMore: tripsHasMore,
-                    onTap: { selectedStory = $0 },
+                    onTap: { zoomId = $0.id; selectedStory = $0 },
                     onDelete: { deletePublicationTarget = $0 },
                     onReachEnd: {
                         guard !isLoadingMoreTrips else { return }
                         Task { await loadMoreTrips() }
-                    }
+                    },
+                    zoomNamespace: photoZoom,
+                    visibleId: selectedStory == nil ? nil : zoomId
                 )
             }
         }
@@ -1178,10 +1198,12 @@ struct YoView: View {
             isLoading = false; return
         }
 
-        // Cache: si los datos tienen menos de 60 s y no hay forzado, no recargar.
-        if !forceRefresh, let fetchedAt = lastFetchedAt,
-           Date().timeIntervalSince(fetchedAt) < 60, user != nil {
-            dlog("👤 [YoView] perfil en caché (\(Int(Date().timeIntervalSince(fetchedAt)))s) — omitiendo recarga")
+        // Volver a la pantalla (de un lugar, un mapa, una foto) NO recarga el
+        // perfil: se movía todo cada vez (Keyla, 21 Nov 2026). Se recarga al
+        // jalar hacia abajo o cuando algo cambió (publicar, iniciar sesión…),
+        // que llaman con forceRefresh.
+        if !forceRefresh, user != nil, lastFetchedAt != nil {
+            dlog("👤 [YoView] perfil ya cargado — omitiendo recarga al volver")
             isLoading = false; return
         }
 
@@ -1905,14 +1927,23 @@ struct ProfileTripsGrid: View {
     var onTap: (APIJourney) -> Void
     var onDelete: ((APIJourney) -> Void)? = nil
     var onReachEnd: (() -> Void)? = nil
+    /// Para que la foto crezca desde su celda y vuelva a ella (zoom nativo, iOS 18+).
+    var zoomNamespace: Namespace.ID? = nil
+    /// La publicación que se ve en el visor: el perfil se desplaza detrás para
+    /// tener su celda en pantalla, así al cerrar la foto vuelve a ella aunque
+    /// no estuviera entre las primeras 9 (Keyla, 21 Nov 2026).
+    var visibleId: String? = nil
 
     var body: some View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+        ScrollViewReader { proxy in
         VStack(spacing: 0) {
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(journeys, id: \.id) { journey in
                     TripGridCell(journey: journey)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .modifier(OptionalZoomSource(id: journey.id, namespace: zoomNamespace))
+                        .id(journey.id)
                         .contentShape(Rectangle())
                         .onTapGesture { Haptic.light(); onTap(journey) }
                         .contextMenu {
@@ -1933,6 +1964,13 @@ struct ProfileTripsGrid: View {
             }
         }
         .padding(.horizontal, Spacing.edge)
+        // Sin animación: el visor tapa la pantalla; al cerrar ya está en su lugar.
+        .onChange(of: visibleId) { _, id in
+            guard let id, journeys.contains(where: { $0.id == id }) else { return }
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo(id, anchor: .center) }
+        }
+        }
     }
 }
 
@@ -1991,6 +2029,8 @@ struct BusinessLocation: Codable, Hashable, Identifiable {
     var hours: [DayHours]? = nil
     var photoFiles: [String]? = nil
     var videoFiles: [String]? = nil
+    /// Sin local físico (Keyla, 22 Nov 2026): solo entrega; no va al mapa.
+    var noPlace: Bool? = nil
 }
 
 struct BusinessLocationPickRoute: Hashable { let businessId: String }
@@ -2004,8 +2044,17 @@ struct BusinessLocationRoute: Hashable { let businessId: String; let locationId:
 /// hay un lugar a pocos metros.
 struct BusinessLocationPicker: View {
     let businessId: String
+    /// Modo paso de "Agrega tu negocio" (Keyla, 21 Nov 2026): devuelve el lugar
+    /// elegido en vez de guardarlo en un negocio que aún no existe.
+    var onPicked: ((BusinessLocation) -> Void)? = nil
+    /// Nombre de la sede = nombre del negocio (sin campo extra).
+    var knownName: String? = nil
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var store = AccountStore.shared
+    private var businessName: String? {
+        knownName ?? store.businesses.first(where: { $0.id == businessId })?.name
+    }
+    // Primero las opciones de "Añadir lugar"; el mapa es una de ellas.
     @State private var step: Step = .nearby
     @State private var nearby: [APINearbySpot] = []
     @State private var loadingNearby = true
@@ -2013,7 +2062,7 @@ struct BusinessLocationPicker: View {
     @State private var pendingNew: (name: String, lat: Double, lng: Double)?
     @State private var closeToNew: [APINearbySpot] = []
     @State private var mapPlaces: [MKMapItem] = []
-    enum Step { case nearby, map, confirmNew }
+    enum Step { case nearby, map, confirmNew, noPlace, cover }
 
     private var start: (lat: Double, lng: Double)? {
         LocationService.current?.userLocation.map { ($0.coordinate.latitude, $0.coordinate.longitude) }
@@ -2025,68 +2074,66 @@ struct BusinessLocationPicker: View {
             case .nearby: nearbyStep
             case .map: mapStep
             case .confirmNew: confirmNewStep
+            case .noPlace: noPlaceStep
+            case .cover: coverStep
             }
         }
-        .navigationTitle("Agregar ubicación")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button(step == .nearby ? "Cancelar" : "Atrás") {
-                    if step == .nearby { dismiss() } else { withAnimation { step = .nearby } }
-                }
-            }
+        .modifier(PickerChrome(embedded: onPicked != nil, step: $step, hasList: !nearby.isEmpty || onPicked == nil, dismiss: { dismiss() }))
+        .task {
+            await loadNearby()
+            // Sin sugerencias de Buddy, una pantalla con un solo botón no sirve: directo al mapa.
+            // En Mi negocio la lista también ofrece "No tengo local físico": no se salta.
+            if nearby.isEmpty && step == .nearby && onPicked != nil { step = .map }
         }
-        .task { await loadNearby() }
     }
 
     // MARK: Paso 1: ¿tu negocio ya está en Buddy?
 
     private var nearbyStep: some View {
+        // Misma experiencia que "Añadir lugar" (Lugares que recomiendas).
         ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.md) {
-                Text("¿Tu negocio ya está en Buddy?").font(BT.title3).foregroundStyle(Color.brand)
-                Text("Un viajero o un buddy pudo agregarlo antes. Si lo ves aquí, elígelo y será tuyo; así no queda repetido en el mapa.")
-                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
-                if loadingNearby {
-                    HStack(spacing: 8) { ProgressView(); Text("Buscando lugares cerca de ti").font(BT.footnote).foregroundStyle(Color.inkMuted) }
-                        .padding(.vertical, 12)
-                } else if nearby.isEmpty && mapPlaces.isEmpty {
-                    Text(start == nil ? "No tenemos tu ubicación. Busca tu negocio en el mapa." : "No encontramos lugares cerca de ti.")
-                        .font(BT.footnote).foregroundStyle(Color.inkMuted).padding(.vertical, 8)
-                } else if !nearby.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(nearby.prefix(8)) { spot in
-                            Button { claim(spot) } label: { spotRow(spot) }.buttonStyle(.plain)
-                            Divider().overlay(Color.hairline)
-                        }
+            VStack(spacing: Spacing.md) {
+                Text("¿DÓNDE ESTÁ TU NEGOCIO?")
+                    .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, Spacing.lg)
+                ForEach(nearby.prefix(5)) { spot in
+                    Button { Haptic.medium(); claim(spot) } label: {
+                        PlaceOptionRow(icon: "mappin.circle.fill", title: spot.name,
+                                       subtitle: spot.isPendingApproval ? "\(spot.distanceLabel) · por revisar" : spot.distanceLabel)
                     }
-                    .padding(.horizontal, 14)
-                    .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.lg))
+                    .buttonStyle(.pressable)
                 }
-                // Lugares del mapa cerca, aún sin dueño en Buddy (Keyla, 20 Nov 2026).
-                if !loadingNearby && !mapPlaces.isEmpty {
-                    Text("Lugares cerca de ti, aún sin dueño").font(BT.footnoteBold).foregroundStyle(Color.brand)
-                        .padding(.top, 4)
-                    VStack(spacing: 0) {
-                        ForEach(mapPlaces, id: \.self) { item in
-                            Button { claimMapPlace(item) } label: { mapPlaceRow(item) }.buttonStyle(.plain)
-                            Divider().overlay(Color.hairline)
-                        }
+                // Solo lugares registrados en Buddy (Keyla, 21 Nov 2026).
+                Button { focus = nil; focusSpotId = nil; withAnimation { step = .map } } label: {
+                    PlaceOptionRow(icon: "map", title: "Buscar en el mapa", subtitle: nil)
+                }
+                .buttonStyle(.pressable)
+                // Sin local físico (Keyla, 22 Nov 2026): solo eligen dónde entregan.
+                if onPicked == nil {
+                    Button { withAnimation { step = .noPlace } } label: {
+                        PlaceOptionRow(icon: "shippingbox", title: "No tengo local físico", subtitle: nil)
                     }
-                    .padding(.horizontal, 14)
-                    .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.lg))
+                    .buttonStyle(.pressable)
                 }
-                if let errorText { Text(errorText).font(BT.footnote).foregroundStyle(Color.errorRed) }
-                Button { withAnimation { step = .map } } label: {
-                    Label("No está aquí · buscar en el mapa", systemImage: "map")
-                        .font(BT.footnoteBold).foregroundStyle(Color.brand)
-                        .frame(maxWidth: .infinity).frame(height: 48).background(Color.sageTint, in: Capsule())
+                if let errorText {
+                    Text(errorText).font(BT.caption1).foregroundStyle(Color.errorRed)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
             }
-            .padding(Spacing.edge)
+            .padding(.horizontal, Spacing.edge)
         }
         .background(Color.canvas)
+    }
+
+    private func useCurrentLocation() {
+        guard let c = start else {
+            errorText = "Activa tu ubicación o busca en el mapa."
+            LocationService.current?.requestPermission()
+            return
+        }
+        guard let name = businessName, !name.isEmpty else { withAnimation { step = .map }; return }
+        Task { await checkBeforeNew(name: name, lat: c.lat, lng: c.lng) }
     }
 
     private func spotRow(_ spot: APINearbySpot) -> some View {
@@ -2128,9 +2175,14 @@ struct BusinessLocationPicker: View {
         .contentShape(Rectangle())
     }
 
+    // Tocar un lugar de la lista no guarda nada: abre el mapa ahí (Keyla, 21 Nov 2026).
+    @State private var focus: (lat: Double, lng: Double)?
+    @State private var focusSpotId: String?
+
     private func claimMapPlace(_ item: MKMapItem) {
         let c = item.placemark.coordinate
-        Task { await checkBeforeNew(name: item.name ?? "Mi negocio", lat: c.latitude, lng: c.longitude) }
+        focus = (c.latitude, c.longitude); focusSpotId = nil
+        withAnimation { step = .map }
     }
 
     // MARK: Paso 2: mapa (mismo que Compartir un lugar)
@@ -2145,10 +2197,137 @@ struct BusinessLocationPicker: View {
             onPropose: { name, _, lat, lng in Task { await checkBeforeNew(name: name, lat: lat, lng: lng) } },
             pickTitle: "Es mi negocio",
             proposeTitle: "Guardar ubicación",
-            newEyebrow: "NUEVA UBICACIÓN",
-            namePlaceholder: "Nombre de la sede. Ej. Finca Rosal Centro",
-            suggestMapPlaces: true
+            newEyebrow: "",
+            namePlaceholder: "Nombre del lugar",
+            suggestMapPlaces: true,
+            fixedName: businessName,
+            focus: focus,
+            focusSpotId: focusSpotId,
+            onSwipeBack: { if nearby.isEmpty && onPicked != nil { dismiss() } else { withAnimation { step = .nearby } } }
         )
+    }
+
+    // MARK: Sin local físico: dónde entrega
+
+    @State private var noPlaceAreas: [CoverageDestination] = []
+    @State private var savingNoPlace = false
+
+    private var noPlaceStep: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Text("LUGARES QUE CUBRES")
+                    .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                    .padding(.top, Spacing.lg)
+                DestinationChipsPicker(selection: $noPlaceAreas, fieldColor: .surface)
+                if let errorText { Text(errorText).font(BT.caption1).foregroundStyle(Color.errorRed) }
+                Button { Task { await saveNoPlace() } } label: {
+                    HStack(spacing: 8) {
+                        if savingNoPlace { ProgressView().tint(Color.inkInverse) }
+                        Text("Guardar").font(BT.headline)
+                    }
+                    .foregroundStyle(Color.inkInverse)
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .background(noPlaceAreas.isEmpty ? Color.inkMuted.opacity(0.4) : Color.ink, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(noPlaceAreas.isEmpty || savingNoPlace)
+            }
+            .padding(.horizontal, Spacing.edge)
+        }
+        .background(Color.canvas)
+    }
+
+    private func saveNoPlace() async {
+        guard let name = businessName, !name.isEmpty else { return }
+        savingNoPlace = true
+        defer { savingNoPlace = false }
+        do {
+            let spot = try await APIClient.shared.createAreaSpot(farmId: businessId, name: name,
+                                                                 destinationIds: noPlaceAreas.map(\.id))
+            guard var b = store.businesses.first(where: { $0.id == businessId }) else { return }
+            var list = b.locations ?? []
+            var loc = BusinessLocation(name: spot.name, lat: spot.lat, lng: spot.lng, spotId: spot.id)
+            loc.noPlace = true
+            loc.isMain = list.isEmpty
+            list.append(loc)
+            b.locations = list
+            store.update(b)
+            Haptic.success()
+            // Sin foto no sale en Inicio: se pide la portada antes de cerrar.
+            coverCtx = BusinessEditContext(businessId: businessId, locationId: loc.id, spotId: spot.id)
+            withAnimation { step = .cover }
+        } catch {
+            errorText = "No pudimos guardar. Intenta de nuevo."
+        }
+    }
+
+    // MARK: Último paso: la foto de portada (Keyla, 23 Nov 2026)
+    // La misma tarjeta de Inicio del negocio, apagada con un "+", como la
+    // tarjeta vacía de Ubicaciones. Al subirla se ve la portada real.
+
+    @State private var coverCtx: BusinessEditContext?
+    @State private var coverItem: PhotosPickerItem?
+    @ObservedObject private var ownerPhotos = OwnerPhotoStore.shared
+
+    private var coverStep: some View {
+        let ctx = coverCtx
+        let cover = ctx.flatMap { ownerPhotos.cover($0.spotId) }
+        let uploading = ctx.map { ownerPhotos.uploading.contains($0.spotId) } ?? false
+        let card = APIPlaceCard(id: ctx?.spotId ?? "new", name: businessName ?? "", destinationId: nil, destinationName: nil,
+                                lat: 0, lng: 0, distanceMeters: nil, coverUrl: cover, coverUrls: nil, coverPhotos: nil,
+                                coverAuthorName: nil, coverAuthorAvatarUrl: nil, category: nil,
+                                photoCount: cover == nil ? 0 : 1, isNew: false, buddyCount: 0, buddies: [])
+        return ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Text("FOTO DE PORTADA")
+                    .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                    .padding(.top, Spacing.lg)
+                PhotosPicker(selection: $coverItem, matching: .images) {
+                    HomePlaceCard(card: card, large: true)
+                        .id(cover ?? "none")
+                        .opacity(cover == nil ? 0.5 : 1)
+                        .overlay {
+                            if uploading {
+                                ProgressView().tint(Color.white)
+                                    .frame(width: 52, height: 52).background(Color.brand, in: Circle())
+                                    .offset(y: -30)
+                            } else if cover == nil {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 22, weight: .semibold)).foregroundStyle(Color.white)
+                                    .frame(width: 52, height: 52).background(Color.brand, in: Circle())
+                                    .offset(y: -30)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(uploading || ctx == nil)
+                .accessibilityLabel(cover == nil ? "Elegir foto de portada" : "Cambiar foto de portada")
+                if let e = ownerPhotos.errorText { Text(e).font(BT.caption1).foregroundStyle(Color.errorRed) }
+                Button { dismiss() } label: {
+                    Text("Listo").font(BT.headline)
+                        .foregroundStyle(Color.inkInverse)
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .background(cover == nil ? Color.inkMuted.opacity(0.4) : Color.ink, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(cover == nil)
+            }
+            .padding(.horizontal, Spacing.edge)
+        }
+        .background(Color.canvas)
+        .onChange(of: coverItem) { _, item in
+            guard let item, let ctx else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data),
+                   let jpg = img.limitedToMaxDimension(1600).jpegData(compressionQuality: 0.82) {
+                    let old = ownerPhotos.photos(ctx.spotId)
+                    await ownerPhotos.add(ctx, images: [jpg])
+                    // Cambiar la elegida: la nueva pasa a ser la portada.
+                    if !old.isEmpty, let new = ownerPhotos.photos(ctx.spotId).last { await ownerPhotos.makeCover(ctx, new) }
+                }
+                coverItem = nil
+            }
+        }
     }
 
     // MARK: Paso 3: hay un lugar a pocos metros del punto nuevo
@@ -2161,7 +2340,7 @@ struct BusinessLocationPicker: View {
                     .font(BT.footnote).foregroundStyle(Color.inkMuted)
                 VStack(spacing: 0) {
                     ForEach(closeToNew.prefix(5)) { spot in
-                        Button { claim(spot) } label: { spotRow(spot) }.buttonStyle(.plain)
+                        Button { if let lat = spot.lat, let lng = spot.lng { add(name: spot.name, lat: lat, lng: lng, spotId: spot.id) } } label: { spotRow(spot) }.buttonStyle(.plain)
                         Divider().overlay(Color.hairline)
                     }
                 }
@@ -2183,20 +2362,39 @@ struct BusinessLocationPicker: View {
 
     // MARK: Datos
 
+    /// Solo lo útil (Keyla, 21 Nov 2026): lugares con un nombre parecido al del
+    /// negocio, y los que están a pocos pasos. Nada de talleres a 200 m.
     private func loadNearby() async {
         guard let c = start else { loadingNearby = false; return }
-        async let spotsTask = try? await APIClient.shared.fetchNearbySpots(lat: c.lat, lng: c.lng, radius: 300)
-        let center = CLLocationCoordinate2D(latitude: c.lat, longitude: c.lng)
-        async let poisTask = try? await MKLocalSearch(request: MKLocalPointsOfInterestRequest(center: center, radius: 150)).start().mapItems
-        let (spots, pois) = await (spotsTask, poisTask)
-        nearby = spots ?? []
-        // Sin repetir: si ya hay un lugar de Buddy con el mismo nombre, no se muestra dos veces.
-        let taken = Set(nearby.map { $0.name.lowercased() })
         let here = CLLocation(latitude: c.lat, longitude: c.lng)
-        mapPlaces = Array((pois ?? [])
-            .filter { !($0.name ?? "").isEmpty && !taken.contains(($0.name ?? "").lowercased()) }
-            .sorted { here.distance(from: $0.placemark.location ?? here) < here.distance(from: $1.placemark.location ?? here) }
-            .prefix(8))
+        let center = here.coordinate
+        let name = businessName ?? ""
+        async let spotsTask = try? await APIClient.shared.fetchNearbySpots(lat: c.lat, lng: c.lng, radius: 300)
+        async let poisTask = try? await MKLocalSearch(request: MKLocalPointsOfInterestRequest(center: center, radius: 60)).start().mapItems
+        async let byNameTask: [MKMapItem]? = {
+            guard !name.isEmpty else { return nil }
+            let r = MKLocalSearch.Request()
+            r.naturalLanguageQuery = name
+            r.region = MKCoordinateRegion(center: center, latitudinalMeters: 15_000, longitudinalMeters: 15_000)
+            return try? await MKLocalSearch(request: r).start().mapItems
+        }()
+        let (spots, pois, byName) = await (spotsTask, poisTask, byNameTask)
+        let dist: (CLLocation?) -> Double = { here.distance(from: $0 ?? here) }
+        nearby = (spots ?? []).filter { spot in
+            if NameMatch.similar(spot.name, name) { return true }
+            guard let lat = spot.lat, let lng = spot.lng else { return false }
+            return dist(CLLocation(latitude: lat, longitude: lng)) <= 60
+        }
+            .sorted { NameMatch.similar($0.name, name) && !NameMatch.similar($1.name, name) }
+        let taken = Set(nearby.map { $0.name.lowercased() })
+        var seen = Set<String>()
+        let similar = (byName ?? []).filter { NameMatch.similar($0.name ?? "", name) }
+        mapPlaces = Array((similar + (pois ?? []).sorted { dist($0.placemark.location) < dist($1.placemark.location) })
+            .filter { item in
+                let n = (item.name ?? "").lowercased()
+                return !n.isEmpty && !taken.contains(n) && seen.insert(n).inserted
+            }
+            .prefix(5))
         loadingNearby = false
     }
 
@@ -2216,10 +2414,16 @@ struct BusinessLocationPicker: View {
             errorText = "Ese lugar no tiene coordenadas. Búscalo en el mapa."
             return
         }
-        add(name: spot.name, lat: lat, lng: lng, spotId: spot.id)
+        focus = (lat, lng); focusSpotId = spot.id
+        withAnimation { step = .map }
     }
 
     private func add(name: String, lat: Double, lng: Double, spotId: String?) {
+        if let onPicked {
+            Haptic.success()
+            onPicked(BusinessLocation(name: name.trimmingCharacters(in: .whitespaces), lat: lat, lng: lng, spotId: spotId, isMain: true))
+            return
+        }
         guard var b = store.businesses.first(where: { $0.id == businessId }) else { return }
         var list = b.locations ?? []
         if list.contains(where: { (spotId != nil && $0.spotId == spotId) || (abs($0.lat - lat) < 0.00005 && abs($0.lng - lng) < 0.00005) }) {
@@ -2246,6 +2450,41 @@ struct BusinessLocationPicker: View {
             }
         }
         dismiss()
+    }
+}
+
+/// Barra del selector: sola (Agregar ubicación) o dentro de "Agrega tu negocio",
+/// donde el flujo pone su propio encabezado y solo hace falta volver al paso 1.
+private struct PickerChrome: ViewModifier {
+    let embedded: Bool
+    @Binding var step: BusinessLocationPicker.Step
+    var hasList = true
+    let dismiss: () -> Void
+    private var atStart: Bool { step == .nearby || step == .cover || (step == .map && !hasList) }
+    private func back() {
+        if atStart { dismiss() } else { withAnimation { step = step == .confirmNew ? .map : .nearby } }
+    }
+    func body(content: Content) -> some View {
+        if embedded {
+            content.safeAreaInset(edge: .top) {
+                if !atStart {
+                    HStack {
+                        CircleBackButton { back() }
+                        Spacer()
+                    }
+                    .padding(.horizontal, Spacing.edge).padding(.vertical, 6)
+                }
+            }
+        } else {
+            content
+                .navigationTitle("Agregar ubicación")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        ToolbarBackButton { back() }
+                    }
+                }
+        }
     }
 }
 
@@ -2284,6 +2523,33 @@ final class AccountStore: ObservableObject {
     func update(_ b: ProtoBusiness) {
         if let i = businesses.firstIndex(where: { $0.id == b.id }) { businesses[i] = b }
     }
+
+    /// Trae del servidor los negocios aprobados de esta persona que aún no están
+    /// en el teléfono (Keyla, 21 Nov 2026: "El encanto" aprobado no aparecía,
+    /// porque la lista solo crecía al vincular o al aprobarse uno pedido aquí).
+    /// Si había uno "en revisión" con el mismo nombre, se reemplaza por el aprobado.
+    @MainActor
+    func syncFromServer() async {
+        guard let token = try? await FincasAuth.validIdToken(),
+              let answer = try? await FincasAuth.session(idToken: token) else { return }
+        let approved = (answer.businesses ?? []).filter { $0.farmId != nil }
+        let missing = approved.filter { a in !businesses.contains { $0.id == a.farmId } }
+        guard !missing.isEmpty else { return }
+        _ = try? await APIClient.shared.linkFincasBusinesses(firebaseToken: token)
+        for a in missing {
+            guard let farmId = a.farmId else { continue }
+            if let i = businesses.firstIndex(where: {
+                $0.pending == true && $0.name.compare(a.name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }) {
+                var b = businesses[i]; b.id = farmId; b.pending = nil; b.category = "Cuenta negocio"
+                if activeBusinessId == businesses[i].id { activeBusinessId = farmId }
+                businesses[i] = b
+            } else {
+                businesses.append(ProtoBusiness(id: farmId, name: a.name, category: "Cuenta negocio", contact: ""))
+            }
+            dlog("🏪 [Accounts] negocio aprobado agregado: \(a.name)")
+        }
+    }
 }
 
 struct AccountsRoute: Hashable {}
@@ -2307,17 +2573,40 @@ struct AccountSwitcherView: View {
                         icon: "person", selected: store.activeBusinessId == nil) {
                         store.activeBusinessId = nil; onDone()
                     }
-                    ForEach(store.businesses) { b in
-                        Divider().overlay(Color.hairline).padding(.leading, 74)
-                        row(title: b.name, subtitle: b.kindLabel, avatar: nil,
-                            icon: "storefront", selected: store.activeBusinessId == b.id) {
-                            store.activeBusinessId = b.id; onDone()
-                        }
-                    }
                 }
                 .background(Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
                 .cardShadow()
+
+                // Negocios: la misma tarjeta de Inicio, con la misma foto que ve el
+                // visitante (Keyla, 21 Nov 2026). En revisión: apagada, con su chip.
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    ForEach(store.businesses) { b in
+                        Button { Haptic.select(); store.activeBusinessId = b.id; onDone() } label: {
+                            HomePlaceCard(card: card(for: b), large: false)
+                                .id(places[b.id]?.cover ?? b.id)
+                                .opacity(b.pending == true ? 0.5 : 1)
+                                .overlay(alignment: .topLeading) {
+                                    if b.pending == true {
+                                        Text("En revisión").font(BT.caption1.weight(.semibold)).foregroundStyle(Color.brand)
+                                            .padding(.horizontal, 10).padding(.vertical, 5)
+                                            .background(Color.sageTint, in: Capsule())
+                                            .padding(8)
+                                    }
+                                }
+                                .overlay(alignment: .topTrailing) {
+                                    Image(systemName: store.activeBusinessId == b.id ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(store.activeBusinessId == b.id ? Color.brand : Color.white)
+                                        .background(Circle().fill(store.activeBusinessId == b.id ? Color.white : Color.black.opacity(0.25)))
+                                        .padding(8)
+                                }
+                        }
+                        .buttonStyle(.pressable)
+                        .accessibilityLabel(b.name)
+                        .accessibilityAddTraits(store.activeBusinessId == b.id ? .isSelected : [])
+                    }
+                }
 
                 // Sin "Crear o vincular negocio" aquí: las cuentas ya están en la lista
                 // y la opción vive en el menú "⋯" de Yo (Keyla, 20 Nov 2026).
@@ -2328,6 +2617,46 @@ struct AccountSwitcherView: View {
             .padding(.bottom, 100)
         }
         .background(Color.canvas)
+        .task {
+            await store.syncFromServer()
+            await loadCovers()
+        }
+    }
+
+    /// Lugar de cada negocio y su portada. La portada es la primera foto de la
+    /// visita más reciente: la misma regla del feed de Inicio (place_cards).
+    @State private var places: [String: (spotId: String, cover: String?)] = [:]
+
+    private func card(for b: ProtoBusiness) -> APIPlaceCard {
+        let p = places[b.id]
+        // Solo una categoría real del catálogo; nunca "Cuenta negocio" ni el nombre del socio.
+        let category = b.isLinkedAccount || b.category == "Cuenta negocio" ? nil : b.category
+        return APIPlaceCard(id: p?.spotId ?? b.id, name: b.name, destinationId: nil, destinationName: nil,
+                            lat: 0, lng: 0, distanceMeters: nil,
+                            coverUrl: p?.cover, coverUrls: nil, coverPhotos: nil,
+                            coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+                            category: category, photoCount: 0, isNew: false, buddyCount: 0, buddies: [])
+    }
+
+    private func loadCovers() async {
+        await withTaskGroup(of: (String, String, String?)?.self) { group in
+            for b in store.businesses where places[b.id] == nil {
+                group.addTask {
+                    // Su ubicación principal; si no tiene, el lugar de Buddy con su mismo nombre.
+                    var spotId = (b.locations ?? []).first(where: \.isMain)?.spotId ?? (b.locations ?? []).first?.spotId
+                    if spotId == nil, let found = try? await APIClient.shared.searchCuratedSpots(query: b.name) {
+                        spotId = found.first { $0.name.compare(b.name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }?.id
+                    }
+                    guard let spotId else { return nil }
+                    if let owner = try? await APIClient.shared.fetchOwnerPhotos(spotId: spotId), let first = owner.first {
+                        return (b.id, spotId, first.url)
+                    }
+                    let gallery = try? await APIClient.shared.fetchSpotGallery(spotId: spotId, limit: 1)
+                    return (b.id, spotId, gallery?.visits.first?.coverPhoto)
+                }
+            }
+            for await r in group { if let r { places[r.0] = (r.1, r.2) } }
+        }
     }
 
     private func row(title: String, subtitle: String, avatar: String?, icon: String,
@@ -2502,6 +2831,7 @@ struct BusinessHomeView: View {
     private var isLinked: Bool { live.isLinkedAccount }
     @State private var remote: [FincasProduct] = []
     @State private var remoteTotal = 0
+    @State private var productToArchive: FincasProduct? = nil
     @State private var remoteHasMore = false
     @State private var remoteLoading = false
     @State private var remoteError: String? = nil
@@ -2512,7 +2842,7 @@ struct BusinessHomeView: View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 header
-                if !isLinked { pendingCard }
+                if !isLinked { Color.clear.frame(height: 0).task { await checkApproval() } }  // el chip "En revisión" ya lo dice; se consulta solo (Keyla, 21 Nov 2026)
                 Picker("", selection: $section) {
                     Text("Mi negocio").tag(1)
                     Text("Productos").tag(0)
@@ -2843,15 +3173,38 @@ struct BusinessHomeView: View {
                             remoteCard(p)
                         }
                         .buttonStyle(.pressable)
+                        .contextMenu {
+                            if p.status != "archived" {
+                                Button(role: .destructive) { productToArchive = p } label: { Label("Quitar producto", systemImage: "trash") }
+                            }
+                        }
                     }
                     if remoteHasMore {
                         ProgressView().tint(Color.brand).frame(maxWidth: .infinity).frame(height: 44)
                             .onAppear { Task { await loadRemote(reset: false) } }
                     }
                 }
-                Text("Toca un producto para editarlo.")
+                Text("Toca un producto para editarlo. Mantén presionado para quitarlo.")
                     .font(BT.caption1).foregroundStyle(Color.inkMuted)
             }
+        }
+        .confirmationDialog("¿Quitar este producto?", isPresented: Binding(get: { productToArchive != nil }, set: { if !$0 { productToArchive = nil } }),
+                            titleVisibility: .visible) {
+            Button("Quitar producto", role: .destructive) {
+                if let p = productToArchive { Task { await archive(p) } }
+                productToArchive = nil
+            }
+        } message: { Text("Deja de verse en Buddy. Queda como Oculto y puedes volver a mostrarlo.") }
+    }
+
+    private func archive(_ p: FincasProduct) async {
+        do {
+            try await FincasAuth.archiveProduct(farmId: business.id, productId: p.id)
+            Haptic.success()
+            refreshInicioAfterOwnerChange("producto")
+            await loadRemote(reset: true)
+        } catch {
+            remoteError = error.localizedDescription
         }
     }
 
@@ -2978,10 +3331,10 @@ struct CreateBusinessEntryCard: View {
                     .frame(width: 44, height: 44)
                     .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Crear negocio")
+                    Text("¿Tienes un negocio?")
                         .font(.system(.headline).weight(.bold))
                         .foregroundStyle(Color.brand)
-                    Text("Muestra tus productos y precios en Buddy")
+                    Text("Agrégalo a Buddy en 3 pasos y muestra tus productos")
                         .font(BT.footnote)
                         .foregroundStyle(Color.inkMuted)
                         .multilineTextAlignment(.leading)
@@ -3227,6 +3580,9 @@ struct LinkBusinessView: View {
 struct FincasProductRoute: Hashable {
     let farmId: String
     let product: FincasProduct?   // nil = producto nuevo
+    /// Desde el lápiz de UNA presentación en el panel: el editor muestra solo esa
+    /// (Keyla, 23 Nov 2026). Nil = todas.
+    var focusPresentationId: String? = nil
 }
 
 private func parseNumber(_ s: String) -> Double? {
@@ -3248,6 +3604,8 @@ struct FincasProductEditView: View {
         var stock: String
         var visible: Bool
         var photos: [String] = []
+        /// url -> id de la foto en fincas (para poder quitarla).
+        var photoIds: [String: String] = [:]
         var isNew: Bool { id.hasPrefix("new-") }
     }
 
@@ -3273,6 +3631,9 @@ struct FincasProductEditView: View {
                     .foregroundStyle(Color.brand)
 
                 field("Nombre", text: $name, placeholder: "Ej. Café tostado")
+                // Desde el lápiz de una presentación: solo nombre y esa presentación
+                // (Keyla, 23 Nov 2026: descripción y estado sobran ahí).
+                if route.focusPresentationId == nil {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Descripción").font(BT.footnoteBold).foregroundStyle(Color.ink)
                     TextField("Opcional", text: $desc, axis: .vertical)
@@ -3294,7 +3655,13 @@ struct FincasProductEditView: View {
                          : status == "archived" ? "Nadie lo ve. No se borra." : "Solo tú lo ves mientras lo preparas.")
                         .font(BT.caption1).foregroundStyle(Color.inkMuted)
                 }
+                }
 
+                if let focus = route.focusPresentationId, pres.contains(where: { $0.id == focus }) {
+                    // Solo la presentación que se tocó; las demás no cambian.
+                    SectionTitle(title: "Presentación", count: nil)
+                    ForEach($pres) { $p in if p.id == focus { presCard($p) } }
+                } else {
                 SectionTitle(title: "Presentaciones", count: pres.count)
                 ForEach($pres) { $p in presCard($p) }
                 Button {
@@ -3307,6 +3674,7 @@ struct FincasProductEditView: View {
                     .foregroundStyle(Color.brand)
                     .frame(maxWidth: .infinity).frame(height: 48)
                     .background(Color.sageTint, in: Capsule())
+                }
                 }
 
                 if let errorText {
@@ -3333,6 +3701,21 @@ struct FincasProductEditView: View {
         .background(Color.canvas)
         .onAppear(perform: fill)
         .task { await fillMissingPhotos() }
+        .fullScreenCover(item: $photoViewer) { v in PlacePhotoViewer(photos: v.photos, inicial: v.start) }
+        .confirmationDialog("¿Quitar esta foto?", isPresented: Binding(get: { photoToRemove != nil }, set: { if !$0 { photoToRemove = nil } }),
+                            titleVisibility: .visible) {
+            Button("Quitar foto", role: .destructive) {
+                if let r = photoToRemove { Task { await removePhoto(presId: r.pres, url: r.url) } }
+                photoToRemove = nil
+            }
+        } message: { Text("Los visitantes ya no la verán.") }
+        .confirmationDialog("¿Quitar esta presentación?", isPresented: Binding(get: { presToRemove != nil }, set: { if !$0 { presToRemove = nil } }),
+                            titleVisibility: .visible) {
+            Button("Quitar presentación", role: .destructive) {
+                if let id = presToRemove { Task { await removePresentation(id) } }
+                presToRemove = nil
+            }
+        } message: { Text("Deja de verse en Buddy. No se borra: queda como Oculta.") }
     }
 
     private func fill() {
@@ -3348,7 +3731,8 @@ struct FincasProductEditView: View {
                           price: $0.price.map { String(format: "%.2f", $0) } ?? "",
                           stock: $0.stock.map(String.init) ?? "",
                           visible: $0.visible ?? true,
-                          photos: ($0.photos ?? []).map(\.url))
+                          photos: ($0.photos ?? []).map(\.url),
+                          photoIds: Dictionary(($0.photos ?? []).map { ($0.url, $0.id) }, uniquingKeysWith: { a, _ in a }))
             }
             original = pres
         } else {
@@ -3419,6 +3803,12 @@ struct FincasProductEditView: View {
         }
         .padding(14)
         .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.lg))
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: Radius.lg))
+        .contextMenu {
+            if pres.count > 1 {
+                Button(role: .destructive) { presToRemove = p.wrappedValue.id } label: { Label("Quitar presentación", systemImage: "trash") }
+            }
+        }
         .cardShadow()
     }
 
@@ -3432,13 +3822,23 @@ struct FincasProductEditView: View {
             Text("Fotos (\(d.photos.count) de 3)").font(BT.caption1).foregroundStyle(Color.inkMuted)
             HStack(spacing: 8) {
                 ForEach(d.photos, id: \.self) { url in
-                    AsyncImage(url: URL(string: url)) { img in img.resizable().scaledToFill() } placeholder: { Color.paleSage }
-                        .frame(width: 64, height: 64)
+                    // Más grande (Keyla, 23 Nov 2026): 96 pt.
+                    CachedImage(urlString: url) { img in img.resizable().scaledToFill() } placeholder: { Color.paleSage }
+                        .frame(width: 96, height: 96)
+                        .background(Color.paleSage.opacity(0.4))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                        .onTapGesture { photoViewer = PresPhotoView(photos: d.photos, start: d.photos.firstIndex(of: url) ?? 0) }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                if d.photoIds[url] != nil { photoToRemove = (d.id, url) }
+                                else { errorText = "Esta foto todavía no se puede quitar desde Buddy. Pronto se podrá." }
+                            } label: { Label("Quitar foto", systemImage: "trash") }
+                        }
                 }
                 if uploadingPres == d.id {
                     ProgressView().tint(Color.brand)
-                        .frame(width: 64, height: 64)
+                        .frame(width: 96, height: 96)
                         .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 12))
                 } else if d.photos.count < 3 && !d.isNew && route.product != nil {
                     PresPhotoPicker { data in Task { await upload(data, to: p) } }
@@ -3448,6 +3848,46 @@ struct FincasProductEditView: View {
             if d.isNew || route.product == nil {
                 Text("Guarda el producto para poder subir fotos.").font(BT.caption1).foregroundStyle(Color.inkMuted)
             }
+        }
+    }
+
+    @State private var photoToRemove: (pres: String, url: String)? = nil
+    @State private var presToRemove: String? = nil
+    struct PresPhotoView: Identifiable { let id = UUID(); let photos: [String]; let start: Int }
+    @State private var photoViewer: PresPhotoView? = nil
+
+    private func removePresentation(_ id: String) async {
+        guard let k = pres.firstIndex(where: { $0.id == id }) else { return }
+        if pres[k].isNew { pres.remove(at: k); return }
+        guard let productId = route.product?.id else { return }
+        errorText = nil
+        do {
+            try await FincasAuth.updatePresentation(farmId: route.farmId, productId: productId, presentationId: id, fields: ["visible": false])
+            pres.remove(at: k)
+            original.removeAll { $0.id == id }
+            Haptic.success()
+            NotificationCenter.default.post(name: .fincasProductsChanged, object: route.farmId)
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func removePhoto(presId: String, url: String) async {
+        guard let productId = route.product?.id, let k = pres.firstIndex(where: { $0.id == presId }),
+              let photoId = pres[k].photoIds[url] else { return }
+        errorText = nil
+        do {
+            try await FincasAuth.deletePresentationPhoto(farmId: route.farmId, productId: productId,
+                                                         presentationId: presId, photoId: photoId)
+            pres[k].photos.removeAll { $0 == url }
+            pres[k].photoIds[url] = nil
+            if let o = original.firstIndex(where: { $0.id == presId }) {
+                original[o].photos = pres[k].photos; original[o].photoIds = pres[k].photoIds
+            }
+            Haptic.success()
+            NotificationCenter.default.post(name: .fincasProductsChanged, object: route.farmId)
+        } catch {
+            errorText = error.localizedDescription
         }
     }
 
@@ -3463,10 +3903,13 @@ struct FincasProductEditView: View {
         errorText = nil
         defer { uploadingPres = nil }
         do {
-            let url = try await FincasAuth.uploadPresentationPhoto(farmId: route.farmId, productId: productId,
-                                                                    presentationId: p.wrappedValue.id,
-                                                                    jpeg: jpeg, key: UUID().uuidString)
-            if !url.isEmpty { p.wrappedValue.photos.append(url) }
+            let up = try await FincasAuth.uploadPresentationPhoto(farmId: route.farmId, productId: productId,
+                                                                   presentationId: p.wrappedValue.id,
+                                                                   jpeg: jpeg, key: UUID().uuidString)
+            if !up.url.isEmpty {
+                p.wrappedValue.photos.append(up.url)
+                if let id = up.id { p.wrappedValue.photoIds[up.url] = id }
+            }
             Haptic.success()
             NotificationCenter.default.post(name: .fincasProductsChanged, object: nil)
         } catch {
@@ -3662,19 +4105,23 @@ struct BusinessProfileEditor: View {
         ScrollViewReader { proxy in
         VStack(alignment: .leading, spacing: Spacing.lg) {
             checklist(proxy)
+            group("Ubicaciones", icon: "safari",
+                  summary: locationsSummary, expanded: $locationsExpanded) {
+                locationsContent
+            }
+            .id("locations")
             group("Información general", icon: "info.circle",
                   summary: generalSummary, expanded: $generalExpanded) {
+                if isLinked {
+                    categoryCard
+                    Divider().overlay(Color.hairline)
+                }
                 aboutCard
                 Divider().overlay(Color.hairline)
                 contactCard
                 generalSaveBar
             }
             .id("general")
-            group("Ubicaciones", icon: "app.pin",
-                  summary: locationsSummary, expanded: $locationsExpanded) {
-                locationsContent
-            }
-            .id("locations")
             if let errorText { Text(errorText).font(BT.footnote).foregroundStyle(Color.errorRed) }
             Text("Por ahora se guarda en este teléfono. Pronto se publicará en tu página de Buddy.")
                 .font(BT.caption1).foregroundStyle(Color.inkMuted)
@@ -3684,7 +4131,12 @@ struct BusinessProfileEditor: View {
         // Los lugares reclamados se avisan al servidor: así el lugar muestra
         // los productos del negocio. Se repite sin daño (el servidor lo ignora
         // si ya es suyo).
-        .task(id: locations.compactMap(\.spotId).joined()) { await syncClaims() }
+        .task { await syncLocationsFromServer() }
+        .task(id: locations.compactMap(\.spotId).joined()) {
+            await findOwnPlace()
+            await syncClaims()
+            await loadLocationCovers()
+        }
         // Pantalla completa (sin hoja que sube): tapa la barra de pestañas,
         // así el botón de guardar del mapa queda visible.
         .fullScreenCover(isPresented: $showLocationPicker) {
@@ -3762,7 +4214,7 @@ struct BusinessProfileEditor: View {
 
     private var locationsSummary: String {
         switch locations.count {
-        case 0: return "Sin ubicación · agrega dónde te encuentran"
+        case 0: return ""
         case 1: return locations[0].name
         default:
             let main = locations.first(where: \.isMain)?.name ?? locations[0].name
@@ -3770,65 +4222,183 @@ struct BusinessProfileEditor: View {
         }
     }
 
+    /// Cada sede se ve como la tarjeta de Inicio: lo que el visitante verá.
+    /// Sin textos extra (Keyla, 21 Nov 2026: "no entiendo qué es Ubicaciones";
+    /// la tarjeta conocida lo explica sola).
+    /// Portada de cada sede con la regla del feed de Inicio: primera foto de la
+    /// visita más reciente del lugar (Keyla, 21 Nov 2026: "como lo ve el visitante").
+    @State private var feedCovers: [String: String] = [:]
+    @ObservedObject private var ownerPhotos = OwnerPhotoStore.shared
+    /// Destino de cada lugar: sin él no se abre el mapa con su panel.
+    @State private var spotDestinations: [String: String] = [:]
+
+    private func loadLocationCovers() async {
+        for loc in locations where loc.spotId != nil && spotDestinations[loc.spotId!] == nil {
+            if let found = try? await APIClient.shared.searchCuratedSpots(query: loc.name),
+               let d = found.first(where: { $0.id == loc.spotId })?.destinationId {
+                spotDestinations[loc.spotId!] = d
+            }
+        }
+        for spotId in locations.compactMap(\.spotId) { await ownerPhotos.load(spotId) }
+        for spotId in locations.compactMap(\.spotId) where feedCovers[spotId] == nil {
+            do {
+                let g = try await APIClient.shared.fetchSpotGallery(spotId: spotId, limit: 1)
+                if let first = g.visits.first?.coverPhoto { feedCovers[spotId] = first }
+            } catch { dlog("🏪 [Covers] error \(error)") }
+        }
+    }
+
+    /// Negocio sin sedes cuyo lugar ya está en Buddy con su mismo nombre: ese lugar
+    /// es su ubicación (lo que ya ve el visitante). Solo se guarda en este teléfono.
+    /// Ubicaciones desde el servidor (Keyla, 23 Nov 2026): cada teléfono guardaba
+    /// su propia lista y mostraban lugares distintos. Ahora manda el servidor:
+    /// se agregan los lugares del negocio que falten y se quitan los que ya no son
+    /// suyos. Lo propio de cada sede (horario, fotos locales) se conserva.
+    private func syncLocationsFromServer() async {
+        guard isLinked, let server = try? await APIClient.shared.fetchFarmSpots(farmId: businessId) else { return }
+        UserDefaults.standard.set(true, forKey: ownPlaceKey)
+        let ids = Set(server.map(\.id))
+        update { b in
+            var list = (b.locations ?? []).filter { $0.spotId == nil || ids.contains($0.spotId!) }
+            for s in server where !list.contains(where: { $0.spotId == s.id }) {
+                var loc = BusinessLocation(name: s.name, lat: s.lat, lng: s.lng, spotId: s.id)
+                loc.noPlace = s.noPlace == true ? true : nil
+                list.append(loc)
+            }
+            if !list.isEmpty, !list.contains(where: \.isMain) { list[0].isMain = true }
+            b.locations = list.isEmpty ? nil : list
+        }
+    }
+
+    /// Solo una vez por negocio: si el dueño quita la ubicación, no vuelve sola.
+    private var ownPlaceKey: String { "ownPlaceSearched.\(businessId)" }
+
+    private func findOwnPlace() async {
+        guard !UserDefaults.standard.bool(forKey: ownPlaceKey) else { return }
+        guard locationId == nil, locations.isEmpty, let name = biz?.name, !name.isEmpty else { return }
+        UserDefaults.standard.set(true, forKey: ownPlaceKey)
+        guard
+              let found = try? await APIClient.shared.searchCuratedSpots(query: name),
+              let spot = found.first(where: { $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }),
+              let lat = spot.lat, let lng = spot.lng else { return }
+        update { b in
+            guard (b.locations ?? []).isEmpty else { return }
+            b.locations = [BusinessLocation(name: spot.name, lat: lat, lng: lng, spotId: spot.id, isMain: true)]
+        }
+        dlog("🏪 [Locations] lugar propio encontrado: \(spot.name)")
+    }
+
+    /// Con lugar de Buddy: el mapa y su panel, como en Inicio. Sin él: la sede.
+    private func placeRoute(_ loc: BusinessLocation) -> BusinessPlaceRoute? {
+        guard let spotId = loc.spotId else { return nil }
+        return BusinessPlaceRoute(businessId: businessId, locationId: loc.id, spotId: spotId,
+                                  destinationId: spotDestinations[spotId], name: loc.name, lat: loc.lat, lng: loc.lng,
+                                  noPlace: loc.noPlace == true)
+    }
+
+    private func locationCard(_ loc: BusinessLocation) -> some View {
+        let c = placeCard(for: loc)
+        // id con la portada: al llegar la foto la tarjeta se vuelve a pintar.
+        return HomePlaceCard(card: c, large: false).id(c.coverUrl ?? loc.id)
+    }
+
+    private func placeCard(for loc: BusinessLocation) -> APIPlaceCard {
+        // Misma regla que Inicio: la foto del dueño primero, luego la última visita.
+        let cover = loc.spotId.flatMap { ownerPhotos.cover($0) ?? feedCovers[$0] }
+            ?? (loc.photoFiles ?? []).first.map { BusinessMedia.url($0).absoluteString }
+        var card = APIPlaceCard(id: loc.id, name: loc.name, destinationId: nil, destinationName: nil,
+                            lat: loc.lat, lng: loc.lng, distanceMeters: nil,
+                            coverUrl: cover, coverUrls: nil, coverPhotos: nil,
+                            coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+                            category: realCategory, photoCount: (loc.photoFiles ?? []).count,
+                            isNew: false, buddyCount: 0, buddies: [])
+        // Sin local: el mismo chip "A domicilio" que ve el visitante en Inicio.
+        if loc.noPlace == true { card.delivers = true; card.noPlace = true }
+        return card
+    }
+
+    private var ghostCard: APIPlaceCard {
+        APIPlaceCard(id: "ghost", name: biz?.name ?? "", destinationId: nil, destinationName: nil,
+                     lat: 0, lng: 0, distanceMeters: nil, coverUrl: nil, coverUrls: nil, coverPhotos: nil,
+                     coverAuthorName: nil, coverAuthorAvatarUrl: nil, category: realCategory,
+                     photoCount: 0, isNew: false, buddyCount: 0, buddies: [])
+    }
+
+    /// Solo una categoría real del catálogo; "Cuenta negocio" no lo es.
+    private var realCategory: String? {
+        guard let b = biz, !b.isLinkedAccount, b.category != "Cuenta negocio" else { return nil }
+        return b.category
+    }
+
     @ViewBuilder
     private var locationsContent: some View {
-        VStack(spacing: 0) {
-            ForEach(locations) { loc in
-                HStack(spacing: 12) {
-                    NavigationLink(value: BusinessLocationRoute(businessId: businessId, locationId: loc.id)) {
-                    HStack(spacing: 12) {
-                    LocationPin(size: 18)
-                        .frame(width: 40, height: 40)
-                        .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 10))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(loc.name).font(BT.footnoteBold).foregroundStyle(Color.ink).lineLimit(2)
-                        if loc.isMain {
-                            Text("Principal").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.brand)
-                                .padding(.horizontal, 8).padding(.vertical, 2).background(Color.sageTint, in: Capsule())
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(locations.sorted { $0.isMain && !$1.isMain }) { loc in
+                        Group {
+                            if let r = placeRoute(loc) {
+                                NavigationLink(value: r) { locationCard(loc) }
+                            } else {
+                                NavigationLink(value: BusinessLocationRoute(businessId: businessId, locationId: loc.id)) { locationCard(loc) }
+                            }
                         }
-                        Text([loc.address, loc.spotId != nil ? (isLinked ? "Lugar en Buddy · tus productos se ven aquí" : "Reclamado · por verificar") : "Lugar nuevo · por revisar"].compactMap { $0 }.joined(separator: " · "))
-                            .font(BT.caption1).foregroundStyle(Color.inkMuted).lineLimit(2)
-                        // Lo que falta en esta sede.
-                        Text(loc.hours.map { HoursSummary.text($0) } ?? "Sin horario")
-                            .font(BT.caption1).foregroundStyle(loc.hours == nil ? Color.inkMuted : Color.brand).lineLimit(2)
-                        Text("\((loc.photoFiles ?? []).count) fotos · \((loc.videoFiles ?? []).count) videos · Toca para editar")
-                            .font(BT.caption1).foregroundStyle(Color.inkMuted)
-                    }
-                    .multilineTextAlignment(.leading)
-                    Spacer(minLength: 4)
-                    }
-                    .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    Menu {
-                        if !loc.isMain {
-                            Button { setMain(loc.id) } label: { Label("Hacer principal", systemImage: "star") }
+                        .buttonStyle(.pressable)
+                        .contextMenu {
+                            if !loc.isMain {
+                                Button { setMain(loc.id) } label: { Label("Hacer principal", systemImage: "star") }
+                            }
+                            Button(role: .destructive) { removeLocation(loc.id) } label: { Label("Quitar ubicación", systemImage: "trash") }
                         }
-                        Button(role: .destructive) { removeLocation(loc.id) } label: { Label("Quitar ubicación", systemImage: "trash") }
-                    } label: {
-                        Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.brand)
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                        .accessibilityHint("Abre su horario y fotos. Mantén presionado para más opciones.")
                     }
-                    .accessibilityLabel("Opciones de \(loc.name)")
+                    if locations.isEmpty {
+                        // Sin sedes: la tarjeta de Inicio de tu negocio, apagada, con un "+".
+                        // Así se ve que aparecerás en Inicio, sin palabras extra.
+                        Button { showLocationPicker = true } label: {
+                            HomePlaceCard(card: ghostCard, large: false)
+                                .opacity(0.5)
+                                .overlay {
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 22, weight: .semibold)).foregroundStyle(Color.white)
+                                        .frame(width: 52, height: 52).background(Color.brand, in: Circle())
+                                        .offset(y: -18)
+                                }
+                        }
+                        .buttonStyle(.pressable)
+                        .accessibilityLabel("Agregar ubicación")
+                    } else {
+                    // Agregar otra: la misma forma de tarjeta, vacía, con un "+".
+                    Button { showLocationPicker = true } label: {
+                        VStack(spacing: 0) {
+                            ZStack {
+                                Color.surface
+                                Image(systemName: "plus")
+                                    .font(.system(size: 22, weight: .semibold)).foregroundStyle(Color.brand)
+                                    .frame(width: 48, height: 48).background(Color.sageTint, in: Circle())
+                            }
+                            .frame(width: 168, height: 126)
+                            HStack {
+                                LocationPin(size: 13)
+                                Text(biz?.name ?? "").font(BT.headline).foregroundStyle(Color.inkMuted).lineLimit(1)
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .frame(width: 168, alignment: .leading)
+                        }
+                        .background(Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color.sage, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+                    }
+                    .buttonStyle(.pressable)
+                    .accessibilityLabel("Agregar otra ubicación")
+                    }
                 }
-                .padding(.vertical, 6)
-                Divider().overlay(Color.hairline)
+                .padding(.vertical, 4)
             }
-            Button { showLocationPicker = true } label: {
-                Label(locations.isEmpty ? "Agregar ubicación" : "Agregar otra ubicación", systemImage: "plus")
-                    .font(BT.footnoteBold).foregroundStyle(Color.brand)
-                    .frame(maxWidth: .infinity).frame(height: 44).background(Color.sageTint, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 10)
             if let claimError {
                 Text(claimError).font(BT.caption1).foregroundStyle(Color.errorRed)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
             }
-            Text("Si tu negocio ya está en Buddy, elígelo y será tuyo. Si tienes varias sedes, agrégalas todas.")
-                .font(BT.caption1).foregroundStyle(Color.inkMuted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 8)
         }
     }
 
@@ -3841,6 +4411,8 @@ struct BusinessProfileEditor: View {
             do {
                 try await APIClient.shared.claimFincasSpot(spotId: spotId, farmId: businessId)
             } catch {
+                // Pedido cancelado (la pantalla se volvió a cargar): no es un rechazo.
+                if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled { return }
                 dlog("🏪 [Claim] \(spotId.prefix(8)) \(error)")
                 await MainActor.run { claimError = "No pudimos confirmar \(loc.name) como tuyo. Si ya pertenece a otro negocio, escríbenos." }
             }
@@ -3855,8 +4427,16 @@ struct BusinessProfileEditor: View {
     }
 
     private func removeLocation(_ id: String) {
+        UserDefaults.standard.set(true, forKey: ownPlaceKey)
         if isLinked, let spotId = locations.first(where: { $0.id == id })?.spotId {
-            Task { try? await APIClient.shared.releaseFincasSpot(spotId: spotId, farmId: businessId) }
+            Task {
+                do {
+                    try await APIClient.shared.releaseFincasSpot(spotId: spotId, farmId: businessId)
+                    refreshInicioAfterOwnerChange("ubicación")
+                } catch {
+                    dlog("🏪 [Locations] no se pudo soltar \(spotId): \(error)")
+                }
+            }
         }
         update { b in
             var list = b.locations ?? []
@@ -3889,7 +4469,7 @@ struct BusinessProfileEditor: View {
                     .frame(width: 34, height: 34).background(Color.paleSage, in: RoundedRectangle(cornerRadius: 10))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title).font(BT.headline).foregroundStyle(Color.ink)
-                        Text(summary).font(BT.footnote).foregroundStyle(Color.inkMuted)
+                        if !summary.isEmpty { Text(summary).font(BT.footnote).foregroundStyle(Color.inkMuted) }
                     }
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.down")
@@ -3934,6 +4514,90 @@ struct BusinessProfileEditor: View {
 
     private let maxAbout = 300
 
+    // MARK: Categoría (Keyla, 22 Nov 2026): la misma cuadrícula de "Agrega tu
+    // negocio"; una principal y hasta 2 adicionales, en todos los lugares.
+    @State private var catalog: [APISpotCategory] = []
+    @State private var mainCategory: String?
+    @State private var extraCategories: [String] = []
+    /// Lo guardado en el servidor: lo elegido solo cuenta al tocar "Guardar cambios"
+    /// (una sola acción de guardar por sección, regla de diseño).
+    @State private var savedMain: String?
+    @State private var savedExtra: [String] = []
+    @State private var categoriesLoaded = false
+    @State private var categoryError: String?
+    @State private var showAllCategories = false
+
+    private var categoriesChanged: Bool { mainCategory != savedMain || extraCategories != savedExtra }
+
+    private var categoryCard: some View {
+        subsection("Categoría", icon: "square.grid.2x2") {
+            if catalog.isEmpty {
+                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12)
+            } else {
+                // Combo común (como "unidad" en productos): principal + hasta 2 más.
+                categoryCombo("Principal", selection: mainCategory, allowNone: false) { id in
+                    mainCategory = id
+                    extraCategories.removeAll { $0 == id }
+                }
+                ForEach(0..<2, id: \.self) { i in
+                    if i == 0 || extraCategories.count >= 1 {
+                        categoryCombo("Otra (opcional)", selection: i < extraCategories.count ? extraCategories[i] : nil, allowNone: true) { id in
+                            var list = extraCategories
+                            if let id {
+                                if i < list.count { list[i] = id } else { list.append(id) }
+                            } else if i < list.count { list.remove(at: i) }
+                            var seen = Set<String>()
+                            extraCategories = list.filter { $0 != mainCategory && seen.insert($0).inserted }
+                        }
+                    }
+                }
+            }
+            if let categoryError { Text(categoryError).font(BT.caption1).foregroundStyle(Color.errorRed) }
+        }
+        .task {
+            guard !categoriesLoaded else { return }
+            categoriesLoaded = true
+            async let c = try? await APIClient.shared.fetchSpotCategories()
+            async let f = try? await APIClient.shared.fetchFarmCategories(farmId: businessId)
+            let (cats, farm) = await (c, f)
+            catalog = cats ?? []
+            savedMain = farm?.main; savedExtra = farm?.secondary ?? []
+            mainCategory = savedMain; extraCategories = savedExtra
+        }
+    }
+
+    private func categoryCombo(_ label: String, selection: String?, allowNone: Bool, onPick: @escaping (String?) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(BT.caption1).foregroundStyle(Color.inkMuted)
+            Menu {
+                if allowNone { Button("Ninguna") { onPick(nil) } }
+                ForEach(catalog.filter { !allowNone || $0.id != mainCategory }, id: \.id) { c in Button(c.name) { onPick(c.id) } }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(catalog.first { $0.id == selection }?.name ?? "Elegir")
+                        .foregroundStyle(selection == nil ? Color.inkMuted : Color.ink)
+                    Spacer()
+                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.brand)
+                }
+                .font(BT.callout).padding(.horizontal, 12).frame(height: 44)
+                .background(Color.canvas, in: Capsule())
+            }
+        }
+    }
+
+    private func saveCategories() async {
+        guard categoriesChanged, let main = mainCategory else { return }
+        do {
+            try await APIClient.shared.setFarmCategories(farmId: businessId, main: main, secondary: extraCategories)
+            savedMain = main; savedExtra = extraCategories
+            categoryError = nil
+            showAllCategories = false
+            refreshInicioAfterOwnerChange("categoría")
+        } catch {
+            categoryError = "No pudimos guardar la categoría. Intenta de nuevo."
+        }
+    }
+
     private var aboutCard: some View {
         return subsection("Descripción", icon: "text.alignleft") {
             ZStack(alignment: .topLeading) {
@@ -3963,6 +4627,7 @@ struct BusinessProfileEditor: View {
     private var generalChanged: Bool {
         aboutText.trimmingCharacters(in: .whitespacesAndNewlines) != (biz?.about ?? "")
             || contactText.trimmingCharacters(in: .whitespaces) != (biz?.contact ?? "")
+            || categoriesChanged
     }
 
     @ViewBuilder
@@ -3972,6 +4637,8 @@ struct BusinessProfileEditor: View {
                 Button {
                     aboutText = biz?.about ?? ""
                     contactText = biz?.contact ?? ""
+                    mainCategory = savedMain; extraCategories = savedExtra
+                    showAllCategories = false
                     aboutFocused = false
                 } label: {
                     Text("Cancelar").font(BT.footnoteBold).foregroundStyle(Color.brand)
@@ -3981,6 +4648,7 @@ struct BusinessProfileEditor: View {
                     let about = aboutText.trimmingCharacters(in: .whitespacesAndNewlines)
                     let contact = contactText.trimmingCharacters(in: .whitespaces)
                     update { $0.about = about.isEmpty ? nil : about; $0.contact = contact }
+                    Task { await saveCategories() }
                     aboutText = about; contactText = contact
                     aboutFocused = false
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -4305,7 +4973,7 @@ struct PresPhotoPicker: View {
                 Text("Foto").font(BT.caption1)
             }
             .foregroundStyle(Color.brand)
-            .frame(width: 64, height: 64)
+            .frame(width: 96, height: 96)
             .background(Color.sageTint, in: RoundedRectangle(cornerRadius: 12))
         }
         .onChange(of: item) { _, new in
@@ -4317,4 +4985,51 @@ struct PresPhotoPicker: View {
         }
         .accessibilityLabel("Agregar foto")
     }
+}
+
+/// ¿Se parecen dos nombres? Comparte una palabra de 3+ letras, sin tildes ni
+/// palabras comunes ("Café Rosal" ~ "Finca Rosal").
+enum NameMatch {
+    private static let common: Set<String> = ["del", "las", "los", "the", "buddy", "prueba", "usar", "san", "santa"]
+    static func words(_ s: String) -> Set<String> {
+        Set(s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .init(identifier: "es"))
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 3 && !common.contains($0) })
+    }
+    static func similar(_ a: String, _ b: String) -> Bool {
+        !words(a).isDisjoint(with: words(b))
+    }
+}
+
+/// El botón de volver de toda la app: círculo con chevron, como el detalle de un
+/// lugar (Keyla, 21 Nov 2026: "el mismo botón en toda la app").
+struct CircleBackButton: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 16, weight: .bold))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(GlassCircleButtonStyle())
+        .accessibilityLabel("Atrás")
+    }
+}
+
+/// Lo mismo dentro de una barra de navegación: solo el chevron (iOS lo pinta en círculo).
+struct ToolbarBackButton: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left").font(.system(size: 16, weight: .bold))
+        }
+        .accessibilityLabel("Atrás")
+    }
+}
+
+extension APIPlaceVisit {
+    /// Primera foto de la visita (la portada del feed): la lista con páginas si
+    /// el servidor la manda, si no la lista simple.
+    var coverPhoto: String? { photoPages?.first?.url ?? photos.first }
 }

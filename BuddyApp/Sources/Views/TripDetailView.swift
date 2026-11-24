@@ -119,6 +119,20 @@ struct TripDetailView: View {
     private func refreshOrder() { orderedIds = sortedPlaces.map(\.id) }
 
     private func loadRouteContext() async {
+        // PRIMERO (Keyla, 23 Nov 2026: tardaba 1-2 s): antes esperaba favoritos y
+        // el conteo de buddies de la red antes de mostrar el lugar.
+        // Foco explícito (se abrió este mapa desde la tarjeta de UN lugar):
+        // seleccionarlo y centrar ahí en vez de esperar el fitMap() genérico,
+        // que encuadraría TODOS los pines del destino.
+        if let focusPlaceId, let match = livePlaces.first(where: { $0.id.uuidString.caseInsensitiveCompare(focusPlaceId) == .orderedSame }) {
+            await MainActor.run {
+                withAnimation(.easeInOut) { selectedPlace = match }
+                focusCamera(on: match)
+            }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { fitMap() }
+        }
+
         if let jid = journey?.id { await routeStore.loadFavorites(journeyId: jid) }
         await MainActor.run { refreshOrder() }
 
@@ -130,23 +144,6 @@ struct TripDetailView: View {
             if let ctx = try? await APIClient.shared.fetchDestinationContext(id: destId) {
                 await MainActor.run { buddyCount = ctx.buddies }
             }
-        }
-
-        // Foco explícito (se abrió este mapa desde la tarjeta de UN lugar):
-        // seleccionarlo y centrar ahí en vez de esperar el fitMap() genérico,
-        // que encuadraría TODOS los pines del destino.
-        if let focusPlaceId, let match = livePlaces.first(where: { $0.id.uuidString.caseInsensitiveCompare(focusPlaceId) == .orderedSame }) {
-            await MainActor.run {
-                withAnimation(.easeInOut) { selectedPlace = match }
-                withAnimation(.easeInOut(duration: 0.6)) {
-                    camera = .region(MKCoordinateRegion(
-                        center: CLLocationCoordinate2D(latitude: match.latitude, longitude: match.longitude),
-                        span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
-                    ))
-                }
-            }
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { fitMap() }
         }
 
         // Deep-link desde chat: seleccionar lugar sugerido por el buddy
@@ -194,13 +191,13 @@ struct TripDetailView: View {
 
     /// Alto del panel con la lista: título + carril de tarjetas, sin franja
     /// vacía debajo (antes 265 dejaba un hueco blanco al cerrar un lugar).
-    private let sheetHeight: CGFloat = 210
+    private let sheetHeight: CGFloat = 238
     /// Alto del panel con el detalle de un lugar. Menos que sheetHeight porque
     /// ahí no hay tarjetas: nombre, presencia, pestañas y una fila de fotos.
     /// Es el alto de ese contenido, medido en pantalla; las pestañas más largas
     /// (Info, Buddies) se desplazan por dentro, como ya hacían.
-    private let detalleHeight: CGFloat = 246
-    private let contentHeight: CGFloat = 160
+    private let detalleHeight: CGFloat = PlaceGuideDetailSheet.minHeight
+    private let contentHeight: CGFloat = 188
     /// La tab bar vuelve a FLOTAR sobre el contenido (cápsula, 19 Nov 2026):
     /// el panel se extiende por debajo de ella para que las fotos queden por
     /// encima de la cápsula y no tapadas.
@@ -214,6 +211,7 @@ struct TripDetailView: View {
     /// "mi ubicación", que debe quedar siempre por encima del panel.
     private var panelHeight: CGFloat {
         if detailExpanded && selectedPlace != nil { return expandedHeight }
+        if listExpanded && selectedPlace == nil { return expandedHeight }
         return (selectedPlace != nil || (focusPlaceId != nil && !focusHandled)
             ? detalleHeight : sheetHeight) + bottomClearance
     }
@@ -221,6 +219,14 @@ struct TripDetailView: View {
     /// Detalle de un lugar a pantalla casi completa (Keyla, 20 Nov 2026): se
     /// jala hacia arriba y tapa el mapa; hacia abajo vuelve al alto normal.
     @State private var detailExpanded = false
+    /// La lista "Lugares en esta zona" también se abre a pantalla completa
+    /// (Keyla, 23 Nov 2026), igual que el detalle con sus productos.
+    @State private var listExpanded = false
+    @State private var listDraggedAt: Date? = nil
+    @State private var listTopY: CGFloat = 0
+    @State private var listDragAtTop: Bool? = nil
+    @State private var listVerticalDrag = false
+    private var listJustDragged: Bool { listDraggedAt.map { Date().timeIntervalSince($0) < 0.4 } ?? false }
     @State private var dragOffset: CGFloat = 0
     private var expandedHeight: CGFloat {
         let top = UIApplication.shared.connectedScenes
@@ -235,25 +241,35 @@ struct TripDetailView: View {
         Capsule().fill(Color.border).frame(width: 40, height: 5)
             .frame(maxWidth: .infinity).frame(height: 30)
             .contentShape(Rectangle())
-            .onTapGesture { withAnimation(.spring(duration: 0.3)) { detailExpanded.toggle() } }
+            .onTapGesture { withAnimation(Self.panelSpring) {
+                if selectedPlace == nil { listExpanded.toggle() } else { detailExpanded.toggle() }
+            } }
             .highPriorityGesture(panelDrag)
             .accessibilityLabel(detailExpanded ? "Mostrar el mapa" : "Ver todo el lugar")
             .accessibilityAddTraits(.isButton)
     }
 
+    /// Resorte del panel (Keyla, 23 Nov 2026: "más suave"). Mismo en toda la app.
+    static let panelSpring = Animation.spring(response: 0.26, dampingFraction: 0.92)
+
     private var panelDrag: some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { v in dragOffset = v.translation.height }
-            .onEnded { v in
-                let dy = v.predictedEndTranslation.height
-                withAnimation(.spring(duration: 0.3)) {
-                    if dy < -60 { detailExpanded = true }
-                    else if dy > 60 {
-                        detailExpanded = false
-                    }
-                    dragOffset = 0
-                }
+            .onEnded { v in endPanelDrag(v.predictedEndTranslation.height) }
+    }
+
+    private func endPanelDrag(_ predicted: CGFloat) {
+        // Más sensible: basta un deslizar corto hacia arriba o abajo.
+        withAnimation(Self.panelSpring) {
+            if selectedPlace == nil {
+                if predicted < -30 { listExpanded = true }
+                else if predicted > 30 { listExpanded = false }
+            } else {
+                if predicted < -30 { detailExpanded = true }
+                else if predicted > 30 { detailExpanded = false }
             }
+            dragOffset = 0
+        }
     }
 
     var body: some View {
@@ -267,6 +283,19 @@ struct TripDetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                 bottomSection(geo: geo)
+                    // Deslizar a la derecha sobre el panel de información vuelve
+                    // atrás, como en el resto de la app (Keyla, 21 Nov 2026). Con
+                    // .gesture (no simultáneo) las filas de fotos que se desplazan
+                    // de lado siguen moviéndose sin volver.
+                    .gesture(
+                        DragGesture(minimumDistance: 25)
+                            .onEnded { v in
+                                let w = v.translation.width, h = v.translation.height
+                                if w > 90, w > abs(h) * 2 || v.predictedEndTranslation.width > 220 && w > abs(h) * 2 {
+                                    Haptic.light(); dismiss()
+                                }
+                            }
+                    )
             }
             .ignoresSafeArea(edges: .top)
         }
@@ -401,8 +430,8 @@ struct TripDetailView: View {
             .padding(.trailing, 16)
             .padding(.bottom, panelHeight + 52)
             // Con el detalle abierto a pantalla completa no hay mapa que ubicar.
-            .opacity(detailExpanded && selectedPlace != nil ? 0 : 1)
-            .animation(.easeInOut(duration: 0.25), value: panelHeight)
+            .opacity(panelHeight == expandedHeight ? 0 : 1)
+            .animation(Self.panelSpring, value: panelHeight)
         }
     }
 
@@ -575,9 +604,17 @@ struct TripDetailView: View {
                     },
                     onNavigate: { navigationTarget = place },
                     onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = nil; detailExpanded = false } },
-                    expanded: detailExpanded
+                    expanded: detailExpanded,
+                    // Sin X (Keyla, 23 Nov 2026): la pantalla ya tiene su botón de
+                    // volver arriba; un solo cierre. Tocar el pin de nuevo lo suelta.
+                    showsClose: false,
+                    onPanelDrag: { dragOffset = $0 },
+                    onPanelDragEnd: { endPanelDrag($0) }
                 )
             } else {
+            grabber
+                .padding(.bottom, -14)
+            VStack(spacing: 0) {
             // Presencia humana — el corazón de Buddy, antes que los lugares
             if HomeRowsView.showsBuddyTools, let presence = buddyPresenceText {
                 HStack(spacing: 7) {
@@ -693,7 +730,17 @@ struct TripDetailView: View {
                 .padding(.bottom, 10)
             }
 
-            cardScroll
+            }
+            // Todo el encabezado mueve el panel, como en el detalle del lugar.
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                .onChanged { v in
+                    listDraggedAt = Date()
+                    dragOffset = v.translation.height
+                }
+                .onEnded { v in listDraggedAt = Date(); endPanelDrag(v.predictedEndTranslation.height) })
+
+            if listExpanded { placesGrid } else { cardScroll }
             }
         }
         // Glass más alto: el contenido (top-aligned) sube sobre la tab bar y el
@@ -711,7 +758,8 @@ struct TripDetailView: View {
         .frame(
             width: geo.size.width,
             // Mientras se jala, el panel sigue al dedo (sin pasarse de los topes).
-            height: selectedPlace == nil ? panelHeight
+            height: selectedPlace == nil
+                ? min(expandedHeight, max(sheetHeight + bottomClearance, panelHeight - dragOffset))
                 : min(expandedHeight, max(detalleHeight + bottomClearance, panelHeight - dragOffset)),
             alignment: .top,
         )
@@ -726,45 +774,109 @@ struct TripDetailView: View {
         )
         .animation(.easeInOut(duration: 0.25), value: selectedPlace?.id)
         .onChange(of: selectedPlace?.id) { _, id in
-            if id != nil { focusHandled = true } else { detailExpanded = false }
+            if id != nil { focusHandled = true; listExpanded = false } else { detailExpanded = false }
         }
     }
 
     // MARK: – Card scroll
 
     private var cardScroll: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            // Lazy → el onAppear de "Ver más" solo dispara al deslizar hasta el final
-            LazyHStack(spacing: 10) {
-                ForEach(Array(displayedPlaces.enumerated()), id: \.element.id) { i, place in
-                    Button {
-                        Haptic.select()
-                        withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = place }
-                        withAnimation(.easeInOut(duration: 0.5)) {
-                            camera = .region(MKCoordinateRegion(
-                                center: place.coordinate,
-                                span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
-                            ))
-                        }
-                    } label: {
-                        PlacePhotoCard(place: place, index: i,
-                                       isFavorite: isFav(place),
-                                       onToggleFavorite: {
-                                           if let jid = journey?.id {
-                                               routeStore.toggleFavorite(placeId: place.id, journeyId: jid)
-                                           }
-                                       })
-                    }
+        // Cerrado: solo dos tarjetas fijas, sin fila que se mueva de lado
+        // (Keyla, 23 Nov 2026: "para evitar movimientos raros"). Las demás se
+        // ven deslizando el panel hacia arriba.
+        HStack(spacing: 10) {
+            ForEach(Array(orderedPlaces.prefix(2).enumerated()), id: \.element.id) { i, place in
+                Button { selectPlace(place) } label: { placeCard(place, i) }
                     .buttonStyle(.pressable)
-                }
-
-                // Al deslizar hasta aquí se revelan los siguientes 10 (rail + mapa)
-                if hasMorePlaces { loadMoreCard }
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 4)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 4)
         .frame(height: contentHeight)
+        .contentShape(Rectangle())
+        // Cerrado: deslizar hacia arriba sobre las tarjetas abre el panel;
+        // la fila no se mueve de lado mientras tanto.
+        .simultaneousGesture(DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .onChanged { v in
+                guard abs(v.translation.height) > abs(v.translation.width) * 1.3 else { return }
+                if abs(v.translation.height) > 6 { listVerticalDrag = true }
+                if abs(v.translation.height) > 8 { listDraggedAt = Date() }
+                dragOffset = v.translation.height
+            }
+            .onEnded { v in
+                let vertical = listVerticalDrag
+                listVerticalDrag = false
+                if abs(v.translation.height) > 8 { listDraggedAt = Date() }
+                guard vertical else { withAnimation(Self.panelSpring) { dragOffset = 0 }; return }
+                endPanelDrag(v.predictedEndTranslation.height)
+            })
+    }
+
+    private func selectPlace(_ place: Place) {
+        guard !listJustDragged else { return }
+        Haptic.select()
+        withAnimation(Self.panelSpring) { listExpanded = false }
+        withAnimation(.easeInOut(duration: 0.2)) { selectedPlace = place }
+        withAnimation(.easeInOut(duration: 0.5)) {
+            camera = .region(MKCoordinateRegion(
+                center: place.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
+            ))
+        }
+    }
+
+    private func placeCard(_ place: Place, _ i: Int) -> some View {
+        PlacePhotoCard(place: place, index: i,
+                       isFavorite: isFav(place),
+                       onToggleFavorite: {
+                           if let jid = journey?.id {
+                               routeStore.toggleFavorite(placeId: place.id, journeyId: jid)
+                           }
+                       })
+    }
+
+    /// Abierta: todos los lugares en cuadrícula, con el mismo tamaño de tarjeta
+    /// que en la fila. Arriba del todo, jalar hacia abajo la cierra.
+    private var placesGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(PlacePhotoCard.width), spacing: 10, alignment: .top), count: 2),
+                      spacing: 12) {
+                ForEach(Array(orderedPlaces.enumerated()), id: \.element.id) { i, place in
+                    Button { selectPlace(place) } label: { placeCard(place, i) }
+                        .buttonStyle(.pressable)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.bottom, bottomClearance + 40)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("placesGrid")).minY } action: { listTopY = $0 }
+            // Sin rebote arriba (Keyla, 23 Nov 2026): si el contenido se estira
+            // hacia abajo, se queda en su sitio; lo que se mueve es el panel.
+            .visualEffect { content, proxy in
+                content.offset(y: -max(0, proxy.frame(in: .named("placesGrid")).minY))
+            }
+        }
+        .coordinateSpace(name: "placesGrid")
+        .scrollBounceBehavior(.basedOnSize)
+        .simultaneousGesture(DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .onChanged { v in
+                if listDragAtTop == nil { listDragAtTop = listTopY >= -2 }
+                if abs(v.translation.height) > 8 { listDraggedAt = Date() }
+                // Arriba del todo y jalando hacia abajo: el panel sigue al dedo
+                // en vez de rebotar el contenido (Keyla, 23 Nov 2026).
+                if listDragAtTop == true { dragOffset = max(0, v.translation.height) }
+            }
+            .onEnded { v in
+                let atTop = listDragAtTop ?? true
+                listDragAtTop = nil
+                if abs(v.translation.height) > 8 { listDraggedAt = Date() }
+                if atTop, v.translation.height > 0 {
+                    endPanelDrag(v.predictedEndTranslation.height)
+                } else if dragOffset != 0 {
+                    withAnimation(Self.panelSpring) { dragOffset = 0 }
+                }
+            })
     }
 
     private var loadMoreCard: some View {
@@ -890,6 +1002,21 @@ struct TripDetailView: View {
             center: CLLocationCoordinate2D(latitude: centerLat, longitude: (minLon + maxLon) / 2),
             span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lonDelta)
         ))
+    }
+
+    /// Centra el lugar en la parte VISIBLE del mapa, sobre el panel. Solo al
+    /// abrirlo desde Inicio (Keyla, 23 Nov 2026: "just the first time").
+    private func focusCamera(on place: Place, span: Double = 0.008) {
+        let screenH = UIScreen.main.bounds.height
+        let panelH = detalleHeight + bottomClearance
+        // El centro del mapa baja la mitad del panel: el pin sube a la mitad del hueco libre.
+        let shift = span * (panelH / screenH) / 2
+        withAnimation(.easeInOut(duration: 0.6)) {
+            camera = .region(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: place.latitude - shift, longitude: place.longitude),
+                span: MKCoordinateSpan(latitudeDelta: span, longitudeDelta: span)
+            ))
+        }
     }
 
     // The location button — centers on user's physical position
@@ -1040,6 +1167,8 @@ struct PlacePhotoCard: View {
     let index: Int
     var isFavorite: Bool = false
     var onToggleFavorite: () -> Void = {}
+    /// Dos tarjetas llenan el ancho de la pantalla (Keyla, 23 Nov 2026).
+    static var width: CGFloat { floor((UIScreen.main.bounds.width - 40 - 10) / 2) }
 
     /// La foto sube de 90 a 115: sin la línea de "Por visitar" la tarjeta media
     /// menos que el alto del carril (160) y quedaba una franja vacía debajo del
@@ -1061,7 +1190,7 @@ struct PlacePhotoCard: View {
             CachedImage(urlString: place.coverUrl) { img in
                 img.resizable().scaledToFill()
             } placeholder: { Color.groupedBg }
-            .frame(width: 150, height: 112)
+            .frame(width: Self.width, height: 140)
             .clipped()
 
             VStack(alignment: .leading, spacing: 3) {
@@ -1084,7 +1213,7 @@ struct PlacePhotoCard: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .frame(width: 150, alignment: .leading)
+            .frame(width: Self.width, alignment: .leading)
         }
         .background(Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
@@ -1149,6 +1278,35 @@ struct PlaceGuideDetailSheet: View {
     let onClose: () -> Void
     /// Panel jalado hacia arriba: las fotos se ven en cuadrícula, no en carrusel.
     var expanded: Bool = false
+    /// Mismo panel para elegir la ubicación de un negocio (Keyla, 21 Nov 2026):
+    /// abre en Fotos y el botón principal dice "Es mi negocio".
+    var actionTitle: String = "Cómo llegar"
+    var actionIcon: String = "arrow.triangle.turn.up.right.circle"
+    var startOnPhotos: Bool = false
+    /// Negocio sin local: el botón verde abre el chat con el negocio en vez de la ruta.
+    var actionOpensChat: Bool = false
+    /// Pantalla completa con su propio botón de volver: sin la X (un solo cierre).
+    var showsClose: Bool = true
+    /// Arrastre del panel desde su parte fija (nombre, categoría, pestañas), no solo
+    /// desde la barrita (Keyla, 23 Nov 2026). Lo usa cada pantalla con mapa.
+    var onPanelDrag: ((CGFloat) -> Void)? = nil
+    @State private var pullClosing = false
+    @State private var verticalPanelDrag = false
+    /// Un deslizar que empieza sobre una pestaña o "Cómo llegar" mueve el panel y
+    /// NO toca el botón (Keyla, 23 Nov 2026: "it opens that section").
+    @State private var panelDraggedAt: Date = .distantPast
+    private var justDragged: Bool { Date().timeIntervalSince(panelDraggedAt) < 0.4 }
+    @State private var contentTopY: CGFloat = 0
+    @State private var dragStartedAtTop: Bool? = nil
+    var onPanelDragEnd: ((CGFloat) -> Void)? = nil
+    /// Alto mínimo del detalle en el mapa: igual en todas las pestañas.
+    static let minHeight: CGFloat = 258
+    /// El dueño viendo SU lugar desde Mi negocio: mismo panel, con lo editable.
+    @Environment(\.businessEdit) private var businessEdit
+    private var editCtx: BusinessEditContext? {
+        guard let e = businessEdit, e.spotId.lowercased() == place.id.uuidString.lowercased() else { return nil }
+        return e
+    }
 
     private enum Tab: String, CaseIterable {
         case productos = "Productos", info = "Información", fotos = "Fotos", buddies = "Buddies"
@@ -1166,6 +1324,8 @@ struct PlaceGuideDetailSheet: View {
     @State private var tab: Tab = .productos
     @State private var userPickedTab = false
     @State private var products: [FincasProduct] = []
+    @State private var productToRemove: FincasProduct? = nil
+    @State private var productRemoveError: String? = nil
     @State private var productsState: ProductsState = .idle
     private enum ProductsState { case idle, loading, loaded, notLinked, failed }
 
@@ -1176,6 +1336,9 @@ struct PlaceGuideDetailSheet: View {
     @State private var showFullGallery = false
     /// La foto con la que se abrió el visor a pantalla completa.
     @State private var visorFoto: VisorFotoInicio? = nil
+    @Namespace private var photoZoom
+    /// La foto que se ve: al cerrar vuelve a su miniatura (zoom nativo, iOS 18+).
+    @State private var zoomUrl: String? = nil
     /// Alto real del contenido de la pestaña abierta (ver el ScrollView).
     @State private var altoContenido: CGFloat = 0
 
@@ -1217,7 +1380,19 @@ struct PlaceGuideDetailSheet: View {
              + visits.filter { $0.travelerId != me }.flatMap(flatten)
     }
 
-    private var allPhotos: [String] { galleryPhotos.map(\.url) }
+    /// Fotos del dueño primero (la portada), luego las de los visitantes: así el
+    /// visor recorre todo en el mismo orden que la fila (Keyla, 22 Nov 2026).
+    @ObservedObject private var ownerStore = OwnerPhotoStore.shared
+    private var ownerUrls: [String] { ownerStore.photos(place.id.uuidString.lowercased()).map(\.url) }
+    private var allPhotos: [String] {
+        let gallery = galleryPhotos.map(\.url)
+        return ownerUrls + gallery.filter { !ownerUrls.contains($0) }
+    }
+    private func openPhoto(_ url: String) {
+        guard !justDragged else { return }
+        zoomUrl = url
+        visorFoto = VisorFotoInicio(indice: allPhotos.firstIndex(of: url) ?? 0)
+    }
 
     @State private var photoPendingDeletion: GalleryPhoto? = nil
     @State private var isDeletingPhoto = false
@@ -1241,24 +1416,27 @@ struct PlaceGuideDetailSheet: View {
         // Mismo espacio que ocupaba la lista de tarjetas (~265pt) — nada
         // aquí puede darse el lujo de respirar como en una hoja aparte.
         VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
             header
-            if let cat = place.categoryName {
-                HStack(spacing: 6) {
-                    Image(systemName: CategoryIcon.symbol(for: cat))
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.brand)
-                        .accessibilityHidden(true)
-                    Text(cat)
-                        .font(BT.caption1)
-                        .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 4)
-            }
 
             tabBar
                 .padding(.top, 14)
+            }
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 6, coordinateSpace: .global)
+                    .onChanged { v in
+                        // Solo vertical: un toque o un deslizar de lado no mueve el panel.
+                        guard abs(v.translation.height) > abs(v.translation.width) else { return }
+                        if abs(v.translation.height) > 8 { panelDraggedAt = Date() }
+                        onPanelDrag?(v.translation.height)
+                    }
+                    .onEnded { v in
+                        if abs(v.translation.height) > 8 { panelDraggedAt = Date() }
+                        onPanelDragEnd?(v.predictedEndTranslation.height)
+                    },
+                including: onPanelDrag == nil ? .subviews : .all
+            )
 
             ScrollView {
                 Group {
@@ -1273,7 +1451,54 @@ struct PlaceGuideDetailSheet: View {
                 // fotos, el panel se quedaba con el alto de la lista de
                 // lugares y abajo sobraba una franja vacía.
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { altoContenido = $0 }
+                // Traspaso contenido -> panel (Keyla, 23 Nov 2026, estilo Apple Maps):
+                // abierto y con el contenido arriba del todo, seguir jalando hacia
+                // abajo (el rebote pasa de 60 pt) cierra el panel.
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("panelScroll")).minY } action: { y in
+                    contentTopY = y
+                    guard expanded, onPanelDragEnd != nil, y > 60, !pullClosing else { return }
+                    pullClosing = true
+                    onPanelDragEnd?(200)
+                }
             }
+            .coordinateSpace(name: "panelScroll")
+            // Las fotos del dueño se cargan al abrir el panel (Keyla, 23 Nov 2026):
+            // antes solo las pedía la fila de fotos, que no se dibuja si no hay
+            // fotos de visitantes, y Fotos decía "Todavía no hay fotos".
+            .task(id: place.id) { await ownerStore.load(place.id.uuidString.lowercased()) }
+            .onChange(of: expanded) { _, _ in pullClosing = false }
+            // Cerrado: deslizar en vertical sobre los productos abre el panel
+            // (antes solo la barrita y el encabezado). Las filas horizontales
+            // siguen desplazándose de lado: solo cuenta un gesto vertical.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 10, coordinateSpace: .global)
+                    .onChanged { v in
+                        if dragStartedAtTop == nil { dragStartedAtTop = contentTopY >= -2 }
+                        guard !expanded, abs(v.translation.height) > abs(v.translation.width) * 1.3 else { return }
+                        if !verticalPanelDrag, abs(v.translation.height) > 6 { verticalPanelDrag = true }
+                        if abs(v.translation.height) > 8 { panelDraggedAt = Date() }
+                        onPanelDrag?(v.translation.height)
+                    }
+                    .onEnded { v in
+                        if verticalPanelDrag || abs(v.translation.height) > 8 { panelDraggedAt = Date() }
+                        verticalPanelDrag = false
+                        let atTop = dragStartedAtTop ?? true
+                        dragStartedAtTop = nil
+                        let vertical = abs(v.translation.height) > abs(v.translation.width) * 1.3
+                        if expanded {
+                            // Abierto: con el contenido ya arriba, jalar hacia abajo cierra.
+                            // Si estaba desplazado, el mismo gesto solo sube el contenido.
+                            if vertical, atTop, v.translation.height > 50, !pullClosing {
+                                pullClosing = true
+                                onPanelDragEnd?(max(200, v.predictedEndTranslation.height))
+                            }
+                            return
+                        }
+                        guard vertical else { onPanelDrag?(0); return }
+                        onPanelDragEnd?(v.predictedEndTranslation.height)
+                    },
+                including: onPanelDrag == nil ? .subviews : .all
+            )
             // maxHeight y no height: el scroll pide lo que ocupa su contenido,
             // pero si no entra (la pestaña Info con texto largo) se deja
             // comprimir por el tope del panel y desplaza por dentro.
@@ -1284,6 +1509,28 @@ struct PlaceGuideDetailSheet: View {
             // como una franja vacía debajo de las fotos.
             .contentMargins(.vertical, 0, for: .scrollContent)
             .scrollBounceBehavior(.basedOnSize)
+            // Cerrado, el contenido no se desplaza (Keyla, 23 Nov 2026): al deslizar
+            // hacia arriba la primera vez, la fila de productos subia detras de las
+            // pestanas mientras el panel abria. Cerrado, el gesto solo mueve el panel.
+            .scrollDisabled(!expanded && onPanelDrag != nil)
+            // El contenido primero; el espacio en blanco solo toma lo que sobra.
+            .layoutPriority(1)
+
+            // El espacio en blanco bajo el contenido también mueve el panel
+            // (Keyla, 23 Nov 2026: "make swipeable the blank space").
+            if onPanelDrag != nil {
+                Color.clear
+                    .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 6, coordinateSpace: .global)
+                            .onChanged { v in
+                                guard abs(v.translation.height) > abs(v.translation.width) else { return }
+                                onPanelDrag?(v.translation.height)
+                            }
+                            .onEnded { v in onPanelDragEnd?(v.predictedEndTranslation.height) }
+                    )
+            }
         }
         .padding(.top, 10)
         // id: place.id — sin esto, tocar OTRO pin sin cerrar el panel
@@ -1291,9 +1538,42 @@ struct PlaceGuideDetailSheet: View {
         // quedaban con las del lugar anterior: un .task sin id corre UNA sola
         // vez por instancia de vista, y bottomSection reusa la misma vista al
         // cambiar selectedPlace, así que nunca volvía a pedir la galería.
-        .task(id: place.id) { tab = .productos; await loadProducts() }
+        .task(id: place.id) { tab = startOnPhotos ? .fotos : .productos; await loadProducts() }
+        .navigationDestination(item: $ownerEditRoute) { r in FincasProductEditView(route: r) }
+        // Al guardar en el editor, las tarjetas muestran la foto y el precio nuevos.
+        .onReceive(NotificationCenter.default.publisher(for: .fincasProductsChanged)) { _ in
+            Task { await loadProducts() }
+        }
         .fullScreenCover(item: $chatTarget) { t in BusinessChatView(target: t) }
-        .fullScreenCover(item: $productViewer) { set in PlacePhotoViewer(photos: set.photos, inicial: 0) }
+        .confirmationDialog("¿Quitar este producto?", isPresented: Binding(get: { productToRemove != nil }, set: { if !$0 { productToRemove = nil } }),
+                            titleVisibility: .visible) {
+            Button("Quitar producto", role: .destructive) {
+                if let p = productToRemove { Task { await archiveFromPanel(p) } }
+                productToRemove = nil
+            }
+        } message: { Text("Deja de verse en Buddy. Queda como Oculto en tu lista y puedes volver a mostrarlo.") }
+        .alert("No pudimos quitarlo", isPresented: Binding(get: { productRemoveError != nil }, set: { if !$0 { productRemoveError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(productRemoveError ?? "") }
+        .fullScreenCover(item: $productViewer) { set in
+            // Al cerrar vuelve a la tarjeta de la foto que se ve, y la fila o la
+            // cuadrícula se mueve hasta ella (regla 26, Keyla, 23 Nov 2026).
+            PlacePhotoViewer(photos: set.photos, inicial: set.start, systemDismiss: PhotoZoom.systemAvailable,
+                             onShowing: { i in
+                                 guard set.photos.indices.contains(i) else { return }
+                                 if let id = entryFor(photo: set.photos[i]) { productShownId = id }
+                             },
+                             caption: { i in
+                                 guard set.photos.indices.contains(i),
+                                       let id = entryFor(photo: set.photos[i]),
+                                       let e = productEntries.first(where: { $0.id == id }) else { return nil }
+                                 var parts: [String] = []
+                                 if let price = e.pres?.price { parts.append(Self.soles(price)) }
+                                 if let label = e.pres?.label, !label.isEmpty { parts.append(label) }
+                                 return (e.product.name, parts.isEmpty ? nil : parts.joined(separator: " · "))
+                             })
+                .photoZoomDestination(id: "product-\(productShownId ?? set.productId)", in: productZoom)
+        }
         .task(id: place.id) {
             isLoadingGallery = true
             isLoadingBuddies = true
@@ -1309,7 +1589,9 @@ struct PlaceGuideDetailSheet: View {
             PlaceFullGallerySheet(placeName: place.name, photos: allPhotos)
         }
         .fullScreenCover(item: $visorFoto) { inicio in
-            PlacePhotoViewer(photos: allPhotos, inicial: inicio.indice)
+            PlacePhotoViewer(photos: allPhotos, inicial: inicio.indice, systemDismiss: PhotoZoom.systemAvailable,
+                             onShowing: { i in if allPhotos.indices.contains(i) { zoomUrl = allPhotos[i] } })
+                .photoZoomDestination(id: zoomUrl ?? (allPhotos.indices.contains(inicio.indice) ? allPhotos[inicio.indice] : ""), in: photoZoom)
         }
         .fullScreenCover(item: $editingJourney) { journey in
             // publishesOnSave: acá no existe el paso posterior de "publicar el
@@ -1355,15 +1637,17 @@ struct PlaceGuideDetailSheet: View {
             case .idle, .loading:
                 HStack(spacing: 8) { ProgressView(); Text("Cargando productos").font(BT.footnote).foregroundStyle(Color.inkMuted) }
                     .padding(.vertical, 16)
+            case .notLinked, .failed where products.isEmpty && editCtx != nil:
+                productCardsRow
             case .notLinked, .failed where products.isEmpty:
                 productsEmpty(productsState == .failed
                     ? "No pudimos cargar los productos. Intenta más tarde."
                     : "Este lugar aún no muestra sus productos en Buddy.")
             default:
-                if products.isEmpty {
+                if products.isEmpty && editCtx == nil {
                     productsEmpty("Este negocio aún no tiene productos visibles.")
                 } else {
-                    ForEach(products) { p in productRow(p) }
+                    productCardsRow
                 }
             }
         }
@@ -1375,12 +1659,16 @@ struct PlaceGuideDetailSheet: View {
     @State private var chatTarget: BusinessChatTarget? = nil
 
     /// "Preguntar al negocio": abre el chat con una tarjeta del lugar.
+    private func openBusinessChat() {
+        chatTarget = BusinessChatTarget(spotId: place.id.uuidString.lowercased(), title: place.name,
+                                        card: BizCard(kind: "place", title: place.name,
+                                                      subtitle: place.categoryName,
+                                                      spotId: place.id.uuidString.lowercased()))
+    }
+
     private var askBusinessButton: some View {
         Button {
-            chatTarget = BusinessChatTarget(spotId: place.id.uuidString.lowercased(), title: place.name,
-                                            card: BizCard(kind: "place", title: place.name,
-                                                          subtitle: place.categoryName,
-                                                          spotId: place.id.uuidString.lowercased()))
+            openBusinessChat()
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "bubble.left.and.text.bubble.right")
@@ -1425,15 +1713,205 @@ struct PlaceGuideDetailSheet: View {
     /// Toda la tarjeta pregunta por el producto; el ícono de chat va junto al
     /// nombre, como parte de la tarjeta (Keyla, 20 Nov 2026: el botón suelto
     /// se veía "fuera de lugar").
+    /// Productos como tarjetas en fila, del tamaño de "Añadir producto" (Keyla, 21 Nov
+    /// 2026): foto y precio debajo; la burbuja en la esquina abre el chat.
+    // Abierto a pantalla completa: los productos llenan la pantalla en una
+    // cuadrícula de 3 (Keyla, 23 Nov 2026); cerrado, la fila de siempre.
+    @ViewBuilder
+    private var productCardsRow: some View {
+        if expanded {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(cardSide), spacing: 8, alignment: .top), count: 3),
+                      alignment: .leading, spacing: 14) {
+                if let ctx = editCtx {
+                    NavigationLink(value: FincasProductRoute(farmId: ctx.businessId, product: nil)) {
+                        DashedAddTile(title: "Añadir producto", side: cardSide)
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(productEntries, id: \.id) { e in productCard(e.product, pres: e.pres).id(e.id) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(FollowProductViewer(shownId: productShownId, active: productViewer != nil))
+        } else {
+            productCardsScroll
+        }
+    }
+
+    private var productCardsScroll: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 8) {
+                if let ctx = editCtx {
+                    NavigationLink(value: FincasProductRoute(farmId: ctx.businessId, product: nil)) {
+                        DashedAddTile(title: "Añadir producto", side: cardSide)
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(productEntries, id: \.id) { e in productCard(e.product, pres: e.pres).id(e.id) }
+            }
+            .modifier(FollowProductViewer(shownId: productShownId, active: productViewer != nil))
+        }
+        .scrollClipDisabled()
+        // Al deslizar hacia arriba la fila no se mueve de lado (Keyla, 23 Nov 2026):
+        // si las tarjetas caben no rebota, y durante un gesto vertical se queda quieta.
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .scrollDisabled(verticalPanelDrag)
+    }
+
+    /// Precio de la tarjeta: el de la presentación visible; con varias, "desde" el menor.
+    private func priceText(_ p: FincasProduct) -> String? {
+        let prices = (p.presentations ?? []).filter { $0.visible != false }.compactMap(\.price)
+        guard let low = prices.min() else { return nil }
+        let txt = Self.soles(low)
+        return Set(prices).count > 1 ? "Desde \(txt)" : txt
+    }
+
+    /// "S/ 20" si es entero, "S/ 25.90" si no: corto para la tarjeta de 115 pt.
+    static func soles(_ v: Double) -> String {
+        v.truncatingRemainder(dividingBy: 1) == 0 ? "S/ \(Int(v))" : String(format: "S/ %.2f", v)
+    }
+
+    /// Precio de la tarjeta en dos tamaños (Keyla, 23 Nov 2026: "Desde S/ 20...." se cortaba).
+    @ViewBuilder
+    private func priceLabel(_ p: FincasProduct) -> some View {
+        let prices = (p.presentations ?? []).filter { $0.visible != false }.compactMap(\.price)
+        if let low = prices.min() {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                if Set(prices).count > 1 {
+                    Text("Desde").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                }
+                Text(Self.soles(low)).font(BT.footnoteBold).foregroundStyle(Color.brand)
+            }
+            .lineLimit(1).minimumScaleFactor(0.8)
+        }
+    }
+
+    /// Una tarjeta por PRESENTACIÓN (Keyla, 23 Nov 2026: "show each presentation"):
+    /// 250 g y 1 kg del mismo café son dos tarjetas con su foto y su precio.
+    private struct ProductEntry { let id: String; let product: FincasProduct; let pres: FincasProduct.Presentation? }
+    private var productEntries: [ProductEntry] {
+        let all = products.flatMap { p -> [ProductEntry] in
+            let shown = (p.presentations ?? []).filter { $0.visible != false }
+            if shown.isEmpty { return [ProductEntry(id: p.id, product: p, pres: nil)] }
+            return shown.map { ProductEntry(id: "\(p.id)-\($0.id)", product: p, pres: $0) }
+        }
+        // El producto tocado en Inicio va primero (Keyla, 23 Nov 2026).
+        guard let f = focusEntryId, let i = all.firstIndex(where: { $0.id == f }) else { return all }
+        var out = all; out.insert(out.remove(at: i), at: 0); return out
+    }
+
+    /// Producto que se tocó en "Productos locales" para abrir este lugar.
+    @State private var focusEntryId: String? = ProductFocus.take()
+
+    private func presCover(_ p: FincasProduct, _ pr: FincasProduct.Presentation?) -> String? {
+        guard let pr else { return p.coverUrl }
+        let own = pr.photos?.first?.url ?? pr.photoUrl
+        return (own?.isEmpty == false ? own : nil) ?? p.coverUrl
+    }
+
+    /// Cerrado, la tarjeta es un poco más chica para que nombre y precio entren sin
+    /// agrandar el panel (Keyla, 23 Nov 2026: espacio de más en Fotos).
+    /// Mismo tamaño abierto y cerrado (Keyla, 23 Nov 2026).
+    private var cardSide: CGFloat { 114 }
+    /// La fila de fotos usa el mismo alto que una tarjeta de producto con su
+    /// nombre y precio: así el panel no deja espacio vacío en Fotos.
+    private var photoRowHeight: CGFloat { 160 }
+
+    private func productCard(_ p: FincasProduct, pres: FincasProduct.Presentation? = nil) -> some View {
+        let photos = productPhotos(p)
+        let cover = presCover(p, pres)
+        return VStack(alignment: .leading, spacing: 4) {
+            Button {
+                // Un deslizar que empezó sobre la foto mueve el panel, no la abre.
+                guard !justDragged else { return }
+                // La foto siempre abre el visor, también para el dueño; editar es
+                // solo con el lápiz (Keyla, 23 Nov 2026).
+                if !photos.isEmpty {
+                    // Como en un perfil (Keyla, 23 Nov 2026): el visor sigue con los
+                    // demás productos al pasar la última foto de este. Abre en la
+                    // foto de esta presentación.
+                    let all = allProductPhotos
+                    let start = cover.flatMap { c in all.firstIndex(of: c) } ?? 0
+                    productShownId = entryId(p, pres)
+                    productViewer = ProductPhotoSet(photos: all, productId: p.id, start: start)
+                } else if editCtx != nil { Task { await openOwnerEditor(p, pres: pres) } } else { askAbout(p) }
+            } label: {
+                CachedImage(urlString: cover) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Image(systemName: "bag").foregroundStyle(Color.brand)
+                }
+                .frame(width: cardSide, height: cardSide)
+                .background(Color.paleSage)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .photoZoomSource(id: "product-\(entryId(p, pres))", in: productZoom)
+            .accessibilityLabel(pres.map { "\(p.name), \($0.label)" } ?? p.name)
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    guard !justDragged else { return }
+                    if editCtx != nil { Task { await openOwnerEditor(p, pres: pres) } } else { askAbout(p) }
+                } label: {
+                    Group {
+                        if openingProductId == p.id { ProgressView().controlSize(.small) }
+                        else {
+                            Image(systemName: editCtx != nil ? "pencil" : "bubble.left.and.text.bubble.right")
+                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.brand)
+                        }
+                    }
+                    .frame(width: 30, height: 30)
+                    .background(Color.surface, in: Circle())
+                    .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
+                    .padding(6)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(editCtx != nil ? "Editar \(p.name)" : "Preguntar por \(p.name)")
+            }
+            // Nombre y precio bajo la foto (Keyla, 23 Nov 2026).
+            Text(p.name).font(BT.caption1).foregroundStyle(Color.ink).lineLimit(1)
+            if let pres {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if let price = pres.price {
+                        Text(Self.soles(price)).font(BT.footnoteBold).foregroundStyle(Color.brand)
+                    }
+                    if !pres.label.isEmpty {
+                        Text(pres.label).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    }
+                }
+                .lineLimit(1).minimumScaleFactor(0.8)
+            } else {
+                priceLabel(p)
+            }
+        }
+        .frame(width: cardSide, alignment: .leading)
+        .contextMenu {
+            if editCtx != nil {
+                Button(role: .destructive) { productToRemove = p } label: { Label("Quitar producto", systemImage: "trash") }
+            }
+        }
+    }
+
+    private func archiveFromPanel(_ p: FincasProduct) async {
+        guard let ctx = editCtx else { return }
+        do {
+            try await FincasAuth.archiveProduct(farmId: ctx.businessId, productId: p.id)
+            products.removeAll { $0.id == p.id }
+            Haptic.success()
+            NotificationCenter.default.post(name: .fincasProductsChanged, object: ctx.businessId)
+        } catch {
+            productRemoveError = error.localizedDescription
+        }
+    }
+
     private func productRow(_ p: FincasProduct) -> some View {
         let shown = (p.presentations ?? []).filter { $0.visible != false }
         let photos = productPhotos(p)
         return HStack(alignment: .top, spacing: 12) {
             // La foto abre el mismo visor de pantalla completa que las demás fotos.
             Button {
-                if !photos.isEmpty { productViewer = ProductPhotoSet(photos: photos) }
+                if !photos.isEmpty { productViewer = ProductPhotoSet(photos: photos, productId: p.id) }
             } label: {
-                AsyncImage(url: p.coverUrl.flatMap(URL.init(string:))) { img in
+                CachedImage(urlString: p.coverUrl) { img in
                     img.resizable().scaledToFill()
                 } placeholder: {
                     Image(systemName: "bag").foregroundStyle(Color.brand)
@@ -1443,6 +1921,7 @@ struct PlaceGuideDetailSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
+            .photoZoomSource(id: "product-\(p.id)", in: productZoom)
             .disabled(photos.isEmpty)
             .accessibilityLabel("Ver fotos de \(p.name)")
             Button { askAbout(p) } label: {
@@ -1476,8 +1955,48 @@ struct PlaceGuideDetailSheet: View {
         .background(Color.canvas, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    struct ProductPhotoSet: Identifiable { let id = UUID(); let photos: [String] }
+    struct ProductPhotoSet: Identifiable { let id = UUID(); let photos: [String]; var productId: String = ""; var start: Int = 0 }
+
+    /// Fotos de todos los productos, en el orden de las tarjetas y sin repetir.
+    private var allProductPhotos: [String] {
+        var out: [String] = []
+        for e in productEntries {
+            let first = presCover(e.product, e.pres)
+            for u in [first].compactMap({ $0 }) + productPhotos(e.product) where !u.isEmpty && !out.contains(u) { out.append(u) }
+        }
+        return out
+    }
     @State private var productViewer: ProductPhotoSet? = nil
+    @State private var productShownId: String? = nil
+    @State private var ownerEditRoute: FincasProductRoute? = nil
+    @State private var openingProductId: String? = nil
+
+    /// El editor necesita la versión del dueño (stock, estado, fotos): se pide a
+    /// la tienda y se abre el mismo "Editar producto" de Negocio > Productos.
+    private func openOwnerEditor(_ p: FincasProduct, pres: FincasProduct.Presentation? = nil) async {
+        guard let ctx = editCtx, openingProductId == nil else { return }
+        openingProductId = p.id
+        defer { openingProductId = nil }
+        if let page = try? await FincasAuth.products(farmId: ctx.businessId, offset: 0, limit: 50),
+           let mine = page.items.first(where: { $0.id == p.id }) {
+            ownerEditRoute = FincasProductRoute(farmId: ctx.businessId, product: mine, focusPresentationId: pres?.id)
+        } else {
+            productRemoveError = "No pudimos abrir el producto. Revisa tu conexión."
+        }
+    }
+
+    private func entryId(_ p: FincasProduct, _ pr: FincasProduct.Presentation?) -> String {
+        pr.map { "\(p.id)-\($0.id)" } ?? p.id
+    }
+
+    /// La tarjeta a la que pertenece una foto: primero la de su presentación,
+    /// si no, la primera tarjeta de su producto.
+    private func entryFor(photo url: String) -> String? {
+        if let e = productEntries.first(where: { presCover($0.product, $0.pres) == url }) { return e.id }
+        return productEntries.first(where: { productPhotos($0.product).contains(url) })?.id
+    }
+    /// Las fotos de un producto crecen desde su miniatura y vuelven a ella (iOS 18+).
+    @Namespace private var productZoom
 
     /// Todas las fotos del producto, sin repetir: portada y las de cada presentación.
     private func productPhotos(_ p: FincasProduct) -> [String] {
@@ -1511,22 +2030,41 @@ struct PlaceGuideDetailSheet: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text(place.name)
-                .font(.system(.title3).weight(.bold))
-                .foregroundStyle(Color.ink)
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-                .fixedSize(horizontal: false, vertical: true)
+            // La categoría va justo bajo el nombre (Keyla, 23 Nov 2026).
+            VStack(alignment: .leading, spacing: 2) {
+                Text(place.name)
+                    .font(.system(.title3).weight(.bold))
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let cat = place.categoryName {
+                    HStack(spacing: 6) {
+                        Image(systemName: CategoryIcon.symbol(for: cat))
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.brand)
+                            .accessibilityHidden(true)
+                        Text(cat)
+                            .font(BT.caption1)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
+                }
+            }
             Spacer(minLength: 8)
 
+            // Sin local físico no hay botón verde (Keyla, 22 Nov 2026): se pregunta
+            // con la burbuja de cada producto o en Información.
+            if !actionOpensChat {
             Button {
+                guard !justDragged else { return }
                 Haptic.light()
-                onNavigate()
+                if actionOpensChat { openBusinessChat() } else { onNavigate() }
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.turn.up.right.circle")
+                    Image(systemName: actionIcon)
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Cómo llegar")
+                    Text(actionTitle)
                         .font(BT.footnoteBold)
                 }
                 .foregroundStyle(Color.inkInverse)
@@ -1537,8 +2075,10 @@ struct PlaceGuideDetailSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.pressable)
-            .accessibilityLabel("Cómo llegar a \(place.name)")
+            .accessibilityLabel("\(actionTitle): \(place.name)")
+            }
 
+            if showsClose {
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .semibold))
@@ -1550,6 +2090,7 @@ struct PlaceGuideDetailSheet: View {
             }
             .buttonStyle(.pressable)
             .accessibilityLabel("Cerrar")
+            }
         }
         .padding(.horizontal, 20)
     }
@@ -1563,6 +2104,7 @@ struct PlaceGuideDetailSheet: View {
         HStack(spacing: 0) {
             ForEach(Tab.visible, id: \.self) { t in
                 Button {
+                    guard !justDragged else { return }
                     Haptic.select()
                     tab = t
                     userPickedTab = true
@@ -1590,9 +2132,18 @@ struct PlaceGuideDetailSheet: View {
 
     /// Mismo tamaño que las miniaturas para no romper la fila, y primero: es la
     /// acción, no una foto más.
+    /// Al elegir la ubicación de un negocio no se añaden fotos (Keyla, 21 Nov 2026):
+    /// sin la tarjeta ni su hueco en la cuadrícula.
+    // Solo el dueño del negocio sube fotos aquí (Keyla, 23 Nov 2026: "I'm not
+    // Citizen"). Antes también podía quien había recomendado el lugar.
+    private var canAddPhoto: Bool { !startOnPhotos && editCtx != nil }
+
     @ViewBuilder
     private var addPhotoTile: some View {
-        if let mine = myBuddyRecommendation {
+        if let ctx = editCtx {
+            // Dueño en Mi negocio: una sola "Añadir foto", y sus fotos detrás.
+            BusinessAddPhotoTile(ctx: ctx)
+        } else if canAddPhoto, let mine = myBuddyRecommendation {
             Button {
                 Haptic.medium()
                 guard !isOpeningEditor else { return }
@@ -1625,7 +2176,7 @@ struct PlaceGuideDetailSheet: View {
                         }
                     }
                 }
-                .frame(width: 115, height: 115)
+                .frame(width: cardSide, height: photoRowHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1675,29 +2226,52 @@ struct PlaceGuideDetailSheet: View {
             if isLoadingGallery {
                 ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
             } else if allPhotos.isEmpty {
-                if myBuddyRecommendation != nil {
-                    HStack { addPhotoTile; Spacer() }.padding(.horizontal, 20)
+                if canAddPhoto {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            addPhotoTile
+                            if let ctx = editCtx { BusinessLocalPhotos(ctx: ctx, onOpen: openPhoto, zoom: photoZoom) }
+                        }
+                        .padding(.horizontal, 20)
+                    }
                 } else {
                     emptyState(icon: "photo.on.rectangle.angled", text: "Todavía no hay fotos de este lugar")
                 }
             } else if expanded {
                 // Pantalla completa: cuadrícula de 3 columnas con TODAS las
                 // fotos, sin carrusel lateral (Keyla, 20 Nov 2026).
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                    if myBuddyRecommendation != nil {
-                        Color.clear.aspectRatio(1, contentMode: .fit).overlay(addPhotoTile)
+                ScrollViewReader { proxy in
+                // Mismo tamaño de foto abierto y cerrado (Keyla, 23 Nov 2026).
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(cardSide), spacing: 8, alignment: .top), count: 3), alignment: .leading, spacing: 8) {
+                    if canAddPhoto {
+                        Color.clear.frame(width: cardSide, height: photoRowHeight).overlay(addPhotoTile)
                     }
-                    ForEach(galleryPhotos) { photo in
+                    ForEach(ownerUrls, id: \.self) { url in
+                        Button { openPhoto(url) } label: {
+                            Color.clear.frame(width: cardSide, height: photoRowHeight)
+                                .overlay(CachedImage(urlString: url) { img in img.resizable().scaledToFill() }
+                                         placeholder: { Rectangle().fill(Color.sandLight) })
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .photoZoomSource(id: url, in: photoZoom)
+                        }
+                        .buttonStyle(.plain)
+                        .id(url)
+                    }
+                    ForEach(galleryPhotos.filter { !ownerUrls.contains($0.url) }) { photo in
                         Button {
-                            visorFoto = VisorFotoInicio(indice: allPhotos.firstIndex(of: photo.url) ?? 0)
+                            zoomUrl = photo.url; visorFoto = VisorFotoInicio(indice: allPhotos.firstIndex(of: photo.url) ?? 0)
                         } label: {
-                            Color.clear.aspectRatio(1, contentMode: .fit)
+                            Color.clear.frame(width: cardSide, height: photoRowHeight)
                                 .overlay(CachedImage(urlString: photo.url) { img in
                                     img.resizable().scaledToFill()
                                 } placeholder: { Rectangle().fill(Color.sandLight) })
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .photoZoomSource(id: photo.url, in: photoZoom)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Foto del lugar")
+                        .accessibilityIdentifier("placePhoto")
+                        .id(photo.url)
                         .contextMenu {
                             if photo.isMine, photo.isDeletable {
                                 Button(role: .destructive) { photoPendingDeletion = photo } label: {
@@ -1709,26 +2283,41 @@ struct PlaceGuideDetailSheet: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 120)
+                .onChange(of: zoomUrl) { _, url in
+                    // La miniatura de la foto que se ve, en pantalla (Keyla, 21 Nov 2026).
+                    guard visorFoto != nil, let url else { return }
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { proxy.scrollTo(url, anchor: .center) }
+                }
+                }
             } else {
                 // Sin "Ver todas": tocar cualquier foto abre el visor, y ahí
                 // se recorren TODAS (no solo las de esta fila).
+                ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    LazyHStack(spacing: 8) {
                         addPhotoTile
+                        if let ctx = editCtx { BusinessLocalPhotos(ctx: ctx, side: cardSide, height: photoRowHeight, onOpen: openPhoto, zoom: photoZoom) }
+                        else { OwnerPhotosRow(spotId: place.id.uuidString.lowercased(), side: cardSide, height: photoRowHeight, onOpen: openPhoto, zoom: photoZoom) }
 
-                        ForEach(galleryPhotos.prefix(12)) { photo in
+                        ForEach(galleryPhotos) { photo in
                             Button {
-                                visorFoto = VisorFotoInicio(indice: allPhotos.firstIndex(of: photo.url) ?? 0)
+                                guard !justDragged else { return }
+                                zoomUrl = photo.url; visorFoto = VisorFotoInicio(indice: allPhotos.firstIndex(of: photo.url) ?? 0)
                             } label: {
                                 CachedImage(urlString: photo.url) { img in
                                     img.resizable().scaledToFill()
                                 } placeholder: {
                                     Rectangle().fill(Color.sandLight)
                                 }
-                                .frame(width: 115, height: 115)
+                                .frame(width: cardSide, height: photoRowHeight)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .photoZoomSource(id: photo.url, in: photoZoom)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Foto del lugar")
+                            .accessibilityIdentifier("placePhoto")
+                            .id(photo.url)
                             // Solo sobre las propias: el menú de una foto ajena
                             // no tendría ninguna acción que ofrecer. El
                             // long-press y no un botón visible porque borrar es
@@ -1746,6 +2335,13 @@ struct PlaceGuideDetailSheet: View {
                     }
                     .padding(.horizontal, 20)
                 }
+                .onChange(of: zoomUrl) { _, url in
+                    // La miniatura de la foto que se ve, en pantalla (Keyla, 21 Nov 2026).
+                    guard visorFoto != nil, let url else { return }
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { proxy.scrollTo(url, anchor: .center) }
+                }
+                }
             }
         }
         .padding(.top, 20)
@@ -1759,13 +2355,18 @@ struct PlaceGuideDetailSheet: View {
             // Aún no hay horario, precios ni contacto guardados: no se muestran
             // filas "Por confirmar". Si el lugar tiene negocio, la acción es
             // preguntarle, con el mismo estilo de fila (Keyla, 20 Nov 2026).
-            if productsState == .loaded {
+            if let ctx = editCtx {
+                BusinessPanelAbout(ctx: ctx)
+                CoverageEditor(ctx: ctx).padding(.top, 8)
+            } else if productsState == .loaded {
                 askBusinessButton
             } else if place.description.isEmpty {
                 Text("Aún no hay información de este lugar.")
                     .font(BT.footnote).foregroundStyle(Color.inkMuted)
                     .padding(.vertical, 6)
             }
+
+            if editCtx == nil { CoverageRow(spotId: place.id.uuidString.lowercased()) }
 
             if !place.description.isEmpty {
                 Text(place.description)
@@ -1859,6 +2460,8 @@ struct PlaceFullGallerySheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var visorFoto: VisorFotoInicio? = nil
+    @Namespace private var photoZoom
+    @State private var zoomIndex = 0
     private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
 
     var body: some View {
@@ -1881,7 +2484,8 @@ struct PlaceFullGallerySheet: View {
                             }
                             .clipped()
                             .contentShape(Rectangle())
-                            .onTapGesture { visorFoto = VisorFotoInicio(indice: i) }
+                            .photoZoomSource(id: i, in: photoZoom)
+                            .onTapGesture { zoomIndex = i; visorFoto = VisorFotoInicio(indice: i) }
                     }
                 }
             }
@@ -1889,12 +2493,14 @@ struct PlaceFullGallerySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cerrar") { dismiss() }
+                    ToolbarBackButton { dismiss() }
                 }
             }
         }
         .fullScreenCover(item: $visorFoto) { inicio in
-            PlacePhotoViewer(photos: photos, inicial: inicio.indice)
+            PlacePhotoViewer(photos: photos, inicial: inicio.indice, systemDismiss: PhotoZoom.systemAvailable,
+                             onShowing: { zoomIndex = $0 })
+                .photoZoomDestination(id: zoomIndex, in: photoZoom)
         }
     }
 }
@@ -1910,123 +2516,181 @@ struct VisorFotoInicio: Identifiable {
 /// (módulo), así que después de la última viene la primera, sin fin.
 /// La foto se ve ENTERA (scaledToFit): acá se mira el lugar, no se decora.
 struct PlacePhotoViewer: View {
+    // Mismo comportamiento que el visor de trips (Keyla, 21 Nov 2026: "homogenized
+    // behavior"): deslizar de lado cambia de foto (ya no hacia arriba/abajo),
+    // toque izquierda/derecha, pellizcar o doble toque para el zoom, deslizar
+    // hacia abajo cierra, miniaturas abajo y la X arriba.
     let photos: [String]
     let inicial: Int
 
     @Environment(\.dismiss) private var dismiss
-    /// Índice lógico, sin límite; la foto sale del módulo.
-    @State private var posicion: Int = 0
-    /// Desplazamiento vertical en curso del dedo (y el tramo animado).
-    @State private var arrastre: CGFloat = 0
-    @State private var animando = false
+    @State private var current: Int
+    @State private var drag: CGSize = .zero
+    @State private var fading = false
+    @State private var zoomed = false
+    /// true con transición nativa de zoom (iOS 18+): el sistema cierra hacia abajo.
+    var systemDismiss = false
+    /// Avisa qué foto se ve: al cerrar vuelve a SU miniatura.
+    var onShowing: (Int) -> Void = { _ in }
 
-    init(photos: [String], inicial: Int) {
+    /// Datos de la foto que se ve, arriba (Keyla, 23 Nov 2026: en productos,
+    /// nombre, precio y tamaño, como el autor y el lugar en una publicación).
+    var caption: ((Int) -> (title: String, detail: String?)?)? = nil
+
+    init(photos: [String], inicial: Int, systemDismiss: Bool = false, onShowing: @escaping (Int) -> Void = { _ in },
+         caption: ((Int) -> (title: String, detail: String?)?)? = nil) {
         self.photos = photos
         self.inicial = inicial
-        // Desde el primer cuadro, no en onAppear: si no, asomaba la foto 1.
-        _posicion = State(initialValue: inicial)
+        self.systemDismiss = systemDismiss
+        self.onShowing = onShowing
+        self.caption = caption
+        _current = State(initialValue: photos.indices.contains(inicial) ? inicial : 0)
     }
 
-    private func indice(_ i: Int) -> Int {
-        let n = photos.count
-        guard n > 0 else { return 0 }
-        return ((i % n) + n) % n
+    private var backdrop: Double { fading ? 0 : PhotoDismissPhysics.backdrop(forDrag: drag.height) }
+    private var shrink: CGFloat { PhotoDismissPhysics.scale(forDrag: drag.height) }
+    private var chrome: Double { zoomed || fading ? 0 : max(0, 1 - Double(max(drag.height, 0)) / 150) }
+
+    private var overlayBars: some View {
+        VStack(spacing: 0) {
+            topBar
+            Spacer()
+            if photos.count > 1 { thumbStrip }
+        }
+        .opacity(chrome)
+        .allowsHitTesting(!zoomed)
+        .animation(.easeInOut(duration: 0.2), value: zoomed)
     }
 
-    private var paginas: [Int] {
-        photos.count <= 1 ? [posicion] : [posicion - 1, posicion, posicion + 1]
+    private func prefetchAround(_ n: Int) {
+        let near = [n + 1, n - 1].filter { photos.indices.contains($0) }
+        ImagePrefetcher.prefetch(near.map { photos[$0] })
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let paso = geo.size.height
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                ForEach(paginas, id: \.self) { pagina in
-                    CachedImage(urlString: photos[indice(pagina)]) { img in
-                        img.resizable().scaledToFit()
-                    } placeholder: {
-                        ProgressView().tint(.white)
-                    }
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .offset(y: CGFloat(pagina - posicion) * paso + arrastre)
-                    .accessibilityHidden(pagina != posicion)
-                }
-
-                VStack {
-                    HStack {
-                        Button("Cerrar") { dismiss() }
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.black.opacity(0.45), in: Capsule())
-                        Spacer()
-                        if photos.count > 1 {
-                            Text("\(indice(posicion) + 1) / \(photos.count)")
-                                .font(.system(size: 14, weight: .semibold).monospacedDigit())
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(.black.opacity(0.45), in: Capsule())
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    Spacer()
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(gesto(paso: paso))
+        ZStack {
+            Color.black.opacity(backdrop).ignoresSafeArea()
+            pager.offset(drag).scaleEffect(shrink)
+            overlayBars
         }
-        .background(Color.black)
         .statusBarHidden()
-        .accessibilityAction(named: "Siguiente foto") { saltar(1) }
-        .accessibilityAction(named: "Foto anterior") { saltar(-1) }
+        .presentationBackground(.clear)
+        .simultaneousGesture(closeDrag)
+        .onChange(of: current) { _, n in prefetchAround(n); onShowing(n) }
+        .accessibilityAction(named: "Siguiente foto") { step(1) }
+        .accessibilityAction(named: "Foto anterior") { step(-1) }
     }
 
-    private func saltar(_ direccion: Int) {
-        guard photos.count > 1, !animando else { return }
-        posicion += direccion
+    private var pager: some View {
+        TabView(selection: $current) {
+            ForEach(Array(photos.enumerated()), id: \.offset) { i, url in
+                ZoomablePhoto(urlString: url,
+                              onZoomChange: { zoomed = $0 },
+                              onTap: { x in step(x < 0.5 ? -1 : 1) })
+                .tag(i)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .ignoresSafeArea()
     }
 
-    /// Vertical, como el feed del Home: hacia arriba la siguiente, hacia
-    /// abajo la anterior. Cerrar es solo con el botón, porque deslizar hacia
-    /// abajo ya significa "la foto anterior".
-    private func gesto(paso: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8)
+    /// La foto sigue al dedo, se achica y el fondo se aclara; al soltar, cierra
+    /// por distancia o por un deslizar rápido, o vuelve a su lugar (Keyla, 21 Nov 2026).
+    private var closeDrag: some Gesture {
+        DragGesture(minimumDistance: 15)
             .onChanged { v in
-                guard !animando, abs(v.translation.height) > abs(v.translation.width) else { return }
-                arrastre = v.translation.height * (photos.count <= 1 ? 0.25 : 1)
+                guard !zoomed, !systemDismiss, v.translation.height > 0,
+                      abs(v.translation.height) > abs(v.translation.width) || drag != .zero else { return }
+                drag = v.translation
             }
             .onEnded { v in
-                guard !animando else { return }
-                let recorrido = v.predictedEndTranslation.height
-                let direccion = photos.count > 1 && abs(recorrido) > paso / 5
-                    ? (recorrido < 0 ? 1 : -1) : 0
-                guard direccion != 0 else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { arrastre = 0 }
-                    return
-                }
-                animando = true
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    arrastre = -CGFloat(direccion) * paso
-                }
-                // Al terminar el viaje, la foto que entró pasa a ser la actual
-                // y el desplazamiento vuelve a cero sin animación: el dibujo
-                // es idéntico, así que el cambio no se ve.
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(360))
-                    var sinAnimacion = Transaction()
-                    sinAnimacion.disablesAnimations = true
-                    withTransaction(sinAnimacion) {
-                        posicion += direccion
-                        arrastre = 0
-                    }
-                    animando = false
-                    ImagePrefetcher.prefetch([photos[indice(posicion + 1)], photos[indice(posicion - 1)]])
+                guard !zoomed, !systemDismiss, drag != .zero else { return }
+                if PhotoDismissPhysics.shouldDismiss(dy: v.translation.height, predictedDy: v.predictedEndTranslation.height) {
+                    closeSmoothly()
+                } else {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { drag = .zero }
                 }
             }
+    }
+
+    private func closeSmoothly() {
+        if systemDismiss { dismiss(); return }
+        withAnimation(.easeOut(duration: 0.22)) { drag.height += 260; fading = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { dismiss() }
+        }
+    }
+
+    private func step(_ d: Int) {
+        let n = current + d
+        guard photos.indices.contains(n) else { if d > 0 { closeSmoothly() }; return }
+        Haptic.light()
+        withAnimation(.easeInOut(duration: 0.25)) { current = n }
+    }
+
+    private var topBar: some View {
+        HStack(alignment: .top) {
+            if let info = caption?(current) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(info.title)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                    let count = photos.count > 1 ? "\(current + 1) de \(photos.count)" : nil
+                    let line = [info.detail, count].compactMap { $0 }.joined(separator: " · ")
+                    if !line.isEmpty {
+                        Text(line)
+                            .font(.system(size: 13, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+            } else if photos.count > 1 {
+                Text("\(current + 1) de \(photos.count)")
+                    .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+            }
+            Spacer()
+            Button { closeSmoothly() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(.white.opacity(0.18), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cerrar")
+        }
+        .padding(.horizontal, Spacing.edge)
+        .padding(.top, 8)
+        .padding(.bottom, 24)
+        .background(LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea())
+    }
+
+    private var thumbStrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(photos.enumerated()), id: \.offset) { i, url in
+                        CachedImage(urlString: url) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: { Color.white.opacity(0.1) }
+                        .frame(width: 52, height: 52)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(i == current ? Color.white : .clear, lineWidth: 2))
+                        .opacity(i == current ? 1 : 0.55)
+                        .id(i)
+                        .onTapGesture { Haptic.light(); withAnimation { current = i } }
+                    }
+                }
+                .padding(.horizontal, Spacing.edge)
+                .padding(.vertical, 12)
+            }
+            .onChange(of: current) { _, n in withAnimation { proxy.scrollTo(n, anchor: .center) } }
+        }
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea())
     }
 }
 
@@ -2116,7 +2780,7 @@ struct BusinessChatView: View {
             .navigationTitle(target.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cerrar") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { ToolbarBackButton { dismiss() } }
                 // Reportar y bloquear (App Store 1.2, contenido de usuarios).
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -2336,4 +3000,83 @@ struct BusinessChatView: View {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+
+/// Mientras el visor de productos está abierto, la fila (o la cuadrícula) se
+/// mueve sin animación hasta la tarjeta de la foto que se ve, para que al
+/// cerrar la foto vuelva a su miniatura (Keyla, 23 Nov 2026).
+private struct FollowProductViewer: ViewModifier {
+    let shownId: String?
+    let active: Bool
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content.onChange(of: shownId) { _, id in
+                guard active, let id else { return }
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+}
+
+
+/// Una presentación de un producto en la fila "Productos locales" de Inicio.
+struct LocalProductTile: Identifiable {
+    let id: String
+    let card: APIPlaceCard
+    let product: FincasProduct
+    let pres: FincasProduct.Presentation?
+}
+
+/// Cara de la tarjeta de producto del panel (foto cuadrada, nombre, precio y
+/// tamaño). Inicio la usa para que el producto se vea igual en los dos lugares.
+struct ProductCardFace: View {
+    let product: FincasProduct
+    let pres: FincasProduct.Presentation?
+    var side: CGFloat = 114
+
+    private var cover: String? {
+        guard let pr = pres else { return product.coverUrl }
+        let own = pr.photos?.first?.url ?? pr.photoUrl
+        return (own?.isEmpty == false ? own : nil) ?? product.coverUrl
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            CachedImage(urlString: cover) { img in img.resizable().scaledToFill() }
+                placeholder: { Image(systemName: "bag").foregroundStyle(Color.brand) }
+                .frame(width: side, height: side)
+                .background(Color.paleSage)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            Text(product.name).font(BT.caption1).foregroundStyle(Color.ink).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                if let price = pres?.price ?? (product.presentations ?? []).filter({ $0.visible != false }).compactMap(\.price).min() {
+                    Text(PlaceGuideDetailSheet.soles(price)).font(BT.footnoteBold).foregroundStyle(Color.brand)
+                }
+                if let label = pres?.label, !label.isEmpty {
+                    Text(label).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                }
+            }
+            .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(width: side, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+
+/// Producto elegido en la fila "Productos locales" de Inicio: el panel del lugar
+/// lo muestra primero. Se consume una vez al abrir el panel.
+enum ProductFocus {
+    private static var pending: (spotId: String, entryId: String, at: Date)?
+    static func set(spotId: String, productId: String, presentationId: String?) {
+        pending = (spotId.lowercased(), presentationId.map { "\(productId)-\($0)" } ?? productId, Date())
+    }
+    /// Solo vale unos segundos: si el lugar se abre por otro camino más tarde, no aplica.
+    static func take() -> String? {
+        defer { pending = nil }
+        guard let p = pending, Date().timeIntervalSince(p.at) < 10 else { return nil }
+        return p.entryId
+    }
 }

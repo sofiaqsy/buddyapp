@@ -223,7 +223,9 @@ struct RegisterTripView: View {
                         }
 
                         // ── Community context card ───────────────
-                        if selectedPlace != nil || selectedDest != nil || prefilledDestinationId != nil {
+                        // Habla de buddies: Villa Rica V1 no la muestra (Keyla, 23 Nov 2026).
+                        if HomeRowsView.showsBuddyTools,
+                           selectedPlace != nil || selectedDest != nil || prefilledDestinationId != nil {
                             PlaceCommunityCard(context: placeContext, isLoading: isLoadingContext)
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.sm)
