@@ -701,7 +701,8 @@ struct InicioView: View {
                             name: route.name,
                             cards: exploreCards.filter {
                                 (route.name == HomeRowsView.nearbyRoute || HomeRowsView.categoryName($0) == route.name)
-                                    && ($0.distanceMeters ?? 0) <= HomeRowsView.localRadiusMeters
+                                    && ($0.distanceMeters ?? 0) <= (route.name == HomeRowsView.nearbyRoute
+                                        ? HomeRowsView.nearbyRadiusMeters : HomeRowsView.localRadiusMeters)
                             }
                         )
                     }
@@ -3763,6 +3764,8 @@ struct HomeRowsView: View {
     /// Radio del Home: los lugares de otra ciudad (p. ej. Lima a 240 km) no
     /// son "para descubrir" aquí. Sin distancia conocida se conservan.
     static let localRadiusMeters = 30_000
+    /// "Cerca de ti" = a pocos minutos.
+    static let nearbyRadiusMeters = 3_000
 
     /// Lugares de la zona. Si no hay ninguno cerca (otra ciudad, sin GPS), se
     /// muestra todo para no dejar el Home vacío.
@@ -3776,7 +3779,8 @@ struct HomeRowsView: View {
 
     private var nearby: [APIPlaceCard] {
         // "Cerca de ti" es distancia: los que solo entregan aquí no van en esta fila.
-        Array(local.filter { $0.distanceMeters != nil && $0.delivers != true }
+        // Solo lo que de verdad está cerca: hasta 3 km (Keyla, 24 Nov 2026: "11 km no es cerca de ti").
+        Array(local.filter { ($0.distanceMeters ?? .max) <= Self.nearbyRadiusMeters && $0.delivers != true }
             .sorted { ($0.distanceMeters ?? .max) < ($1.distanceMeters ?? .max) }
             .prefix(10))
     }
@@ -3816,22 +3820,27 @@ struct HomeRowsView: View {
                             emptyState
                         } else {
                             // Sin "Explora por categoría" (Keyla, 23 Nov 2026: innecesaria).
-                            if !nearby.isEmpty {
-                                row(title: "Cerca de ti", subtitle: "Lugares a pocos minutos",
-                                    items: nearby, large: true, category: Self.nearbyRoute, capsuleAction: true)
-                            }
-                            if !localProducts.isEmpty { productsRow }
-                            // Lugares turísticos sin dueño (cataratas, miradores,
-                            // plaza), justo después de los productos (Keyla, 24 Nov 2026).
+                            // Orden (Keyla, 24 Nov 2026): Lugares turísticos primero y en grande;
+                            // Cerca de ti baja al lugar de los turísticos, con tarjetas altas.
                             if !touristPlaces.isEmpty {
                                 row(title: "Lugares turísticos", subtitle: "Cataratas, miradores y naturaleza",
-                                    items: rotated(touristPlaces), large: false, category: nil, tall: true)
+                                    items: rotated(touristPlaces), large: true, category: nil)
+                            }
+                            if !localProducts.isEmpty { productsRow }
+                            if !nearby.isEmpty {
+                                row(title: "Cerca de ti", subtitle: "Lugares a pocos minutos",
+                                    items: nearby, large: false, category: Self.nearbyRoute, capsuleAction: true, tall: true, showsDistance: true)
                             }
                             // Sin filas por categoría (Keyla, 23 Nov 2026).
                             // Siempre al final: una mezcla de todos los lugares de
                             // la zona, en orden rotativo.
-                            row(title: "Más para descubrir", subtitle: "Una selección de lugares de Villa Rica",
-                                items: rotated(local), large: false, category: nil, tall: true)
+                            // Sin repetir lo que ya está en Cerca de ti (Keyla, 24 Nov 2026).
+                            let nearbyIds = Set(nearby.map(\.id))
+                            let more = rotated(local.filter { !nearbyIds.contains($0.id) })
+                            if !more.isEmpty {
+                                row(title: "Más para descubrir", subtitle: "Una selección de lugares de Villa Rica",
+                                    items: more, large: false, category: nil, tall: true)
+                            }
                         }
                     }
                 }
@@ -4170,7 +4179,7 @@ struct HomeRowsView: View {
     }
 
     private func row(title: String, subtitle: String? = nil, items: [APIPlaceCard], large: Bool, category: String?,
-                     icon: String? = nil, capsuleAction: Bool = false, tall: Bool = false) -> some View {
+                     icon: String? = nil, capsuleAction: Bool = false, tall: Bool = false, showsDistance: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             rowHeader(title, subtitle: subtitle, category: category, icon: icon, capsuleAction: capsuleAction)
             ScrollView(.horizontal) {
@@ -4179,7 +4188,7 @@ struct HomeRowsView: View {
                         Button { onOpenPlace(card) } label: {
                             // En filas de categoría (las que tienen ícono) no se
                             // repite la categoría en cada tarjeta.
-                            HomePlaceCard(card: card, large: large, showsCategory: icon == nil, tall: tall)
+                            HomePlaceCard(card: card, large: large, showsCategory: icon == nil, tall: tall, showsDistance: showsDistance)
                         }
                         .buttonStyle(.pressable)
                     }
@@ -4202,6 +4211,8 @@ struct HomePlaceCard: View {
     /// Foto vertical 4:5 aunque muestre la categoría ("Más para descubrir",
     /// Keyla 23 Nov 2026: "más alargado").
     var tall: Bool = false
+    /// Distancia también en tarjetas altas: "Cerca de ti" (Keyla, 24 Nov 2026).
+    var showsDistance: Bool = false
 
     /// Filas de categoría: foto vertical 4:5, más angosta y con esquinas más
     /// chicas (Keyla, 20 Nov 2026). Las demás filas siguen en 4:3.
@@ -4236,7 +4247,7 @@ struct HomePlaceCard: View {
                         .background(Color.surface, in: Capsule())
                         .padding(10)
                 // Distancia solo en "Cerca de ti" (las tarjetas grandes).
-                } else if large, let d = distanceText {
+                } else if large || showsDistance, let d = distanceText {
                     HStack(spacing: 5) {
                         LocationPinShape()
                             .fill(Color.brand, style: FillStyle(eoFill: true))
