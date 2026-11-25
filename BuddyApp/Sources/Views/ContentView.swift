@@ -44,6 +44,7 @@ struct RootView: View {
     @EnvironmentObject var authState: AuthState
     @EnvironmentObject var router: AppRouter
     @StateObject private var chatStore = ChatStore.shared
+    @ObservedObject private var bizPending = BizPending.shared
     @ObservedObject private var accounts = AccountStore.shared
     @Environment(\.scenePhase) private var scenePhase
 
@@ -60,7 +61,7 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
-            GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread)
+            GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread + bizPending.count)
                 .padding(.horizontal, Spacing.edge)
                 // Un poco más abajo, dentro de la zona del indicador de inicio
                 // (Keyla, 19 Nov 2026); el indicador sigue visible debajo.
@@ -71,8 +72,19 @@ struct RootView: View {
                 .allowsHitTesting(!keyboardVisible)
                 .animation(.easeOut(duration: 0.15), value: keyboardVisible)
         }
+        // Llega una pregunta o respuesta con la app abierta: actualizar el círculo rojo.
+        .onReceive(NotificationCenter.default.publisher(for: .pushReceivedForeground)) { _ in
+            Task { await BizPending.shared.refresh() }
+        }
+        .onReceive(AccountStore.shared.$activeBusinessId.removeDuplicates().dropFirst()) { _ in
+            Task { await BizPending.shared.refresh() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
+        // Notificación de un negocio: su conversación se abre directo.
+        .fullScreenCover(item: $router.pendingBizChat, onDismiss: { Task { await BizPending.shared.refresh() } }) { t in
+            BusinessChatView(target: t)
+        }
         // Sesión de cuenta verificada expirada (p. ej. tras reinstalar): pedir
         // login con la misma cuenta en vez de seguir como guest nuevo.
         .sheet(isPresented: $authState.sessionNeedsReauth) {
@@ -85,6 +97,7 @@ struct RootView: View {
                 // Solo carga y stream si hay sesión activa
                 if authState.isLoggedIn {
                     Task { await chatStore.load() }
+                    Task { await BizPending.shared.refresh() }
                     chatStore.startEventStream()
                 }
                 // Volver al frente: reanudar el GPS si hay permiso.
@@ -243,14 +256,7 @@ struct GlassTabBar: View {
                                 .padding(.trailing, badge > 0 ? 10 : 0)
 
                             if badge > 0 {
-                                Text("\(min(badge, 99))")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, badge > 9 ? 4 : 0)
-                                    .frame(minWidth: 17, minHeight: 17)
-                                    .background(Color.errorRed)
-                                    .clipShape(Capsule())
-                                    .offset(x: 8, y: -5)
+                                UnreadBadge(count: badge).offset(x: 8, y: -5)
                             }
                         }
                         Text(label(tab))
@@ -306,5 +312,21 @@ extension View {
             guard let t = PerfLog.tabTapAt else { return }
             DispatchQueue.main.async { PerfLog.ms("pestaña-\(name)", since: t); PerfLog.tabTapAt = nil }
         }
+    }
+}
+
+/// Círculo rojo con el número de pendientes. Uno solo para la pestaña
+/// Conexiones y las filas de conversaciones (Keyla, 25 Nov 2026).
+struct UnreadBadge: View {
+    let count: Int
+    var body: some View {
+        Text("\(min(count, 99))")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, count > 9 ? 4 : 0)
+            .frame(minWidth: 17, minHeight: 17)
+            .background(Color.errorRed)
+            .clipShape(Capsule())
+            .accessibilityLabel(count == 1 ? "1 sin responder" : "\(count) sin responder")
     }
 }

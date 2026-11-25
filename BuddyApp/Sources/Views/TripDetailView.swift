@@ -2602,9 +2602,12 @@ struct PlacePhotoViewer: View {
     /// Datos de la foto que se ve, arriba (Keyla, 23 Nov 2026: en productos,
     /// nombre, precio y tamaño, como el autor y el lugar en una publicación).
     var caption: ((Int) -> (title: String, detail: String?)?)? = nil
+    /// Arrastre propio, pero al cerrar vuelve con zoom a la miniatura.
+    var zoomsBack = false
 
-    init(photos: [String], inicial: Int, systemDismiss: Bool = false, onShowing: @escaping (Int) -> Void = { _ in },
+    init(photos: [String], inicial: Int, systemDismiss: Bool = false, zoomsBack: Bool = false, onShowing: @escaping (Int) -> Void = { _ in },
          caption: ((Int) -> (title: String, detail: String?)?)? = nil) {
+        self.zoomsBack = zoomsBack
         self.photos = photos
         self.inicial = inicial
         self.systemDismiss = systemDismiss
@@ -2680,7 +2683,9 @@ struct PlacePhotoViewer: View {
     }
 
     private func closeSmoothly() {
-        if systemDismiss { dismiss(); return }
+        // Con miniatura de origen: la transición de zoom lleva la foto desde
+        // donde está el dedo hasta su miniatura, sin bajar primero (Keyla, 25 Nov 2026).
+        if systemDismiss || zoomsBack { dismiss(); return }
         withAnimation(.easeOut(duration: 0.22)) { drag.height += 260; fading = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             var t = Transaction(); t.disablesAnimations = true
@@ -2812,6 +2817,11 @@ struct BusinessChatView: View {
     @State private var blockedByMe = false
     @State private var confirmBlock = false
     @State private var noticeText: String? = nil
+    /// Perfil del visitante (lado negocio) y foto de la tarjeta a pantalla completa (Keyla, 25 Nov 2026).
+    @State private var travelerId: String? = nil
+    @State private var showProfile = false
+    @State private var cardPhoto: BizCard? = nil
+    @Namespace private var cardZoom
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -2845,8 +2855,30 @@ struct BusinessChatView: View {
             .background(Color.canvas)
             .navigationTitle(target.title)
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: $showProfile) {
+                if let travelerId { TravelerProfileView(travelerId: travelerId, previewName: target.title) }
+            }
+            // El mismo visor de los productos: nombre, precio y tamaño arriba,
+            // deslizar hacia abajo cierra (Keyla, 25 Nov 2026).
+            .fullScreenCover(item: Binding(get: { cardPhoto.flatMap { c in c.imageUrl.map { PhotoURL(url: $0, card: c) } } },
+                                           set: { if $0 == nil { cardPhoto = nil } })) { p in
+                PlacePhotoViewer(photos: [p.url], inicial: 0, systemDismiss: false, zoomsBack: PhotoZoom.systemAvailable, caption: { _ in
+                    let detail = [p.card.price, p.card.subtitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                    return (p.card.title, detail.isEmpty ? nil : detail)
+                })
+                // Crece desde la miniatura de la tarjeta y vuelve a ella al cerrar.
+                .photoZoomDestination(id: p.url, in: cardZoom)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { ToolbarBackButton { dismiss() } }
+                if side == "business", travelerId != nil {
+                    ToolbarItem(placement: .principal) {
+                        Button { showProfile = true } label: {
+                            Text(target.title).font(.headline).foregroundStyle(Color.ink)
+                        }
+                        .accessibilityHint("Ver perfil")
+                    }
+                }
                 // Reportar y bloquear (App Store 1.2, contenido de usuarios).
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -2909,6 +2941,8 @@ struct BusinessChatView: View {
             .frame(width: 48, height: 48)
             .background(Color.paleSage)
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .photoZoomSource(id: c.imageUrl ?? "", in: cardZoom)
             VStack(alignment: .leading, spacing: 2) {
                 Text(c.kind == "product" ? "Pregunta sobre este producto" : "Consulta sobre este lugar")
                     .font(BT.caption1).foregroundStyle(Color.inkMuted)
@@ -2923,6 +2957,10 @@ struct BusinessChatView: View {
         .frame(maxWidth: 280, alignment: .leading)
         .background(Color.surface, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.hairline, lineWidth: 1))
+        // Toda la tarjeta abre la foto a pantalla completa (Keyla, 25 Nov 2026).
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture { if c.imageUrl != nil { cardPhoto = c } }
+        .accessibilityAddTraits(c.imageUrl == nil ? [] : .isButton)
     }
 
     // MARK: Escribir
@@ -3009,6 +3047,7 @@ struct BusinessChatView: View {
         guard let id = conversationId,
               let thread = try? await APIClient.shared.businessChatMessages(conversationId: id) else { return }
         side = thread.side
+        if let t = thread.conversation?.travelerId { travelerId = t }
         blocked = thread.blocked ?? false
         blockedByMe = thread.blockedByMe ?? false
         if thread.messages != messages { messages = thread.messages }
@@ -3146,3 +3185,5 @@ enum ProductFocus {
         return p.entryId
     }
 }
+
+private struct PhotoURL: Identifiable { let url: String; let card: BizCard; var id: String { url } }

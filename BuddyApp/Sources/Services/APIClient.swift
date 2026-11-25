@@ -1748,6 +1748,9 @@ struct BizMessage: Decodable, Identifiable, Hashable {
 struct BizThread: Decodable {
     let side: String
     let messages: [BizMessage]
+    /// Para abrir el perfil del visitante desde el chat del negocio.
+    struct Conv: Decodable { let travelerId: String? }
+    var conversation: Conv? = nil
     /// Reportar y bloquear (App Store 1.2): nil en servidores viejos.
     var blocked: Bool? = nil
     var blockedByMe: Bool? = nil

@@ -1565,6 +1565,10 @@ struct BusinessInboxView: View {
                     .font(BT.footnote).foregroundStyle(Color.inkMuted).lineLimit(2)
             }
             Spacer(minLength: 4)
+            // Espera tu respuesta: el mismo círculo rojo de la pestaña (Keyla, 25 Nov 2026).
+            if BizPending.pending([c], asBusiness: business != nil) > 0 {
+                UnreadBadge(count: 1)
+            }
             Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.brand)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
@@ -1609,10 +1613,35 @@ struct BusinessInboxView: View {
         if let business, !business.isLinkedAccount { loading = false; return }
         do {
             items = try await APIClient.shared.businessConversations(farmId: business?.id)
+            BizPending.shared.update(items, asBusiness: business != nil)
             errorText = nil
         } catch {
             errorText = "No pudimos cargar las preguntas. Desliza hacia abajo para intentar de nuevo."
         }
         loading = false
+    }
+}
+
+/// Conversaciones con negocios que esperan respuesta: la última palabra la
+/// tiene el otro lado. Pinta el círculo rojo de Conexiones (Keyla, 25 Nov 2026).
+@MainActor
+final class BizPending: ObservableObject {
+    static let shared = BizPending()
+    @Published private(set) var count = 0
+
+    /// En modo negocio cuenta los mensajes de visitantes; si no, las respuestas de negocios.
+    static func pending(_ items: [BizConversation], asBusiness: Bool) -> Int {
+        items.filter { $0.lastSender == (asBusiness ? "traveler" : "business") }.count
+    }
+
+    func update(_ items: [BizConversation], asBusiness: Bool) {
+        count = Self.pending(items, asBusiness: asBusiness)
+    }
+
+    func refresh() async {
+        let biz = AccountStore.shared.active
+        if let biz, !biz.isLinkedAccount { count = 0; return }
+        guard let items = try? await APIClient.shared.businessConversations(farmId: biz?.id) else { return }
+        update(items, asBusiness: biz != nil)
     }
 }

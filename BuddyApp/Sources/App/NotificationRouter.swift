@@ -19,6 +19,13 @@ enum NotificationRouter {
     // MARK: – Tap routing (background → foreground / terminated → open)
 
     static func route(_ userInfo: [AnyHashable: Any]) {
+        // Pregunta o respuesta de un negocio: abrir directo esa conversación (Keyla, 25 Nov 2026).
+        if let raw = userInfo["type"] as? String, raw == "business_question" || raw == "business_answer",
+           let conversationId = userInfo["conversation_id"] as? String {
+            AppRouter.shared.openBusinessChat(conversationId: conversationId,
+                                              farmId: raw == "business_question" ? userInfo["farm_id"] as? String : nil)
+            return
+        }
         guard let type = NotificationType(userInfo: userInfo) else { return }
 
         switch type {
