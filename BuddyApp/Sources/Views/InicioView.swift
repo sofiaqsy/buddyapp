@@ -3689,6 +3689,7 @@ struct HomeRowsView: View {
     @State private var localProducts: [LocalProductTile] = []
     /// Coincidencias en productos: id del lugar -> productos que coinciden.
     @State private var productHits: [String: [ProductSearchHit.P]] = [:]
+    @FocusState private var searchFocused: Bool
     /// Cuánto subió la portada. Cuando la foto ya pasó, una franja tapa la
     /// zona de la hora para que el contenido no se lea debajo de ella.
     @State private var heroScroll: CGFloat = 0
@@ -3943,6 +3944,8 @@ struct HomeRowsView: View {
                 .foregroundStyle(Color.inkMuted)
                 .accessibilityHidden(true)
             TextField("¿Qué quieres descubrir?", text: $query)
+                .focused($searchFocused)
+                .frame(maxHeight: .infinity)
                 .task(id: query) { await loadProductHits(query) }
                 .font(BT.body)
                 .foregroundStyle(Color.ink)
@@ -3960,6 +3963,9 @@ struct HomeRowsView: View {
         .padding(.horizontal, 16)
         .frame(height: 52)
         .background(Color.surface, in: Capsule())
+        .contentShape(Capsule())
+        // Un toque en cualquier parte de la barra abre el teclado (Keyla, 25 Nov 2026).
+        .onTapGesture { searchFocused = true }
         .shadow(color: .black.opacity(0.10), radius: 12, y: 4)
     }
 
