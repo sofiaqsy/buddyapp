@@ -37,6 +37,8 @@ enum AppTab: Int, CaseIterable {
 // MARK: – ROOT VIEW
 
 struct RootView: View {
+    /// Teclado abierto: la barra de pestañas se esconde (Keyla, 24 Nov 2026).
+    @State private var keyboardVisible = false
     @EnvironmentObject var locationService: LocationService
     @EnvironmentObject var routeStore: RouteStore
     @EnvironmentObject var authState: AuthState
@@ -63,7 +65,14 @@ struct RootView: View {
                 // Un poco más abajo, dentro de la zona del indicador de inicio
                 // (Keyla, 19 Nov 2026); el indicador sigue visible debajo.
                 .offset(y: 16)
+                // Con el teclado abierto la barra se esconde: subía con el teclado
+                // y quedaba cortada encima (Keyla, 24 Nov 2026).
+                .opacity(keyboardVisible ? 0 : 1)
+                .allowsHitTesting(!keyboardVisible)
+                .animation(.easeOut(duration: 0.15), value: keyboardVisible)
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
         // Sesión de cuenta verificada expirada (p. ej. tras reinstalar): pedir
         // login con la misma cuenta en vez de seguir como guest nuevo.
         .sheet(isPresented: $authState.sessionNeedsReauth) {

@@ -51,6 +51,12 @@ struct BuddyAppApp: App {
                 // AuthState lo marca y la UI transiciona a estado anónimo.
                 .task { await authState.validate() }
                 .onAppear { PerfLog.ms("primera-pantalla", since: Cronometro.arranque) }
+                // Tocar fuera de un campo de texto cierra el teclado, en toda la app.
+                .onAppear { DispatchQueue.main.async { KeyboardDismisser.install() } }
+                // Ventanas nuevas (al volver a la app): se vuelve a revisar, sin duplicar.
+                .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in
+                    KeyboardDismisser.install()
+                }
                 // Enlace de invitación a un negocio (Keyla, 24 Nov 2026). Los demás
                 // enlaces (Google) siguen yendo a su manejador.
                 .onOpenURL { url in

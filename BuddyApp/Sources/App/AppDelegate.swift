@@ -22,15 +22,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         requestPushPermission()
     }
 
-    // Tocar fuera de un campo de texto cierra el teclado en cualquier pantalla.
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        let window = application.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }
-        KeyboardDismisser.shared.install(on: window)
-    }
-
     // MARK: – Request permission & register for remote notifications
 
     func requestPushPermission() {
@@ -106,33 +97,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 }
 
-// MARK: – Cierre global del teclado
-// Instala un gesto de tap a nivel de ventana para que tocar fuera de un campo
-// de texto cierre el teclado en CUALQUIER pantalla. `cancelsTouchesInView = false`
-// y el delegate permiten que botones, listas y demás gestos sigan funcionando.
-final class KeyboardDismisser: NSObject, UIGestureRecognizerDelegate {
-    static let shared = KeyboardDismisser()
-    private weak var installedWindow: UIWindow?
-
-    func install(on window: UIWindow?) {
-        guard let window, installedWindow !== window else { return }
-        installedWindow = window
-        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
-        tap.cancelsTouchesInView = false
-        tap.delegate = self
-        window.addGestureRecognizer(tap)
-    }
-
-    @objc private func dismissKeyboard() {
-        installedWindow?.endEditing(true)
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
-    }
-}
-
 extension Notification.Name {
     static let pushNotificationTapped = Notification.Name("pushNotificationTapped")
     static let pushReceivedForeground = Notification.Name("pushReceivedForeground") // push llegó con la app abierta
@@ -192,4 +156,50 @@ final class PlaceDeepLink: ObservableObject {
     func consume() -> PendingPlace? {
         let p = pending; pending = nil; return p
     }
+}
+
+// MARK: – Cerrar el teclado tocando fuera (Keyla, 24 Nov 2026)
+// Regla de toda la app: con el teclado abierto, tocar cualquier otro lugar de la
+// pantalla lo cierra. Un solo toque en la ventana, sin tapar nada: los botones,
+// listas y mapas siguen recibiendo su toque (cancelsTouchesInView = false), y
+// tocar otro campo de texto no lo cierra (pasa el foco a ese campo).
+final class KeyboardDismisser: NSObject, UIGestureRecognizerDelegate {
+    static let shared = KeyboardDismisser()
+
+    /// Se instala una vez por ventana; llamar al aparecer la primera pantalla.
+    static func install() {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let ws = scene as? UIWindowScene else { continue }
+            for window in ws.windows where !(window.gestureRecognizers ?? []).contains(where: { $0.name == "buddy.dismissKeyboard" }) {
+                let tap = UITapGestureRecognizer(target: window, action: #selector(UIView.endEditing(_:)))
+                tap.name = "buddy.dismissKeyboard"
+                tap.cancelsTouchesInView = false
+                tap.requiresExclusiveTouchType = false
+                tap.delegate = shared
+                window.addGestureRecognizer(tap)
+                // Deslizar hacia abajo también lo cierra (Keyla, 24 Nov 2026).
+                let swipe = UISwipeGestureRecognizer(target: window, action: #selector(UIView.endEditing(_:)))
+                swipe.name = "buddy.dismissKeyboard.swipe"
+                swipe.direction = .down
+                swipe.cancelsTouchesInView = false
+                swipe.delegate = shared
+                window.addGestureRecognizer(swipe)
+            }
+            // En listas y pantallas que se desplazan, el teclado baja con el dedo (estándar de iOS).
+            UIScrollView.appearance().keyboardDismissMode = .interactive
+        }
+    }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // Tocar un campo de texto no cierra el teclado.
+        var v: UIView? = touch.view
+        while let cur = v {
+            if cur is UITextField || cur is UITextView || cur is UISearchBar { return false }
+            v = cur.superview
+        }
+        return true
+    }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
