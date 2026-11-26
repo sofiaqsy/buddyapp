@@ -12,6 +12,7 @@ struct PhotoCaptureView: View {
     @StateObject private var camera = CameraModel()
     @State private var galleryItems: [PhotosPickerItem] = []
     @State private var loadingGallery = false
+    @State private var showGallery = false
 
     var body: some View {
         ZStack {
@@ -49,7 +50,9 @@ struct PhotoCaptureView: View {
                 Spacer()
                 HStack {
                     // Galería en la misma pantalla.
-                    PhotosPicker(selection: $galleryItems, maxSelectionCount: max(1, maxCount), matching: .images) {
+                    // Botón propio + photosPicker(isPresented:): responde aunque la pantalla
+                    // aún esté apareciendo, y se puede abrir solo (Keyla, 26 Nov 2026).
+                    Button { showGallery = true } label: {
                         VStack(spacing: 4) {
                             Image(systemName: "photo.on.rectangle").font(.system(size: 20, weight: .semibold))
                             Text("Galería").font(.system(size: 12, weight: .semibold))
@@ -84,6 +87,11 @@ struct PhotoCaptureView: View {
             if loadingGallery || camera.capturing {
                 ProgressView().tint(.white).controlSize(.large)
             }
+        }
+        .photosPicker(isPresented: $showGallery, selection: $galleryItems, maxSelectionCount: max(1, maxCount), matching: .images)
+        // Sin cámara (o sin permiso), la galería se abre sola.
+        .onChange(of: camera.state) { _, st in
+            if st == .unavailable || st == .denied { showGallery = true }
         }
         .statusBarHidden()
         .task { await camera.start() }

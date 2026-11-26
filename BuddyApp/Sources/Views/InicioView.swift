@@ -4214,6 +4214,8 @@ struct HomePlaceCard: View {
     /// En una fila de categoría la categoría ya está en el título de la
     /// sección: la tarjeta muestra solo el nombre (Keyla, 19 Nov 2026).
     var showsCategory: Bool = true
+    /// Ciudad del lugar con un pin, bajo la categoría (Negocio > Ubicaciones).
+    var city: String? = nil
     /// Foto vertical 4:5 aunque muestre la categoría ("Más para descubrir",
     /// Keyla 23 Nov 2026: "más alargado").
     var tall: Bool = false
@@ -4221,6 +4223,8 @@ struct HomePlaceCard: View {
     var showsDistance: Bool = false
     /// Ancho propio para filas más compactas (perfil, Keyla 25 Nov 2026); misma forma 4:5.
     var widthOverride: CGFloat? = nil
+    /// Foto local aún sin subir (vista previa al agregar una ubicación; Keyla, 26 Nov 2026).
+    var localImage: UIImage? = nil
 
     /// Filas de categoría: foto vertical 4:5, más angosta y con esquinas más
     /// chicas (Keyla, 20 Nov 2026). Las demás filas siguen en 4:3.
@@ -4241,8 +4245,14 @@ struct HomePlaceCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CachedImage(urlString: card.coverUrl) { img in
-                img.resizable().scaledToFill()
+            Group {
+                if let localImage {
+                    Image(uiImage: localImage).resizable().scaledToFill()
+                } else {
+                    CachedImage(urlString: card.coverUrl) { img in
+                        img.resizable().scaledToFill()
+                    }
+                }
             }
             .frame(width: width, height: height)
             .clipped()
@@ -4290,6 +4300,13 @@ struct HomePlaceCard: View {
                             .font(BT.caption1)
                             .foregroundStyle(Color.inkMuted)
                             .lineLimit(1)
+                    }
+                }
+                if let city, !city.isEmpty {
+                    HStack(spacing: 6) {
+                        // El pin de ubicación de siempre (Keyla, 26 Nov 2026).
+                        LocationPin(size: 12).frame(width: 16).accessibilityHidden(true)
+                        Text(city).font(BT.caption1).foregroundStyle(Color.inkMuted).lineLimit(1)
                     }
                 }
             }

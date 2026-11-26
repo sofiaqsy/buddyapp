@@ -179,7 +179,11 @@ final class OwnerPhotoStore: ObservableObject {
     func cover(_ spotId: String) -> String? { photos(spotId).first?.url }
 
     func load(_ spotId: String) async {
-        if let list = try? await APIClient.shared.fetchOwnerPhotos(spotId: spotId) { bySpot[spotId] = list }
+        guard let list = try? await APIClient.shared.fetchOwnerPhotos(spotId: spotId) else { return }
+        // Una lectura que salió antes de terminar una subida llega vacía: no borra la foto recién subida
+        // (Keyla, 26 Nov 2026: la tarjeta de una ubicación nueva quedaba gris).
+        if list.isEmpty, !(bySpot[spotId] ?? []).isEmpty { return }
+        bySpot[spotId] = list
     }
 
     func add(_ ctx: BusinessEditContext, images: [Data]) async {

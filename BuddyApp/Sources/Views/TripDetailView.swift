@@ -2445,7 +2445,7 @@ struct PlaceGuideDetailSheet: View {
             }
             if let ctx = editCtx {
                 BusinessPanelAbout(ctx: ctx)
-                CoverageEditor(ctx: ctx).padding(.top, 8)
+                // Sin "Cobertura" en la ficha del dueño (Keyla, 26 Nov 2026).
             } else if productsState == .loaded {
                 askBusinessButton
             } else if place.description.isEmpty {

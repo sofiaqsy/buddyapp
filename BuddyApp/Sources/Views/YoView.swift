@@ -1897,14 +1897,21 @@ struct DestinationPickerSheet: View {
 /// Cifras del perfil en pastillas sage ("12 trips", "12 lugares", "9 ayudas").
 struct ProfileStatPills: View {
     let items: [String]
+    /// Pills en rojo de alerta (algo obligatorio falta; Keyla, 26 Nov 2026).
+    var alerts: Set<String> = []
+    /// Pills en ámbar: esperando algo (p. ej. revisión).
+    var warnings: Set<String> = []
     var body: some View {
         HStack(spacing: 6) {
             ForEach(items, id: \.self) { t in
+                let alert = alerts.contains(t)
+                let warn = warnings.contains(t)
+                let tint: Color = alert ? .errorRed : (warn ? .warningAmber : .brand)
                 Text(t)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.brand)
+                    .foregroundStyle(tint)
                     .padding(.horizontal, 9).padding(.vertical, 4)
-                    .background(Color.paleSage, in: Capsule())
+                    .background(alert || warn ? tint.opacity(0.14) : Color.paleSage, in: Capsule())
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -2115,7 +2122,34 @@ struct BusinessLocationPicker: View {
     @State private var pendingNew: (name: String, lat: Double, lng: Double)?
     @State private var closeToNew: [APINearbySpot] = []
     @State private var mapPlaces: [MKMapItem] = []
-    enum Step { case nearby, map, confirmNew, noPlace, cover }
+    enum Step { case coverFirst, nearby, map, confirmNew, noPlace, cover }
+    /// Mi negocio: primero la foto de portada, después la ubicación (Keyla, 26 Nov 2026).
+    private var coverFirst: Bool { onPicked == nil }
+    @State private var pendingCover: Data?
+    @State private var finishing = false
+    /// Una sola pantalla: portada + ubicación + Guardar (Keyla, 26 Nov 2026).
+    enum PendingPick { case place(name: String, lat: Double, lng: Double, spotId: String?), noPlace }
+    @State private var pendingPick: PendingPick?
+    @State private var committing = false
+    /// Dirección del punto nuevo (calle), para mostrar en "Ubicación elegida".
+    @State private var pendingAddress: String?
+    private var previewCard: APIPlaceCard {
+        APIPlaceCard(id: "preview", name: pendingPlaceName ?? businessName ?? "", destinationId: nil, destinationName: nil,
+                     lat: 0, lng: 0, distanceMeters: nil, coverUrl: nil, coverUrls: nil, coverPhotos: nil,
+                     coverAuthorName: nil, coverAuthorAvatarUrl: nil, category: nil,
+                     photoCount: 0, isNew: false, buddyCount: 0, buddies: [])
+    }
+    private var pendingPlaceName: String? {
+        if case .place(let name, _, _, _) = pendingPick { return name }
+        return nil
+    }
+    private var pendingPickLabel: String? {
+        switch pendingPick {
+        case .place(let name, _, _, let spotId): return spotId == nil ? (pendingAddress ?? "Punto en el mapa") : name
+        case .noPlace: return "No tengo local físico"
+        case nil: return nil
+        }
+    }
 
     private var start: (lat: Double, lng: Double)? {
         LocationService.current?.userLocation.map { ($0.coordinate.latitude, $0.coordinate.longitude) }
@@ -2124,6 +2158,7 @@ struct BusinessLocationPicker: View {
     var body: some View {
         Group {
             switch step {
+            case .coverFirst: coverFirstStep
             case .nearby: nearbyStep
             case .map: mapStep
             case .confirmNew: confirmNewStep
@@ -2131,7 +2166,8 @@ struct BusinessLocationPicker: View {
             case .cover: coverStep
             }
         }
-        .modifier(PickerChrome(embedded: onPicked != nil, step: $step, hasList: !nearby.isEmpty || onPicked == nil, dismiss: { dismiss() }))
+        .modifier(PickerChrome(embedded: onPicked != nil, step: $step, hasList: !nearby.isEmpty || onPicked == nil,
+                               coverFirst: coverFirst, dismiss: { dismiss() }))
         .task {
             await loadNearby()
             // Sin sugerencias de Buddy, una pantalla con un solo botón no sirve: directo al mapa.
@@ -2146,10 +2182,13 @@ struct BusinessLocationPicker: View {
         // Misma experiencia que "Añadir lugar" (Lugares que recomiendas).
         ScrollView {
             VStack(spacing: Spacing.md) {
-                Text("¿DÓNDE ESTÁ TU NEGOCIO?")
-                    .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, Spacing.lg)
+                VStack(alignment: .leading, spacing: 4) {
+                    if coverFirst { Text("Paso 1 de 2").font(BT.caption1).foregroundStyle(Color.inkMuted) }
+                    Text("¿DÓNDE ESTÁ TU NEGOCIO?")
+                        .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, Spacing.lg)
                 ForEach(nearby.prefix(5)) { spot in
                     Button { Haptic.medium(); claim(spot) } label: {
                         PlaceOptionRow(icon: "mappin.circle.fill", title: spot.name,
@@ -2164,7 +2203,14 @@ struct BusinessLocationPicker: View {
                 .buttonStyle(.pressable)
                 // Sin local físico (Keyla, 22 Nov 2026): solo eligen dónde entregan.
                 if onPicked == nil {
-                    Button { withAnimation { step = .noPlace } } label: {
+                    Button {
+                        // Pantalla única: "sin local" va directo al paso 2 con ciudades + portada (Keyla, 26 Nov 2026).
+                        if coverFirst {
+                            pendingPick = .noPlace
+                            Task { await prefillCurrentCity() }
+                            withAnimation { step = .coverFirst }
+                        } else { withAnimation { step = .noPlace } }
+                    } label: {
                         PlaceOptionRow(icon: "shippingbox", title: "No tengo local físico", subtitle: nil)
                     }
                     .buttonStyle(.pressable)
@@ -2249,7 +2295,7 @@ struct BusinessLocationPicker: View {
             onPickSpot: { spot in add(name: spot.name, lat: spot.lat, lng: spot.lng, spotId: spot.id) },
             onPropose: { name, _, lat, lng in Task { await checkBeforeNew(name: name, lat: lat, lng: lng) } },
             pickTitle: "Es mi negocio",
-            proposeTitle: "Guardar ubicación",
+            proposeTitle: coverFirst ? "Siguiente" : "Guardar ubicación",
             newEyebrow: "",
             namePlaceholder: "Nombre del lugar",
             suggestMapPlaces: true,
@@ -2268,15 +2314,25 @@ struct BusinessLocationPicker: View {
     private var noPlaceStep: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.md) {
-                Text("LUGARES QUE CUBRES")
-                    .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
-                    .padding(.top, Spacing.lg)
+                VStack(alignment: .leading, spacing: 4) {
+                    if coverFirst { Text("Paso 1 de 2").font(BT.caption1).foregroundStyle(Color.inkMuted) }
+                    Text("¿EN QUÉ CIUDADES ATIENDES?")
+                        .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                }
+                .padding(.top, Spacing.lg)
+                // Ya va la ciudad donde está; solo agrega otras si también atiende allí (Keyla, 26 Nov 2026).
+                Text("Agrega otras si también atiendes allí.")
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
                 DestinationChipsPicker(selection: $noPlaceAreas, fieldColor: .surface)
                 if let errorText { Text(errorText).font(BT.caption1).foregroundStyle(Color.errorRed) }
-                Button { Task { await saveNoPlace() } } label: {
+                Button {
+                    if coverFirst { pendingPick = .noPlace; withAnimation { step = .coverFirst } }
+                    else { Task { await saveNoPlace() } }
+                } label: {
                     HStack(spacing: 8) {
                         if savingNoPlace { ProgressView().tint(Color.inkInverse) }
-                        Text("Guardar").font(BT.headline)
+                        Text(coverFirst ? "Siguiente" : "Guardar").font(BT.headline)
                     }
                     .foregroundStyle(Color.inkInverse)
                     .frame(maxWidth: .infinity).frame(height: 52)
@@ -2288,6 +2344,15 @@ struct BusinessLocationPicker: View {
             .padding(.horizontal, Spacing.edge)
         }
         .background(Color.canvas)
+        .task { await prefillCurrentCity() }
+    }
+
+    /// La ciudad actual del dueño (misma resolución que Inicio), si aún no eligió ninguna.
+    private func prefillCurrentCity() async {
+        guard noPlaceAreas.isEmpty, let s = start,
+              let r = try? await APIClient.shared.resolveLocation(lat: s.lat, lng: s.lng),
+              noPlaceAreas.isEmpty else { return }
+        noPlaceAreas = [CoverageDestination(id: r.destinationId, name: r.destinationName)]
     }
 
     private func saveNoPlace() async {
@@ -2308,7 +2373,7 @@ struct BusinessLocationPicker: View {
             Haptic.success()
             // Sin foto no sale en Inicio: se pide la portada antes de cerrar.
             coverCtx = BusinessEditContext(businessId: businessId, locationId: loc.id, spotId: spot.id)
-            withAnimation { step = .cover }
+            if coverFirst { await uploadPendingCoverAndClose() } else { withAnimation { step = .cover } }
         } catch {
             errorText = "No pudimos guardar. Intenta de nuevo."
         }
@@ -2321,6 +2386,137 @@ struct BusinessLocationPicker: View {
     @State private var coverCtx: BusinessEditContext?
     @State private var coverCapture = false
     @ObservedObject private var ownerPhotos = OwnerPhotoStore.shared
+
+    /// Paso 1 en Mi negocio: la portada, guardada en memoria hasta elegir el lugar.
+    @State private var coverFirstCapture = false
+    private var coverFirstStep: some View {
+        let img = pendingCover.flatMap { UIImage(data: $0) }
+        return ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Paso 2 de 2").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                    Text("UBICACIÓN ELEGIDA")
+                        .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                }
+                .padding(.top, Spacing.lg)
+                Button { withAnimation { step = .nearby } } label: {
+                    HStack(spacing: 12) {
+                        LocationPin(size: 16)
+                            .frame(width: 40, height: 40)
+                            .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 10))
+                        Text(pendingPickLabel ?? "Elegir ubicación")
+                            .font(BT.footnoteBold)
+                            .foregroundStyle(pendingPickLabel == nil ? Color.brand : Color.ink)
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                        Spacer(minLength: 4)
+                        Text(pendingPickLabel == nil ? "" : "Cambiar")
+                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.brand)
+                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.brand)
+                    }
+                    .padding(12)
+                    .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.lg))
+                }
+                .buttonStyle(.plain)
+
+                Text("FOTO DE PORTADA")
+                    .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                    .padding(.top, Spacing.sm)
+                Text("Es la foto que verán los viajeros en Inicio.")
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { coverFirstCapture = true } label: {
+                    // La misma tarjeta (y medidas) de los lugares en Inicio (Keyla, 26 Nov 2026).
+                    HomePlaceCard(card: previewCard, large: false, localImage: img)
+                        .overlay {
+                            if img == nil {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 22, weight: .semibold)).foregroundStyle(Color.white)
+                                    .frame(width: 52, height: 52).background(Color.brand, in: Circle())
+                                    .offset(y: -22)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(img == nil ? "Elegir foto de portada" : "Cambiar foto de portada")
+
+                if case .noPlace = pendingPick {
+                    Text("¿EN QUÉ CIUDADES ATIENDES?")
+                        .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
+                        .padding(.top, Spacing.sm)
+                    Text("Agrega otras si también atiendes allí.")
+                        .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    DestinationChipsPicker(selection: $noPlaceAreas, fieldColor: .surface)
+                }
+                if let errorText { Text(errorText).font(BT.caption1).foregroundStyle(Color.errorRed) }
+                if let e = ownerPhotos.errorText { Text(e).font(BT.caption1).foregroundStyle(Color.errorRed) }
+
+                let citiesOK: Bool = { if case .noPlace = pendingPick { return !noPlaceAreas.isEmpty }; return true }()
+                let ready = img != nil && pendingPick != nil && citiesOK && !finishing
+                Button { Task { await saveAll() } } label: {
+                    HStack(spacing: 8) {
+                        if finishing { ProgressView().tint(Color.inkInverse) }
+                        Text("Guardar ubicación").font(BT.headline)
+                    }
+                    .foregroundStyle(Color.inkInverse)
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .background(ready ? Color.ink : Color.inkMuted.opacity(0.4), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!ready)
+                .padding(.top, Spacing.sm)
+            }
+            .padding(.horizontal, Spacing.edge)
+        }
+        .background(Color.canvas)
+        .photoCapture(isPresented: $coverFirstCapture) { datas in
+            if let jpg = datas.first { pendingCover = jpg }
+        }
+    }
+
+    private func saveAll() async {
+        guard let pick = pendingPick, pendingCover != nil else { return }
+        finishing = true
+        committing = true
+        defer { committing = false }
+        switch pick {
+        case .place(let name, let lat, let lng, let spotId):
+            // Punto nuevo: se crea su ficha (queda en revisión) para poder guardar la portada,
+            // y el negocio la reclama antes de subir la foto (Keyla, 26 Nov 2026).
+            var id = spotId
+            do {
+                if id == nil {
+                    id = try await APIClient.shared.proposeSpot(name: name, lat: lat, lng: lng).id
+                }
+                if let id { try await APIClient.shared.claimFincasSpot(spotId: id, farmId: businessId) }
+            } catch {
+                errorText = id == nil
+                    ? "No pudimos crear el lugar. Revisa tu conexión e intenta de nuevo."
+                    : "No pudimos confirmar este lugar como tuyo. Si ya pertenece a otro negocio, escríbenos."
+                finishing = false
+                return
+            }
+            add(name: name, lat: lat, lng: lng, spotId: id)
+        case .noPlace:
+            await saveNoPlace()
+        }
+        // add() sube la portada y cierra; si algo falló, se queda aquí con el error.
+        if errorText != nil { finishing = false }
+    }
+
+    private func uploadPendingCoverAndClose() async {
+        guard let ctx = coverCtx, let jpg = pendingCover else { dismiss(); return }
+        finishing = true
+        await ownerPhotos.add(ctx, images: [jpg])
+        finishing = false
+        if ownerPhotos.errorText != nil {
+            // Falló la subida: se queda en el paso de portada para reintentar.
+            withAnimation { step = .cover }
+        } else {
+            dismiss()
+        }
+    }
 
     private var coverStep: some View {
         let ctx = coverCtx
@@ -2468,6 +2664,23 @@ struct BusinessLocationPicker: View {
     }
 
     private func add(name: String, lat: Double, lng: Double, spotId: String?) {
+        // En la pantalla única: elegir solo guarda la elección; "Guardar" la confirma.
+        if coverFirst && !committing {
+            pendingPick = .place(name: name.trimmingCharacters(in: .whitespaces), lat: lat, lng: lng, spotId: spotId)
+            errorText = nil
+            pendingAddress = nil
+            if spotId == nil {
+                // Punto nuevo: mostrar la calle, no el nombre del negocio (Keyla, 26 Nov 2026).
+                CLGeocoder().reverseGeocodeLocation(CLLocation(latitude: lat, longitude: lng)) { marks, _ in
+                    guard let m = marks?.first else { return }
+                    let text = [m.thoroughfare.map { t in m.subThoroughfare.map { "\(t) \($0)" } ?? t }, m.locality]
+                        .compactMap { $0 }.joined(separator: ", ")
+                    DispatchQueue.main.async { if !text.isEmpty { pendingAddress = text } }
+                }
+            }
+            withAnimation { step = .coverFirst }
+            return
+        }
         if let onPicked {
             Haptic.success()
             onPicked(BusinessLocation(name: name.trimmingCharacters(in: .whitespaces), lat: lat, lng: lng, spotId: spotId, isMain: true))
@@ -2498,7 +2711,13 @@ struct BusinessLocationPicker: View {
                 store.update(bb)
             }
         }
-        dismiss()
+        // La portada elegida al inicio se sube al lugar (Keyla, 26 Nov 2026).
+        if let spotId {
+            coverCtx = BusinessEditContext(businessId: businessId, locationId: id, spotId: spotId)
+            if coverFirst { Task { await uploadPendingCoverAndClose() } } else { withAnimation { step = .cover } }
+        } else {
+            dismiss()
+        }
     }
 }
 
@@ -2508,10 +2727,15 @@ private struct PickerChrome: ViewModifier {
     let embedded: Bool
     @Binding var step: BusinessLocationPicker.Step
     var hasList = true
+    var coverFirst = false
     let dismiss: () -> Void
-    private var atStart: Bool { step == .nearby || step == .cover || (step == .map && !hasList) }
+    private var atStart: Bool {
+        step == .cover || step == .nearby || (step == .map && !hasList)
+    }
     private func back() {
-        if atStart { dismiss() } else { withAnimation { step = step == .confirmNew ? .map : .nearby } }
+        if atStart { dismiss() }
+        else if step == .coverFirst { withAnimation { step = .nearby } }
+        else { withAnimation { step = step == .confirmNew ? .map : .nearby } }
     }
     func body(content: Content) -> some View {
         if embedded {
@@ -3067,11 +3291,37 @@ struct BusinessHomeView: View {
                     Text(isLinked ? "Cuenta negocio" : live.category).font(BT.subhead).foregroundStyle(Color.inkMuted)
                     ProfileStatPills(items: isLinked
                         // Sin el conteo de productos (Keyla, 24 Nov 2026).
-                        ? ["Vinculado"]
-                        : ["En revisión"])
+                        ? ["Vinculado", inicioStatus]
+                        : ["En revisión"],
+                        alerts: ["No visible en Inicio"],
+                        warnings: isLinked ? ["En revisión"] : [])
                 }
             }
         }
+        // Ubicaciones nuevas esperan aprobación: "En revisión" hasta que se aprueben (Keyla, 26 Nov 2026).
+        .task(id: (live.locations ?? []).compactMap(\.spotId).joined()) { await loadPendingSpots() }
+    }
+
+    @State private var pendingSpotIds: Set<String> = []
+
+    /// Estado del negocio en Inicio: sin ubicación, todas en revisión, o visible.
+    private var inicioStatus: String {
+        let locs = live.locations ?? []
+        if locs.isEmpty { return "No visible en Inicio" }
+        let ids = locs.compactMap(\.spotId)
+        if !ids.isEmpty && ids.allSatisfy({ pendingSpotIds.contains($0) }) { return "En revisión" }
+        return "Visible en Inicio"
+    }
+
+    private func loadPendingSpots() async {
+        var pending: Set<String> = []
+        for loc in live.locations ?? [] {
+            guard let id = loc.spotId,
+                  let near = try? await APIClient.shared.fetchNearbySpots(lat: loc.lat, lng: loc.lng, radius: 50),
+                  let hit = near.first(where: { $0.id == id }) else { continue }
+            if hit.isPendingApproval { pending.insert(id) }
+        }
+        pendingSpotIds = pending
     }
 
     private var resumen: some View {
@@ -4166,6 +4416,8 @@ struct BusinessProfileEditor: View {
     @State private var generalExpanded = true
     @State private var contentExpanded = false
     @State private var locationsExpanded = true
+    /// Tocó la alerta "Obligatorio": la sección se marca en rojo hasta agregar una ubicación (Keyla, 26 Nov 2026).
+    @State private var flagLocations = false
     @State private var showLocationPicker = false
     @State private var hoursEditing = false
     @State private var draftHours: [DayHours] = []
@@ -4249,6 +4501,12 @@ struct BusinessProfileEditor: View {
                   summary: locationsSummary, expanded: $locationsExpanded) {
                 locationsContent
             }
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.lg)
+                    .stroke(Color.errorRed, lineWidth: 2)
+                    .opacity(flagLocations && locations.isEmpty ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
             .id("locations")
             group("Información general", icon: "info.circle",
                   summary: generalSummary, expanded: $generalExpanded) {
@@ -4324,7 +4582,9 @@ struct BusinessProfileEditor: View {
             case "general": generalExpanded = true
             case "hours": hoursExpanded = true
             case "content": contentExpanded = true
-            case "locations": locationsExpanded = true
+            case "locations":
+                locationsExpanded = true
+                if locations.isEmpty { flagLocations = true }
             default: break
             }
         }
@@ -4358,14 +4618,31 @@ struct BusinessProfileEditor: View {
             }
             ProgressView(value: Double(done), total: Double(items.count)).tint(Color.brand)
             if let next {
+                // Sin ubicación: el "Siguiente" es la alerta obligatoria, en rojo (Keyla, 26 Nov 2026).
+                let required = locations.isEmpty && next.target == "locations"
+                let tint = required ? Color.errorRed : Color.brand
                 let label = HStack(spacing: 8) {
-                    Text("Siguiente:").font(BT.footnote).foregroundStyle(Color.inkMuted)
-                    Text(next.label).font(BT.footnoteBold).foregroundStyle(Color.brand)
+                    if required {
+                        Image(systemName: "exclamationmark.circle.fill").font(.system(size: 18)).foregroundStyle(tint)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Text(required ? "Obligatorio:" : "Siguiente:").font(BT.footnote)
+                                .foregroundStyle(required ? tint : Color.inkMuted)
+                            Text(next.label).font(BT.footnoteBold).foregroundStyle(tint)
+                        }
+                        if required {
+                            Text("Sin ubicación, tu negocio no aparece en Inicio.")
+                                .font(BT.footnote).foregroundStyle(tint)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.brand)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(tint)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 8).frame(minHeight: 44)
-                .background(Color.sageTint, in: Capsule())
+                .padding(.horizontal, 14).padding(.vertical, required ? 12 : 8).frame(minHeight: 44)
+                .background(required ? Color.errorRed.opacity(0.10) : Color.sageTint,
+                            in: RoundedRectangle(cornerRadius: required ? 16 : 22))
                 // Horario: abre la primera sede sin horario, ya editándolo (Keyla, 26 Nov 2026).
                 if next.label.contains("horario"), let sinHorario = locations.first(where: { $0.hours == nil }) {
                     NavigationLink(value: BusinessLocationRoute(businessId: businessId, locationId: sinHorario.id, editHours: true)) { label }
@@ -4424,12 +4701,15 @@ struct BusinessProfileEditor: View {
     @ObservedObject private var ownerPhotos = OwnerPhotoStore.shared
     /// Destino de cada lugar: sin él no se abre el mapa con su panel.
     @State private var spotDestinations: [String: String] = [:]
+    /// spotId -> ciudad del lugar ("Villa Rica"), bajo el nombre en Ubicaciones (Keyla, 26 Nov 2026).
+    @State private var spotCities: [String: String] = [:]
 
     private func loadLocationCovers() async {
         for loc in locations where loc.spotId != nil && spotDestinations[loc.spotId!] == nil {
             if let found = try? await APIClient.shared.searchCuratedSpots(query: loc.name),
-               let d = found.first(where: { $0.id == loc.spotId })?.destinationId {
-                spotDestinations[loc.spotId!] = d
+               let hit = found.first(where: { $0.id == loc.spotId }) {
+                if let d = hit.destinationId { spotDestinations[loc.spotId!] = d }
+                if let c = hit.destination?.name { spotCities[loc.spotId!] = c }
             }
         }
         for spotId in locations.compactMap(\.spotId) { await ownerPhotos.load(spotId) }
@@ -4528,7 +4808,8 @@ struct BusinessProfileEditor: View {
     private func locationCard(_ loc: BusinessLocation) -> some View {
         let c = placeCard(for: loc)
         // id con la portada: al llegar la foto la tarjeta se vuelve a pintar.
-        return HomePlaceCard(card: c, large: false).id(c.coverUrl ?? loc.id)
+        return HomePlaceCard(card: c, large: false, city: loc.spotId.flatMap { spotCities[$0] })
+            .id((c.coverUrl ?? loc.id) + (loc.spotId.flatMap { spotCities[$0] } ?? ""))
     }
 
     private func placeCard(for loc: BusinessLocation) -> APIPlaceCard {
@@ -4562,6 +4843,13 @@ struct BusinessProfileEditor: View {
     @ViewBuilder
     private var locationsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // La alerta de ubicación vive en "Siguiente"; al tocarla, la sección se marca en rojo (Keyla, 26 Nov 2026).
+            if flagLocations && locations.isEmpty {
+                Label("Agrega al menos una ubicación. Es obligatorio para aparecer en Inicio.",
+                      systemImage: "exclamationmark.circle.fill")
+                    .font(BT.footnoteBold).foregroundStyle(Color.errorRed)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(locations.sorted { $0.isMain && !$1.isMain }) { loc in
@@ -4596,34 +4884,27 @@ struct BusinessProfileEditor: View {
                         }
                         .buttonStyle(.pressable)
                         .accessibilityLabel("Agregar ubicación")
-                    } else {
-                    // Agregar otra: la misma forma de tarjeta, vacía, con un "+".
-                    Button { showLocationPicker = true } label: {
-                        VStack(spacing: 0) {
-                            ZStack {
-                                Color.surface
-                                Image(systemName: "plus")
-                                    .font(.system(size: 22, weight: .semibold)).foregroundStyle(Color.brand)
-                                    .frame(width: 48, height: 48).background(Color.sageTint, in: Circle())
-                            }
-                            .frame(width: 168, height: 126)
-                            HStack {
-                                LocationPin(size: 13)
-                                Text(biz?.name ?? "").font(BT.headline).foregroundStyle(Color.inkMuted).lineLimit(1)
-                            }
-                            .padding(.horizontal, 12).padding(.vertical, 10)
-                            .frame(width: 168, alignment: .leading)
-                        }
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(Color.sage, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
-                    }
-                    .buttonStyle(.pressable)
-                    .accessibilityLabel("Agregar otra ubicación")
                     }
                 }
                 .padding(.vertical, 4)
+                // Centradas cuando caben (una sola sede queda al medio, Keyla 26 Nov 2026).
+                .frame(minWidth: locationsRowWidth, alignment: .center)
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { locationsRowWidth = $0 }
+            // Otra sede: un botón con texto, no una tarjeta con "+" (se confundía
+            // con agregar fotos, Keyla 26 Nov 2026).
+            if !locations.isEmpty {
+                Button { showLocationPicker = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus").font(.system(size: 14, weight: .bold))
+                        Text("Agregar otra ubicación").font(BT.footnoteBold)
+                    }
+                    .foregroundStyle(Color.brand)
+                    .frame(maxWidth: .infinity).frame(height: 44)
+                    .background(Color.sageTint, in: Capsule())
+                }
+                .buttonStyle(.pressable)
+                .padding(.top, 4)
             }
             if let claimError {
                 Text(claimError).font(BT.caption1).foregroundStyle(Color.errorRed)
@@ -4632,6 +4913,7 @@ struct BusinessProfileEditor: View {
     }
 
     @State private var claimError: String?
+    @State private var locationsRowWidth: CGFloat = 0
 
     private func syncClaims() async {
         guard isLinked else { return }
@@ -5621,3 +5903,8 @@ struct RecomendarFotosView: View {
 
 /// Ruta al mapa de un lugar para recomendarlo con fotos.
 struct RecommendPlaceRoute: Hashable { let card: APIPlaceCard }
+
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
