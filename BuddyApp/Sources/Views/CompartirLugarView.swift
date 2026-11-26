@@ -61,10 +61,18 @@ struct CompartirLugarSheet: View {
     /// Se llama cuando el journey ya existe en el backend (creado o reutilizado)
     /// — el llamador decide qué hacer (típicamente: abrir el editor Memoir).
     let onCreated: (APIJourney) -> Void
+    /// Tocar un lugar cercano abre su mapa para añadir fotos (Keyla, 25 Nov 2026).
+    var onOpenPlace: ((APIPlaceCard) -> Void)? = nil
+
+    init(onOpenPlace: ((APIPlaceCard) -> Void)? = nil, onCreated: @escaping (APIJourney) -> Void) {
+        self.onOpenPlace = onOpenPlace
+        self.onCreated = onCreated
+    }
 
     @Environment(\.dismiss) private var dismiss
     @State private var step: Step = .choose
     @State private var isSubmitting = false
+    @State private var submittingId: String?
     @State private var errorMessage: String?
 
     // Spots curados cercanos (paso "Lugar actual")
@@ -91,12 +99,23 @@ struct CompartirLugarSheet: View {
                 case .propose: proposePlaceStep
                 }
             }
-            .navigationTitle("Compartir un lugar")
+            .navigationTitle("Recomendar un lugar")
             .navigationBarTitleDisplayMode(.inline)
+            // Barra estándar y sólida (Keyla, 25 Nov 2026): el mapa empieza debajo,
+            // así "Cancelar" y la búsqueda no flotan sobre el mapa.
+            .toolbarBackground(Color.surface, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .task { await prefetchNearby() }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancelar") { dismiss() }
+                // Botón atrás estándar en todos los pasos (Keyla, 25 Nov 2026):
+                // en el mapa vuelve al paso 1; en el paso 1 cierra.
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        if step == .choose { dismiss() } else { withAnimation { step = .choose } }
+                    } label: {
+                        Image(systemName: "chevron.left").fontWeight(.semibold)
+                    }
+                    .accessibilityLabel("Atrás")
                 }
             }
         }
@@ -108,42 +127,48 @@ struct CompartirLugarSheet: View {
     @ViewBuilder
     private var chooseStep: some View {
         VStack(spacing: Spacing.md) {
-            Text("¿DÓNDE ESTÁS AHORA?")
-                .font(BT.eyebrow)
-                .tracking(2)
-                .foregroundStyle(Color.inkMuted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, Spacing.lg)
+            // Pregunta en positivo (Keyla, 25 Nov 2026): se recomienda lo que gustó.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("¿Qué lugar te encantó?")
+                    .font(BT.title3)
+                    .foregroundStyle(Color.ink)
+                Text("Recomienda un sitio donde tuviste una buena experiencia.")
+                    .font(BT.footnote)
+                    .foregroundStyle(Color.inkMuted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, Spacing.lg)
 
             // Los locales cercanos se listan aquí mismo. Si el botón ya dice el
             // nombre, tocarlo ES la elección — una segunda pantalla preguntando
             // "¿en cuál estás?" repetiría la pregunta que este botón responde.
-            if let current = nearbySpots.first {
-                Button { Haptic.medium(); submit(spotId: current.id) } label: {
-                    optionRow(
-                        icon: "location.fill",
-                        title: "\(current.name) (Lugar actual)",
-                        subtitle: current.isPendingApproval ? "\(current.distanceLabel) · por revisar" : current.distanceLabel,
-                        isLoading: isSubmitting
-                    )
-                }
-                .buttonStyle(.pressable)
-                .disabled(isSubmitting)
-
-                // Los demás dentro del radio: el GPS puede errar por unos metros
-                // y dos locales caben en ese margen.
-                ForEach(nearbySpots.dropFirst().prefix(4)) { spot in
-                    Button { Haptic.medium(); submit(spotId: spot.id) } label: {
-                        optionRow(
-                            icon: "mappin.circle.fill",
-                            title: spot.name,
-                            subtitle: spot.isPendingApproval ? "\(spot.distanceLabel) · por revisar" : spot.distanceLabel,
-                            isLoading: false
-                        )
+            // Los cercanos con la misma tarjeta de "Cerca de ti" en Inicio
+            // (Keyla, 25 Nov 2026): tocar una tarjeta ES la elección.
+            if !nearbySpots.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(nearbySpots.prefix(5)) { spot in
+                            Button {
+                                Haptic.medium()
+                                if let onOpenPlace { dismiss(); onOpenPlace(spot.asPlaceCard) }
+                                else { submit(spotId: spot.id) }
+                            } label: {
+                                HomePlaceCard(card: spot.asPlaceCard, large: false, tall: true, showsDistance: true)
+                                    .overlay {
+                                        if isSubmitting && submittingId == spot.id {
+                                            RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
+                                            ProgressView().tint(.white)
+                                        }
+                                    }
+                            }
+                            .buttonStyle(.pressable)
+                            .disabled(isSubmitting)
+                        }
                     }
-                    .buttonStyle(.pressable)
-                    .disabled(isSubmitting)
+                    .padding(.horizontal, Spacing.edge)
+                    .padding(.vertical, 4)
                 }
+                .padding(.horizontal, -Spacing.edge)
             }
 
             // "Registrar lugar de la ubicación actual" quitado (Keyla, 21 Nov 2026):
@@ -379,6 +404,7 @@ struct CompartirLugarSheet: View {
     // MARK: – Envío común
 
     private func submit(destinationId: String? = nil, placeId: String? = nil, spotId: String? = nil, lat: Double? = nil, lng: Double? = nil) {
+        submittingId = spotId
         isSubmitting = true
         Task {
             do {
@@ -479,6 +505,11 @@ struct ElegirLugarEnMapaView: View {
 
     // Búsqueda por texto: mueve el mapa, no elige nada por sí sola.
     @State private var searchText = ""
+    /// El buscador muestra el punto elegido sin lanzar una búsqueda (Keyla, 25 Nov 2026).
+    @State private var autoFill = false
+    /// Ruedita mientras se busca (Keyla, 25 Nov 2026): con 3G la búsqueda tarda.
+    @State private var isSearching = false
+    @State private var searchRun = 0
     @State private var searchResults: [MKMapItem] = []
     /// Lugares de Buddy que coinciden: van primero (Keyla, 21 Nov 2026).
     @State private var buddyResults: [APINearbySpot] = []
@@ -542,13 +573,16 @@ struct ElegirLugarEnMapaView: View {
     private func ms(_ since: Date? = nil) -> Int { Int(Date().timeIntervalSince(since ?? openedAt) * 1000) }
 
     private var selected: APIPlaceGuideSpot? { spots.first { $0.id == selectedId } }
+    @Namespace private var mapScope
+    /// Lugar de Apple tocado en el mapa (Plaza de Armas, hospedajes, cafés…).
+    @State private var mapFeature: MapFeature?
 
     var body: some View {
         // VStack y no safeAreaInset: el pin se centra sobre ESTE marco, y el
         // centro del mapa tiene que ser el mismo punto.
         VStack(spacing: 0) {
             ZStack {
-                Map(position: $camera) {
+                Map(position: $camera, selection: $mapFeature, scope: mapScope) {
                     ForEach(spots.sorted { $0.id != selectedId && $1.id == selectedId }) { spot in
                         Annotation("", coordinate: CLLocationCoordinate2D(latitude: spot.lat, longitude: spot.lng)) {
                             spotPin(label: spot.name, glyph: spot.placeCategory?.icon, isSelected: selectedId == spot.id)
@@ -566,12 +600,48 @@ struct ElegirLugarEnMapaView: View {
                     }
                     UserAnnotation()
                 }
-                .mapControls { MapUserLocationButton() }
+                // El botón de ubicación va abajo a la derecha: arriba quedaba
+                // escondido detrás de la búsqueda (Keyla, 25 Nov 2026).
+                .mapControls { }
+                // Tocar o mover el mapa cierra el teclado (Keyla, 25 Nov 2026), como en Android.
+                .simultaneousGesture(TapGesture().onEnded { closeKeyboard() })
+                .simultaneousGesture(DragGesture(minimumDistance: 2).onChanged { _ in closeKeyboard() })
+                // Tocar un lugar del mapa: el pin va ahí y su nombre llena
+                // "Nuevo lugar" (Keyla, 25 Nov 2026).
+                .onChange(of: mapFeature) { _, f in
+                    guard let f else { return }
+                    Haptic.select()
+                    selectedId = nil
+                    // En Mi negocio el nombre es el del negocio: solo se mueve el punto.
+                    if let t = f.title, !t.isEmpty { if fixedName == nil { name = t }; autoFill = true; searchText = t }
+                    center = f.coordinate
+                    programmaticMove = true
+                    withAnimation {
+                        camera = .region(MKCoordinateRegion(center: f.coordinate,
+                                                            span: MKCoordinateSpan(latitudeDelta: 0.002, longitudeDelta: 0.002)))
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    // Acercar / alejar (Keyla, 25 Nov 2026), encima del botón de ubicación.
+                    VStack(spacing: 8) {
+                        zoomButton("plus", label: "Acercar", factor: 0.4)
+                        zoomButton("minus", label: "Alejar", factor: 2.5)
+                        if LocationService.current?.userLocation != nil {
+                            mapButton("location.fill", label: "Mi ubicación") { goToUser() }
+                        }
+                    }
+                    .padding(Spacing.edge)
+                    // En la ubicación del negocio el panel flota encima del mapa: los botones suben.
+                    .padding(.bottom, fixedName != nil ? 230 : 0)
+                }
                 // Mientras se arrastra: el pin se levanta. Al soltar: baja,
                 // se toma el centro y se carga la dirección.
                 .onMapCameraChange(frequency: .continuous) { _ in
                     guard !isMoving, !programmaticMove, !detailExpanded, Date() > ignoreCameraUntil else { return }
                     isMoving = true
+                    // Se aleja del lugar de Apple: su nombre ya no corresponde al punto.
+                    if let f = mapFeature, let t = f.title, name == t { name = "" }
+                    mapFeature = nil
                     selectedId = nil
                 }
                 .onMapCameraChange(frequency: .onEnd) { context in
@@ -597,11 +667,13 @@ struct ElegirLugarEnMapaView: View {
                     ignoredEnds = 0
                     geocode(context.region.center)
                     loadSpots(region: context.region)
+                    // Al mover el mapa la búsqueda se repite en la nueva zona (Keyla, 25 Nov 2026).
+                    if searchFocused, !searchText.trimmingCharacters(in: .whitespaces).isEmpty { triggerSearch(searchText) }
                 }
 
-                if selected == nil { centerPin }
+                // Con un lugar de Apple elegido se ve solo su marca, sin nuestro pin encima.
+                if selected == nil && mapFeature == nil { centerPin }
             }
-            .overlay(alignment: .top) { if !detailExpanded { topBar } }
             // Ubicación de un negocio: el panel va ENCIMA del mapa, como el mapa de
             // un lugar. Así al jalarlo hacia arriba tapa el mapa sin encogerlo.
             .overlay(alignment: .bottom) { if fixedName != nil { panel } }
@@ -626,7 +698,74 @@ struct ElegirLugarEnMapaView: View {
 
     // MARK: – Búsqueda por texto
 
-    private var topBar: some View {
+    private var topBar: some View { searchBlock(inline: false) }
+
+    private func closeKeyboard() {
+        guard searchFocused else {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            return
+        }
+        searchFocused = false
+    }
+
+    private func isNear(_ item: MKMapItem, _ around: CLLocationCoordinate2D?, _ radius: Double) -> Bool {
+        guard let a = around else { return true }
+        let c = item.placemark.coordinate
+        return CLLocation(latitude: a.latitude, longitude: a.longitude)
+            .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude)) < radius
+    }
+
+    /// Direcciones parecidas cuando la búsqueda exacta no encuentra nada.
+    private func similarAddresses(_ q: String, region: MKCoordinateRegion?) async -> [MKMapItem] {
+        var out: [MKMapItem] = []
+        // 1. El geocodificador entiende "calle número".
+        let geo = CLGeocoder()
+        let circle = region.map { CLCircularRegion(center: $0.center, radius: 50_000, identifier: "zona") }
+        if let marks = try? await geo.geocodeAddressString(q, in: circle, preferredLocale: Locale(identifier: "es_PE")) {
+            out += marks.map { MKMapItem(placemark: MKPlacemark(placemark: $0)) }
+        }
+        // 2. Sin números: "Francisco Arana 218" → "Francisco Arana".
+        let words = q.split(separator: " ").filter { $0.rangeOfCharacter(from: .decimalDigits) == nil }
+        let shorter = words.joined(separator: " ")
+        if shorter.count >= 2, shorter != q {
+            let r = MKLocalSearch.Request()
+            r.naturalLanguageQuery = shorter
+            if let region { r.region = region }
+            if let items = try? await MKLocalSearch(request: r).start().mapItems { out += items }
+        }
+        return out
+    }
+
+    private func zoomButton(_ icon: String, label: String, factor: Double) -> some View {
+        mapButton(icon, label: label) {
+            guard let r = lastRegion else { return }
+            let span = MKCoordinateSpan(latitudeDelta: min(max(r.span.latitudeDelta * factor, 0.001), 60),
+                                        longitudeDelta: min(max(r.span.longitudeDelta * factor, 0.001), 60))
+            withAnimation { camera = .region(MKCoordinateRegion(center: r.center, span: span)) }
+        }
+    }
+
+    /// Volver a donde está la persona (antes el botón de Apple, que a veces salía en blanco).
+    private func goToUser() {
+        guard let loc = LocationService.current?.userLocation else { return }
+        withAnimation {
+            camera = .region(MKCoordinateRegion(center: loc.coordinate,
+                                                span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)))
+        }
+    }
+
+    /// Botón del mapa: el MISMO componente que el mapa de un lugar (MapIconButton
+    /// con vidrio redondeado), para acercar, alejar y mi ubicación (Keyla, 25 Nov 2026).
+    private func mapButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
+        MapIconButton(icon: icon) { Haptic.light(); action() }
+            .glassRounded(14)
+            .mapControlShadow()
+            .accessibilityLabel(label)
+    }
+
+    /// Búsqueda. inline = dentro del panel de abajo, encima de "Nuevo lugar"
+    /// (Keyla, 25 Nov 2026): el mapa queda libre arriba.
+    private func searchBlock(inline: Bool) -> some View {
         VStack(spacing: 8) {
             HStack(spacing: Spacing.sm) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Color.inkMuted).font(.system(size: 15))
@@ -634,7 +773,13 @@ struct ElegirLugarEnMapaView: View {
                     .font(BT.callout)
                     .focused($searchFocused)
                     .submitLabel(.search)
-                    .onChange(of: searchText) { _, q in triggerSearch(q) }
+                    .onChange(of: searchText) { _, q in
+                        if autoFill { autoFill = false; return }
+                        triggerSearch(q)
+                    }
+                if isSearching {
+                    ProgressView().controlSize(.small).tint(Color.brand)
+                }
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
@@ -646,12 +791,12 @@ struct ElegirLugarEnMapaView: View {
                 }
             }
             .padding(.horizontal, Spacing.md).padding(.vertical, 12)
-            .background(Color.surface, in: Capsule())
-            .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+            .background(inline ? Color.sageTint.opacity(0.5) : Color.surface, in: Capsule())
+            .shadow(color: .black.opacity(inline ? 0 : 0.12), radius: 4, y: 1)
 
             if !searchResults.isEmpty || !buddyResults.isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(buddyResults.prefix(5)) { spot in
+                    ForEach(buddyResults.prefix(inline ? 3 : 5)) { spot in
                         Button { goTo(spot) } label: {
                             HStack(spacing: 10) {
                                 LocationPin(size: 14)
@@ -669,7 +814,7 @@ struct ElegirLugarEnMapaView: View {
                         .buttonStyle(.plain)
                         Divider()
                     }
-                    ForEach(Array(searchResults.enumerated()), id: \.offset) { i, item in
+                    ForEach(Array(searchResults.prefix(inline ? 4 : 8).enumerated()), id: \.offset) { i, item in
                         Button { goTo(item) } label: {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(item.name ?? "Sin nombre").font(BT.footnoteBold).foregroundStyle(Color.ink).lineLimit(1)
@@ -682,22 +827,16 @@ struct ElegirLugarEnMapaView: View {
                             .contentShape(Rectangle())   // toda la fila se puede tocar
                         }
                         .buttonStyle(.plain)
-                        if i < searchResults.count - 1 { Divider() }
+                        if i < min(searchResults.count, inline ? 4 : 8) - 1 { Divider() }
                     }
                 }
                 .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
-            } else if tooWide {
-                Text("Acércate para ver los lugares")
-                    .font(BT.footnote)
-                    .foregroundStyle(Color.ink)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(Color.surface, in: Capsule())
-                    .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+                .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: inline ? 1 : 0))
+                .shadow(color: .black.opacity(inline ? 0 : 0.12), radius: 4, y: 1)
             }
         }
-        .padding(.horizontal, Spacing.edge)
-        .padding(.top, Spacing.sm)
+        .padding(.horizontal, inline ? 0 : Spacing.edge)
+        .padding(.top, inline ? 0 : Spacing.sm)
     }
 
     /// 400 ms sin teclear, y se busca cerca de lo que el mapa muestra: "café"
@@ -708,9 +847,15 @@ struct ElegirLugarEnMapaView: View {
         guard q.count >= 2 else {
             if !searchResults.isEmpty { dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] búsqueda vacía/corta — limpio resultados") }
             searchResults = []; buddyResults = []
+            isSearching = false
             return
         }
+        isSearching = true
+        searchRun += 1
+        let run = searchRun
         searchTask = Task {
+            // Solo la búsqueda más reciente apaga la ruedita.
+            defer { Task { @MainActor in if run == searchRun { isSearching = false } } }
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
             let started = Date()
@@ -722,17 +867,52 @@ struct ElegirLugarEnMapaView: View {
             let c0 = around
             async let buddyTask = try? await APIClient.shared.searchCuratedSpots(query: q, lat: c0?.latitude, lng: c0?.longitude)
             do {
-                let raw = try await MKLocalSearch(request: request).start().mapItems
+                // Sin resultados MapKit lanza error: igual se prueban direcciones parecidas.
+                let raw = (try? await MKLocalSearch(request: request).start().mapItems) ?? []
+                try Task.checkCancellation()
                 let buddy = await buddyTask ?? []
                 guard !Task.isCancelled else { return }
                 // De Apple solo lo cercano (50 km): "Finca Rosal" no debe traer Colombia.
                 let taken = Set(buddy.map { $0.name.lowercased() })
-                let items = raw.filter { item in
-                    guard let a = around else { return true }
-                    let c = item.placemark.coordinate
-                    let near = CLLocation(latitude: a.latitude, longitude: a.longitude)
-                        .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude)) < 50_000
-                    return near && !taken.contains((item.name ?? "").lowercased())
+                // Con el mapa alejado (todo el Perú) 50 km dejaba la lista vacía
+                // (Keyla, 25 Nov 2026): el radio crece con lo que se ve en el mapa.
+                let spanKm = (lastRegion.map { max($0.span.latitudeDelta, $0.span.longitudeDelta) } ?? 0) * 111
+                let radius = max(50_000, spanKm * 1000 / 2 * 1.5)
+                // Sin nada exacto ("Francisco Arana 218"): se prueba la dirección con
+                // el geocodificador y luego sin el número (Keyla, 25 Nov 2026).
+                var pool = raw
+                if !raw.contains(where: { isNear($0, around, radius) }) {
+                    pool += await similarAddresses(q, region: lastRegion)
+                }
+                // Cerca primero; si nada cercano coincide, también lo de más lejos en
+                // todo el Perú, del más cercano al más lejano (Keyla, 25 Nov 2026).
+                let fresh = pool.filter { !taken.contains(($0.name ?? "").lowercased()) }
+                var items = fresh.filter { isNear($0, around, radius) }
+                let words = q.lowercased().split(separator: " ").filter { $0.rangeOfCharacter(from: .decimalDigits) == nil }
+                let matches: (MKMapItem) -> Bool = { item in
+                    let n = (item.name ?? "").lowercased().folding(options: .diacriticInsensitive, locale: nil)
+                    return words.allSatisfy { n.contains($0.folding(options: .diacriticInsensitive, locale: nil)) }
+                }
+                if !items.contains(where: matches) {
+                    let r = MKLocalSearch.Request()
+                    r.naturalLanguageQuery = q
+                    r.region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: -9.19, longitude: -75.0),
+                                                  span: MKCoordinateSpan(latitudeDelta: 20, longitudeDelta: 20))
+                    let wide = (try? await MKLocalSearch(request: r).start().mapItems) ?? []
+                    let far = (fresh + wide).filter { !isNear($0, around, radius) && !taken.contains(($0.name ?? "").lowercased()) }
+                    let dist: (MKMapItem) -> Double = { item in
+                        guard let a = around else { return 0 }
+                        let c = item.placemark.coordinate
+                        return CLLocation(latitude: a.latitude, longitude: a.longitude)
+                            .distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude))
+                    }
+                    var seen = Set(items.map { "\($0.name ?? "")|\($0.placemark.coordinate.latitude)" })
+                    for f in far.sorted(by: { dist($0) < dist($1) }) {
+                        let key = "\(f.name ?? "")|\(f.placemark.coordinate.latitude)"
+                        if seen.insert(key).inserted { items.append(f) }
+                    }
+                    // Lo que coincide con lo escrito va antes que lo "parecido".
+                    items = items.filter(matches) + items.filter { !matches($0) }
                 }
                 await MainActor.run {
                     buddyResults = buddy
@@ -885,7 +1065,15 @@ struct ElegirLugarEnMapaView: View {
             )
             guard !Task.isCancelled else { return }
             let text = marks?.first.flatMap { Self.format($0) }
-            await MainActor.run { address = text ?? "Sin dirección" }
+            await MainActor.run {
+                address = text ?? "Sin dirección"
+                // Al mover el mapa, el buscador muestra el lugar elegido.
+                if !searchFocused, let text, text != searchText {
+                    autoFill = true
+                    searchText = text
+                    searchResults = []; buddyResults = []
+                }
+            }
             if suggestMapPlaces { await loadMapPlaces(coord) }
             let sinceRelease = await MainActor.run { releasedAt.map { ", \(ms($0))ms desde que soltaste el mapa" } ?? "" }
             dlog("📍 [ElegirLugarMapa] [t+\(ms())ms] dirección=\(text ?? "nil") — geocoder \(ms(started))ms\(sinceRelease)")
@@ -986,6 +1174,8 @@ struct ElegirLugarEnMapaView: View {
             .panelStyle()
         } else {
             VStack(alignment: .leading, spacing: Spacing.sm) {
+                // Mismo diseño en Compartir un lugar y en la ubicación del negocio (Keyla, 25 Nov 2026).
+                searchBlock(inline: true).padding(.bottom, Spacing.xs)
                 if !newEyebrow.isEmpty {
                     Text(newEyebrow).font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
                 }
@@ -1159,5 +1349,18 @@ struct PlaceOptionRow: View {
         .background(Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md))
         .overlay(RoundedRectangle(cornerRadius: Radius.md).strokeBorder(Color.border, lineWidth: 1))
+    }
+}
+
+
+extension APINearbySpot {
+    /// Para mostrar un lugar cercano con la tarjeta de Inicio (HomePlaceCard).
+    var asPlaceCard: APIPlaceCard {
+        APIPlaceCard(id: id, name: name, destinationId: destinationId, destinationName: destination?.name,
+                     lat: lat, lng: lng, distanceMeters: distanceMeters,
+                     coverUrl: coverUrl, coverUrls: nil, coverPhotos: nil,
+                     coverAuthorName: nil, coverAuthorAvatarUrl: nil,
+                     category: nil, photoCount: 0, isNew: false, buddyCount: 0, buddies: [],
+                     status: status)
     }
 }

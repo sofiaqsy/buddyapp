@@ -17,6 +17,7 @@ struct YoView: View {
     @State private var journeys: [APIJourney] = []
     /// Lugares que recomienda — sección aparte de los viajes propios.
     @State private var shares: [APIPlaceCard] = []
+    @State private var pendingRecommendPlace: APIPlaceCard?
     @State private var showCompartirLugar = false
     /// Journey creado por la sheet, en espera del onDismiss para recargar. El
     /// perfil no puede refrescar antes: la sheet sigue arriba y el usuario
@@ -168,11 +169,8 @@ struct YoView: View {
                                 .padding(.horizontal, Spacing.edge)
                                 .padding(.top, Spacing.md)
 
-                            // Mis trips: el registro y el trip en curso viven aquí
-                            // (Keyla, 19 Nov 2026), no en la pestaña Comunidad.
-                            MyTripsEntryCard()
-                                .padding(.horizontal, Spacing.edge)
-                                .padding(.top, Spacing.lg)
+                            // "Mis trips" ahora es la primera celda de Trips publicados
+                            // ("Nuevo trip"), como "Añadir lugar" (Keyla, 25 Nov 2026).
 
                             // Entrada visible para negocios (antes solo en "⋯").
                             if accounts.businesses.isEmpty {
@@ -331,6 +329,11 @@ struct YoView: View {
             .navigationDestination(for: APIPlaceCard.self) { place in
                 PlaceGuideMapSheet(place: place)
             }
+            // Recomendar: el mapa del lugar abre en Fotos con "Añadir foto".
+            .navigationDestination(for: RecommendPlaceRoute.self) { route in
+                PlaceGuideMapSheet(place: route.card)
+                    .environment(\.recommendPhotosPlaceId, route.card.id)
+            }
             .sheet(isPresented: $showCompartirLugar, onDismiss: {
                 // El journey nace con trip_id=null y sin publicar; acá solo se
                 // recarga para que el lugar aparezca en la sección. Publicarlo
@@ -340,11 +343,16 @@ struct YoView: View {
                 // parecía que no había pasado nada. Ahora se abre el editor,
                 // igual que "Añadir foto" en el mapa. La recarga llega sola con
                 // .journeyPublished cuando termina de subir las fotos.
+                if let card = pendingRecommendPlace {
+                    pendingRecommendPlace = nil
+                    navPath.append(RecommendPlaceRoute(card: card))
+                    return
+                }
                 guard let nuevo = pendingShareJourney else { return }
                 pendingShareJourney = nil
                 editingShareJourney = nuevo
             }) {
-                CompartirLugarSheet { journey in
+                CompartirLugarSheet(onOpenPlace: { card in pendingRecommendPlace = card }) { journey in
                     dlog("🌍 [YoView] compartido creado journey=\(journey.id)")
                     pendingShareJourney = journey
                 }
@@ -353,7 +361,8 @@ struct YoView: View {
         .fullScreenCover(item: $editingShareJourney) { journey in
             // publishesOnSave: no hay un paso posterior de "publicar el trip";
             // guardar es lo que deja la recomendación visible.
-            TripEditorSheet(journey: journey, initialPage: -1, publishesOnSave: true) {}
+            // Solo fotos, sin editor (Keyla, 25 Nov 2026).
+            RecomendarFotosView(journey: journey)
         }
         // El lugar ya se creó (CompartirLugarSheet ya cerró su propio spinner
         // al llamar onCreated), pero el editor todavía no se presenta: eso
@@ -726,20 +735,23 @@ struct YoView: View {
                 // una separación distinta en un único hueco se lee como error de
                 // maquetado, no como intención. Con el mismo valor las dos
                 // secciones del perfil se leen como una sola colección.
-                HStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
                     // Siempre primero: es la acción, no un elemento más de la
                     // colección. Al final habría que arrastrar toda la lista
                     // para encontrarla, y crece con cada lugar que se suma.
-                    if canRecommendPlaces { addPlaceCard }
+                    if canRecommendPlaces { addPlaceCard.frame(maxHeight: .infinity) }
 
+                    // La misma tarjeta de "Cerca de ti" en Inicio (Keyla, 25 Nov 2026).
                     ForEach(shares, id: \.id) { place in
-                        // En el perfil el pie es cuántas fotos aportó a ese
-                        // lugar; los buddies del destino no vienen al caso aquí.
-                        NearbyPlaceCard(place: place, subtitleOverride: place.photoLabel) {
+                        Button {
                             navPath.append(place)
+                        } label: {
+                            HomePlaceCard(card: place, large: false, tall: true, showsDistance: true, widthOverride: 120)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, Spacing.edge)
             }
         }
@@ -763,7 +775,9 @@ struct YoView: View {
                     .font(BT.footnoteBold)
                     .foregroundStyle(Color.brand)
             }
-            .frame(width: 132, height: 158)
+            // Mismo ancho que la tarjeta de lugar; el alto lo iguala la fila.
+            .frame(maxHeight: .infinity)
+            .frame(width: 120)
             .background(Color.surface)
             .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .overlay(
@@ -781,31 +795,6 @@ struct YoView: View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             sectionHeader("Trips publicados", count: journeys.count)
 
-            if journeys.isEmpty {
-                // Empty state — invita a la acción, no lamenta el vacío
-                Button {
-                    router.openMyTrips()
-                } label: {
-                    VStack(spacing: Spacing.sm) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(Color.brand)
-                            .frame(width: 48, height: 48)
-                            .background(Color.paleSage, in: Circle())
-                        Text("Tu primer trip te espera")
-                            .font(BT.footnoteBold)
-                            .foregroundStyle(Color.ink)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, Spacing.xl)
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-                    .cardShadow()
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, Spacing.edge)
-            } else {
                 ProfileTripsGrid(
                     journeys: journeys,
                     hasMore: tripsHasMore,
@@ -816,9 +805,18 @@ struct YoView: View {
                         Task { await loadMoreTrips() }
                     },
                     zoomNamespace: photoZoom,
-                    visibleId: selectedStory == nil ? nil : zoomId
+                    visibleId: selectedStory == nil ? nil : zoomId,
+                    onAdd: {
+                        Haptic.medium()
+                        navPath.append(MyTripsRoute())
+                        // Sin trip en curso, "Nuevo trip" abre directo el registro
+                        // (Keyla, 25 Nov 2026); al volver se ve el trip creado.
+                        let enCurso = JourneysStore.shared.journeys.contains {
+                            $0.tripId != nil && ["active", "planning"].contains($0.status ?? "")
+                        }
+                        if !enCurso { navPath.append("register") }
+                    }
                 )
-            }
         }
     }
 
@@ -1398,7 +1396,8 @@ struct TripGridCell: View {
     var body: some View {
         // Celda cuadrada: Color.clear define el layout, la imagen solo rellena
         Color.clear
-            .aspectRatio(1, contentMode: .fit)
+            // Más alargadas, 4:5 como las tarjetas de lugar (Keyla, 25 Nov 2026).
+            .aspectRatio(4.0 / 5.0, contentMode: .fit)
             .overlay {
                 if let img = localThumb {
                     Image(uiImage: img)
@@ -1933,12 +1932,60 @@ struct ProfileTripsGrid: View {
     /// tener su celda en pantalla, así al cerrar la foto vuelve a ella aunque
     /// no estuviera entre las primeras 9 (Keyla, 21 Nov 2026).
     var visibleId: String? = nil
+    /// Primera celda "Nuevo trip" (abre Mis trips), como "Añadir lugar".
+    var onAdd: (() -> Void)? = nil
+    /// Con un trip en curso la celda muestra su vista previa y dice "Editar trip".
+    @ObservedObject private var journeysStore = JourneysStore.shared
+    private var currentTrip: APIJourney? {
+        journeysStore.journeys.first { $0.tripId != nil && ["active", "planning"].contains($0.status ?? "") }
+    }
 
     var body: some View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
         ScrollViewReader { proxy in
         VStack(spacing: 0) {
             LazyVGrid(columns: columns, spacing: 8) {
+                if let onAdd, let trip = currentTrip {
+                    Button(action: onAdd) {
+                        TripGridCell(journey: trip)
+                            .overlay(alignment: .bottom) {
+                                Text("Editar trip")
+                                    .font(BT.footnoteBold)
+                                    .foregroundStyle(Color.inkInverse)
+                                    .padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(Color.brand, in: Capsule())
+                                    .padding(.bottom, 10)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Editar trip en curso")
+                } else if let onAdd {
+                    Button(action: onAdd) {
+                        Color.clear
+                            .aspectRatio(4.0 / 5.0, contentMode: .fit)
+                            .overlay {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 20, weight: .semibold))
+                                        .foregroundStyle(Color.brand)
+                                        .frame(width: 44, height: 44)
+                                        .background(Color.sageTint, in: Circle())
+                                    Text("Nuevo trip")
+                                        .font(BT.footnoteBold)
+                                        .foregroundStyle(Color.brand)
+                                }
+                            }
+                            .background(Color.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14)
+                                .strokeBorder(Color.sage, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Nuevo trip")
+                }
                 ForEach(journeys, id: \.id) { journey in
                     TripGridCell(journey: journey)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -2479,6 +2526,9 @@ private struct PickerChrome: ViewModifier {
             content
                 .navigationTitle("Agregar ubicación")
                 .navigationBarTitleDisplayMode(.inline)
+                // Barra sólida como en Compartir un lugar: el mapa empieza debajo.
+                .toolbarBackground(Color.surface, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         ToolbarBackButton { back() }
@@ -5273,3 +5323,125 @@ struct JoinBusinessView: View {
     }
 }
 
+
+
+// MARK: - Recomendar: solo fotos (sin editor)
+
+/// Después de elegir el lugar que recomienda, la persona solo agrega fotos
+/// (Keyla, 25 Nov 2026: el editor confundía). Reusa la tarjeta "Añadir foto"
+/// del dueño en Mi negocio (DashedAddTile + selector de fotos).
+struct RecomendarFotosView: View {
+    let journey: APIJourney
+    @Environment(\.dismiss) private var dismiss
+    @State private var items: [PhotosPickerItem] = []
+    @State private var photos: [UIImage] = []
+    @State private var loading = false
+    private let maxPhotos = 10
+    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 8)]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.md) {
+                    Text(journey.spot?.name ?? journey.title ?? "Tu recomendación")
+                        .font(BT.title2).foregroundStyle(Color.ink)
+                    Text("Agrega fotos de este lugar para recomendarlo.")
+                        .font(BT.callout).foregroundStyle(Color.inkMuted)
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                        ForEach(photos.indices, id: \.self) { i in
+                            Image(uiImage: photos[i])
+                                .resizable().scaledToFill()
+                                .frame(width: 115, height: 115)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .overlay(alignment: .topTrailing) {
+                                    Button { photos.remove(at: i) } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 20))
+                                            .foregroundStyle(.white, .black.opacity(0.55))
+                                    }
+                                    .padding(4)
+                                    .accessibilityLabel("Quitar foto")
+                                }
+                        }
+                        if photos.count < maxPhotos {
+                            PhotosPicker(selection: $items, maxSelectionCount: maxPhotos - photos.count, matching: .images) {
+                                DashedAddTile(title: "Añadir foto", loading: loading)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(Spacing.edge)
+            }
+            .background(Color.canvas)
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    Haptic.medium()
+                    publish()
+                } label: {
+                    Text("Publicar")
+                        .font(BT.footnoteBold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(photos.isEmpty ? Color.inkMuted : Color.ink)
+                        .foregroundStyle(Color.inkInverse)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(photos.isEmpty)
+                .padding(.horizontal, Spacing.edge)
+                .padding(.bottom, Spacing.sm)
+                .background(Color.canvas)
+            }
+            .navigationTitle("Recomendar lugar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color.surface, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left").fontWeight(.semibold) }
+                        .accessibilityLabel("Atrás")
+                }
+            }
+        }
+        .onChange(of: items) { _, new in
+            guard !new.isEmpty else { return }
+            loading = true
+            Task {
+                var added: [UIImage] = []
+                for item in new {
+                    if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
+                        added.append(img)
+                    }
+                }
+                await MainActor.run {
+                    photos.append(contentsOf: added.prefix(maxPhotos - photos.count))
+                    items = []
+                    loading = false
+                }
+            }
+        }
+    }
+
+    /// Guarda cada foto como página y publica en segundo plano: el aviso de
+    /// subida (UploadStatusBanner) muestra el avance y permite reintentar.
+    private func publish() {
+        let jId = journey.id
+        let pages = photos.compactMap { MemoirPersistence.shared.photoPage($0, journeyId: jId) }
+        guard !pages.isEmpty else { return }
+        MemoirPersistence.shared.save(pages, journeyId: jId)
+        let tripId = journey.tripId
+        dismiss()
+        Task {
+            try? await APIClient.shared.publishJourney(journeyId: jId, tripId: tripId, pages: pages)
+            await MainActor.run {
+                Haptic.success()
+                NotificationCenter.default.post(name: .journeyPublished, object: jId)
+            }
+        }
+    }
+}
+
+
+/// Ruta al mapa de un lugar para recomendarlo con fotos.
+struct RecommendPlaceRoute: Hashable { let card: APIPlaceCard }

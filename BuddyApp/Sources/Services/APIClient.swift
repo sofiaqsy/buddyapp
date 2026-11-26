@@ -19,6 +19,16 @@ final class APIClient {
     // (BuddyAppTests/APIClientTests). La app nunca la cambia.
     static var session: URLSession = URLSession(configuration: makeConfiguration())
 
+    /// Subida de fotos (Keyla, 25 Nov 2026): en 3G lento una foto tarda más de
+    /// 30 s y la sesión normal la cortaba. Aquí: 60 s sin avance, 5 min en total.
+    static var uploadSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest  = 60
+        cfg.timeoutIntervalForResource = 300
+        cfg.waitsForConnectivity = true
+        return URLSession(configuration: cfg)
+    }()
+
     static func makeConfiguration() -> URLSessionConfiguration {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest  = 15
@@ -721,6 +731,18 @@ final class APIClient {
     }
 
     func publishJourney(journeyId: String, tripId: String?, pages: [CollagePage]) async throws {
+        do {
+            try await publishJourneyNow(journeyId: journeyId, tripId: tripId, pages: pages)
+            await UploadStatus.shared.finished()
+        } catch {
+            await UploadStatus.shared.failed { [weak self] in
+                try? await self?.publishJourney(journeyId: journeyId, tripId: tripId, pages: pages)
+            }
+            throw error
+        }
+    }
+
+    private func publishJourneyNow(journeyId: String, tripId: String?, pages: [CollagePage]) async throws {
         try await uploadAndSavePages(journeyId: journeyId, pages: pages)
         try await requestVoid(
             path: "/journeys/\(journeyId)",
@@ -756,7 +778,7 @@ final class APIClient {
                 dlog("⬆️ [uploadAndSavePages] page[\(index)] SKIP — loadThumbnail returned nil for file=\(filename)")
                 continue
             }
-            guard let data = image.jpegData(compressionQuality: 0.82) else {
+            guard let data = image.jpegData(compressionQuality: 0.7) else {
                 dlog("⬆️ [uploadAndSavePages] page[\(index)] SKIP — jpegData failed")
                 continue
             }
@@ -769,23 +791,41 @@ final class APIClient {
             return
         }
 
-        // Construir multipart/form-data y enviar a buddy-core
+        // Una foto por envío, con hasta 3 intentos (Keyla, 25 Nov 2026). El servidor
+        // guarda por client_page_id, así que reintentar nunca duplica una foto.
+        await UploadStatus.shared.start(total: parts.count)
+        for (n, part) in parts.enumerated() {
+            await UploadStatus.shared.progress(current: n + 1)
+            var attempt = 0
+            while true {
+                attempt += 1
+                do {
+                    try await uploadOnePage(journeyId: journeyId, part: part)
+                    break
+                } catch {
+                    dlog("⬆️ [uploadAndSavePages] page[\(part.index)] intento \(attempt) falló: \(error)")
+                    if attempt >= 3 { throw error }
+                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
+                }
+            }
+        }
+        dlog("⬆️ [uploadAndSavePages] SUCCESS — \(parts.count) page(s) stored")
+    }
+
+    private func uploadOnePage(journeyId: String, part: (index: Int, clientPageId: String, data: Data)) async throws {
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
-        for part in parts {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"page_\(part.index)\"; filename=\"page_\(part.index).jpg\"\r\n".data(using: .utf8)!)
-            body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-            body.append(part.data)
-            body.append("\r\n".data(using: .utf8)!)
-            // El id de la página viaja al lado de su archivo: con él el servidor
-            // actualiza esa fila en su sitio en vez de borrar el journey entero
-            // y reinsertarlo, que era lo que resucitaba fotos ya borradas.
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"client_page_id_\(part.index)\"\r\n\r\n".data(using: .utf8)!)
-            body.append(part.clientPageId.data(using: .utf8)!)
-            body.append("\r\n".data(using: .utf8)!)
-        }
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"page_\(part.index)\"; filename=\"page_\(part.index).jpg\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        body.append(part.data)
+        body.append("\r\n".data(using: .utf8)!)
+        // El id de la página viaja al lado de su archivo: el servidor actualiza
+        // esa fila en su sitio (upsert por client_page_id).
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"client_page_id_\(part.index)\"\r\n\r\n".data(using: .utf8)!)
+        body.append(part.clientPageId.data(using: .utf8)!)
+        body.append("\r\n".data(using: .utf8)!)
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
         let url = URL(string: "\(baseURL)/journeys/\(journeyId)/pages/upload")!
@@ -793,16 +833,13 @@ final class APIClient {
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(Session.token ?? anonKey)", forHTTPHeaderField: "Authorization")
-        req.httpBody = body
 
-        dlog("⬆️ [uploadAndSavePages] POST /journeys/\(journeyId)/pages/upload — \(parts.count) file(s) \(body.count) bytes total")
-        let (respData, response) = try await APIClient.session.data(for: req)
+        dlog("⬆️ [uploadOnePage] page[\(part.index)] \(body.count) bytes")
+        let (respData, response) = try await APIClient.uploadSession.upload(for: req, from: body)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-        dlog("⬆️ [uploadAndSavePages] response status=\(statusCode) body=\(String(data: respData, encoding: .utf8) ?? "")")
         guard (200...299).contains(statusCode) else {
             throw APIError.server(statusCode, String(data: respData, encoding: .utf8) ?? "")
         }
-        dlog("⬆️ [uploadAndSavePages] SUCCESS — \(parts.count) page(s) stored")
     }
 
     // MARK: - Trip (contenedor de varios lugares = una publicación)
@@ -810,6 +847,18 @@ final class APIClient {
     /// Publica el VIAJE completo: sube las portadas de cada lugar y cierra el
     /// trip → todos sus journeys quedan completados como UNA sola historia.
     func publishTrip(tripId: String, places: [(journeyId: String, pages: [CollagePage])]) async throws {
+        do {
+            try await publishTripNow(tripId: tripId, places: places)
+            await UploadStatus.shared.finished()
+        } catch {
+            await UploadStatus.shared.failed { [weak self] in
+                try? await self?.publishTrip(tripId: tripId, places: places)
+            }
+            throw error
+        }
+    }
+
+    private func publishTripNow(tripId: String, places: [(journeyId: String, pages: [CollagePage])]) async throws {
         for place in places {
             try await uploadAndSavePages(journeyId: place.journeyId, pages: place.pages)
         }

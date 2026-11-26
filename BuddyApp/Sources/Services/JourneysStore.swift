@@ -57,6 +57,11 @@ final class JourneysStore: ObservableObject {
     /// Un trip recién creado entra ya en el store: sin esto, quien pida
     /// `load` dentro de la ventana de frescor recibe la lista vieja y el trip
     /// nuevo no aparece hasta un pull-to-refresh.
+    /// Saca al instante los journeys de un trip cancelado (antes de que responda el servidor).
+    func quitarTrip(_ tripId: String) {
+        journeys.removeAll { $0.tripId == tripId }
+    }
+
     func insertar(_ journey: APIJourney) {
         journeys.removeAll { $0.id == journey.id }
         journeys.insert(journey, at: 0)

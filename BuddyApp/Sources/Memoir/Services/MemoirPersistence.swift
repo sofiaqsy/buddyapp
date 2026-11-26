@@ -232,6 +232,23 @@ final class MemoirPersistence {
         return filename
     }
 
+    /// Una foto = una página, sin editor (Keyla, 25 Nov 2026): se guarda la foto
+    /// como miniatura (máx. 1280 px, JPEG 0.82) y sale la página lista para subir.
+    func photoPage(_ image: UIImage, journeyId: String) -> CollagePage? {
+        let maxSide: CGFloat = 1280
+        let s = min(1, maxSide / max(image.size.width, image.size.height))
+        let size = CGSize(width: (image.size.width * s).rounded(), height: (image.size.height * s).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1; format.opaque = true
+        let img = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        guard let data = img.jpegData(compressionQuality: 0.82) else { return nil }
+        var page = CollagePage()
+        let filename = "\(page.id)_thumb.jpg"
+        do { try data.write(to: thumbsDir(for: journeyId).appendingPathComponent(filename)) } catch { return nil }
+        page.thumbnailFileName = filename
+        return page
+    }
+
     func loadThumbnail(_ filename: String, journeyId: String) -> UIImage? {
         guard let data = try? Data(contentsOf: thumbsDir(for: journeyId).appendingPathComponent(filename))
         else { return nil }

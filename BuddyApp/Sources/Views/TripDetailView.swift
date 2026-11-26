@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import PhotosUI
 
 struct TripDetailView: View {
     let route: Route
@@ -1578,7 +1579,7 @@ struct PlaceGuideDetailSheet: View {
         // quedaban con las del lugar anterior: un .task sin id corre UNA sola
         // vez por instancia de vista, y bottomSection reusa la misma vista al
         // cambiar selectedPlace, así que nunca volvía a pedir la galería.
-        .task(id: place.id) { userPickedTab = false; tab = startOnPhotos ? .fotos : .productos; await loadProducts() }
+        .task(id: place.id) { userPickedTab = false; tab = (startOnPhotos || isRecommending) ? .fotos : .productos; await loadProducts() }
         .navigationDestination(item: $ownerEditRoute) { r in FincasProductEditView(route: r) }
         // Al guardar en el editor, las tarjetas muestran la foto y el precio nuevos.
         .onReceive(NotificationCenter.default.publisher(for: .fincasProductsChanged)) { _ in
@@ -2202,13 +2203,21 @@ struct PlaceGuideDetailSheet: View {
     /// sin la tarjeta ni su hueco en la cuadrícula.
     // Solo el dueño del negocio sube fotos aquí (Keyla, 23 Nov 2026: "I'm not
     // Citizen"). Antes también podía quien había recomendado el lugar.
-    private var canAddPhoto: Bool { !startOnPhotos && editCtx != nil }
+    private var canAddPhoto: Bool { (!startOnPhotos && editCtx != nil) || isRecommending }
+    /// Abierto desde "Recomendar un lugar": invita a subir fotos de una vez.
+    @Environment(\.recommendPhotosPlaceId) private var recommendPlaceId
+    private var isRecommending: Bool {
+        recommendPlaceId?.lowercased() == place.id.uuidString.lowercased()
+    }
 
     @ViewBuilder
     private var addPhotoTile: some View {
         if let ctx = editCtx {
             // Dueño en Mi negocio: una sola "Añadir foto", y sus fotos detrás.
             BusinessAddPhotoTile(ctx: ctx)
+        } else if isRecommending {
+            // Recomendar: la misma tarjeta del dueño, directo al selector de fotos.
+            RecommendAddPhotoTile(spotId: place.id.uuidString.lowercased(), side: cardSide, height: photoRowHeight)
         } else if canAddPhoto, let mine = myBuddyRecommendation {
             Button {
                 Haptic.medium()
@@ -3187,3 +3196,63 @@ enum ProductFocus {
 }
 
 private struct PhotoURL: Identifiable { let url: String; let card: BizCard; var id: String { url } }
+
+
+// MARK: - Recomendar con fotos (sin editor)
+
+private struct RecommendPhotosPlaceIdKey: EnvironmentKey { static let defaultValue: String? = nil }
+extension EnvironmentValues {
+    /// Lugar abierto desde "Recomendar un lugar" (Keyla, 25 Nov 2026).
+    var recommendPhotosPlaceId: String? {
+        get { self[RecommendPhotosPlaceIdKey.self] }
+        set { self[RecommendPhotosPlaceIdKey.self] = newValue }
+    }
+}
+
+/// "Añadir foto" para quien recomienda: la tarjeta punteada del dueño
+/// (DashedAddTile) que abre el selector de fotos. Al elegir, se crea la
+/// recomendación (o se reusa la que ya tiene) y se suben las fotos en segundo
+/// plano con el aviso de subida.
+struct RecommendAddPhotoTile: View {
+    let spotId: String
+    var side: CGFloat = 115
+    var height: CGFloat = 115
+    @State private var items: [PhotosPickerItem] = []
+    @State private var working = false
+
+    var body: some View {
+        PhotosPicker(selection: $items, maxSelectionCount: 10, matching: .images) {
+            DashedAddTile(title: "Añadir foto", loading: working, side: side)
+                .frame(width: side, height: height)
+        }
+        .buttonStyle(.plain)
+        .disabled(working)
+        .onChange(of: items) { _, new in
+            guard !new.isEmpty else { return }
+            working = true
+            Task {
+                var images: [UIImage] = []
+                for item in new {
+                    if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) { images.append(img) }
+                }
+                do {
+                    let journey = try await APIClient.shared.createJourney(
+                        destinationId: nil, placeId: nil, spotId: spotId, lat: nil, lng: nil, attachToTrip: false)
+                    let pages = images.compactMap { MemoirPersistence.shared.photoPage($0, journeyId: journey.id) }
+                    var all = MemoirPersistence.shared.load(journeyId: journey.id)
+                    all.append(contentsOf: pages)
+                    MemoirPersistence.shared.save(all, journeyId: journey.id)
+                    await MainActor.run { items = []; working = false }
+                    try? await APIClient.shared.publishJourney(journeyId: journey.id, tripId: journey.tripId, pages: pages)
+                    await MainActor.run {
+                        Haptic.success()
+                        NotificationCenter.default.post(name: .journeyPublished, object: journey.id)
+                    }
+                } catch {
+                    await MainActor.run { items = []; working = false }
+                }
+            }
+        }
+        .accessibilityLabel("Añadir foto")
+    }
+}

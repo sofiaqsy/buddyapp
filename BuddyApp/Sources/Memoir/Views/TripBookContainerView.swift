@@ -347,6 +347,7 @@ struct TripCanvasEditorView: View {
     @State private var canvasSize: CGSize = .zero
     @State private var photoPickerItems: [PhotosPickerItem] = []
     @State private var showPhotoPicker = false
+    @State private var isImportingPhotos = false
     @State private var showCamera      = false
     @State private var showFreeCrop    = false
     @State private var activePanel: ActivePanel = .none
@@ -386,7 +387,9 @@ struct TripCanvasEditorView: View {
                 }
 
             if vm.isProcessing { processingOverlay }
-            if bookVM.isLoadingPage { pageLoadingOverlay }
+            if bookVM.isLoadingPage { pageLoadingOverlay("Cargando portada…") }
+            // Fotos de la galería (pueden venir de iCloud con señal lenta, Keyla 25 Nov 2026).
+            if isImportingPhotos { pageLoadingOverlay("Cargando tus fotos…") }
 
             // Top bar
             VStack {
@@ -448,7 +451,11 @@ struct TripCanvasEditorView: View {
                       matching: .images)
         .onChange(of: photoPickerItems) { _, items in
             guard !items.isEmpty else { return }
-            Task { await loadPhotos(items) }
+            isImportingPhotos = true
+            Task {
+                await loadPhotos(items)
+                isImportingPhotos = false
+            }
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPickerView { image in vm.addPhoto(image, in: pageSize) }.ignoresSafeArea()
@@ -572,7 +579,12 @@ struct TripCanvasEditorView: View {
                     Text(onPublish == nil ? "Guardar" : "Publicar")
                         .font(.system(size: 10, weight: .semibold))
                 }
-                .foregroundStyle(Color.teal).frame(width: 68, height: 60)
+                // Botón principal bien visible sobre la barra oscura (Keyla, 25 Nov 2026):
+                // fondo claro y texto verde, antes era verde oscuro sobre negro.
+                .foregroundStyle(Color.brand)
+                .frame(width: 72, height: 52)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal, 4)
             }.buttonStyle(.plain)
 
             pillDivider
@@ -727,12 +739,12 @@ struct TripCanvasEditorView: View {
         }
     }
 
-    private var pageLoadingOverlay: some View {
+    private func pageLoadingOverlay(_ text: String) -> some View {
         ZStack {
             Color.black.opacity(0.55).ignoresSafeArea()
             VStack(spacing: 14) {
                 ProgressView().tint(.white).controlSize(.large).scaleEffect(1.2)
-                Text("Cargando portada…").foregroundStyle(.white).font(.system(size: 14, weight: .medium))
+                Text(text).foregroundStyle(.white).font(.system(size: 14, weight: .medium))
             }
             .padding(32).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
         }

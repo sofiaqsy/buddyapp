@@ -60,6 +60,8 @@ struct RootView: View {
             YoView().environmentObject(authState).environmentObject(routeStore).floatingTabBarSpace().perfTabAppear("yo").tag(AppTab.yo)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Aviso de subida de fotos sobre todas las pestañas (Keyla, 25 Nov 2026).
+        .overlay(alignment: .top) { UploadStatusBanner().padding(.top, 4) }
         .overlay(alignment: .bottom) {
             GlassTabBar(selection: $router.selectedTab, unreadChats: chatStore.totalUnread + bizPending.count)
                 .padding(.horizontal, Spacing.edge)
@@ -328,5 +330,119 @@ struct UnreadBadge: View {
             .background(Color.errorRed)
             .clipShape(Capsule())
             .accessibilityLabel(count == 1 ? "1 sin responder" : "\(count) sin responder")
+    }
+}
+
+// MARK: - Subida de fotos
+
+/// Estado de la subida de fotos al publicar (Keyla, 25 Nov 2026): en Villa Rica
+/// el 3G/4G es lento y la persona tiene que saber que su foto se está subiendo,
+/// que terminó, o que falló y puede reintentar (sin volver a agregarla).
+@MainActor
+final class UploadStatus: ObservableObject {
+    static let shared = UploadStatus()
+
+    enum Phase: Equatable {
+        case hidden
+        case uploading(current: Int, total: Int)
+        case done
+        case failed
+    }
+
+    @Published private(set) var phase: Phase = .hidden
+    private var retry: (() async -> Void)?
+    private var total = 0
+    private var hideTask: Task<Void, Never>?
+
+    func start(total: Int) {
+        hideTask?.cancel()
+        self.total = total
+        phase = .uploading(current: 1, total: total)
+    }
+
+    func progress(current: Int) {
+        phase = .uploading(current: current, total: max(total, current))
+    }
+
+    /// Solo avisa "listo" si se estaba mostrando la subida.
+    func finished() {
+        guard case .uploading = phase else { return }
+        phase = .done
+        hideTask?.cancel()
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.phase = .hidden
+        }
+    }
+
+    func failed(retry: @escaping () async -> Void) {
+        hideTask?.cancel()
+        self.retry = retry
+        phase = .failed
+    }
+
+    func tapRetry() {
+        guard let retry else { return }
+        self.retry = nil
+        phase = .uploading(current: 1, total: max(total, 1))
+        Task { await retry() }
+    }
+
+    func dismiss() { hideTask?.cancel(); retry = nil; phase = .hidden }
+}
+
+struct UploadStatusBanner: View {
+    @ObservedObject var status = UploadStatus.shared
+
+    var body: some View {
+        Group {
+            switch status.phase {
+            case .hidden:
+                EmptyView()
+            case .uploading(let current, let total):
+                row {
+                    ProgressView().tint(Color.brand)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(total > 1 ? "Subiendo foto \(current) de \(total)…" : "Subiendo tu foto…")
+                            .font(BT.headline).foregroundStyle(Color.ink)
+                        Text("Con señal lenta puede tardar un poco. Puedes seguir usando la app.")
+                            .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                    }
+                }
+            case .done:
+                row {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.brand)
+                    Text("Listo, tu publicación ya está arriba")
+                        .font(BT.headline).foregroundStyle(Color.ink)
+                }
+            case .failed:
+                row {
+                    Image(systemName: "wifi.exclamationmark").foregroundStyle(Color.errorRed)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("No se pudo subir la foto")
+                            .font(BT.headline).foregroundStyle(Color.ink)
+                        Text("Revisa tu señal. Tus fotos siguen guardadas, no las agregues otra vez.")
+                            .font(BT.footnote).foregroundStyle(Color.inkMuted)
+                    }
+                    Spacer(minLength: 4)
+                    Button("Reintentar") { status.tapRetry() }
+                        .font(BT.headline).foregroundStyle(Color.brand)
+                }
+                .onTapGesture(count: 2) { status.dismiss() }
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: status.phase)
+    }
+
+    private func row<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 12) { content() }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+            .padding(.horizontal, Spacing.edge)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityElement(children: .combine)
     }
 }

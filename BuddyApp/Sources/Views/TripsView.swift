@@ -256,7 +256,14 @@ struct TripsView: View {
                 dismissedJourneyIds.insert(id)
             }
             locallyActivatedId = nil
-            Task { await loadJourneys(trigger: "notif:journeyCancelled") }
+            Task {
+                await loadJourneys(trigger: "notif:journeyCancelled")
+                // Cancelado el trip desde el perfil: todo fuera y de vuelta al
+                // perfil, donde la celda vuelve a decir "Nuevo trip" (Keyla, 25 Nov 2026).
+                await MainActor.run {
+                    if embedded && visibleTrips.isEmpty { pathB.wrappedValue = NavigationPath() }
+                }
+            }
         }
         .fullScreenCover(item: $editTarget) { target in
             TripEditorSheet(journey: target.journey, initialPage: target.pageIndex) {
@@ -380,7 +387,10 @@ struct TripsView: View {
             journeys.removeAll { removed.contains($0.id) }
             selectedTripId = nil
         }
+        JourneysStore.shared.quitarTrip(tripId)
         Haptic.success()
+        // De vuelta al perfil al instante, sin esperar al servidor (Keyla, 26 Nov 2026).
+        if embedded && visibleTrips.isEmpty { pathB.wrappedValue = NavigationPath() }
         Task {
             try? await APIClient.shared.cancelTrip(tripId: tripId)
             await MainActor.run {
@@ -412,7 +422,7 @@ struct TripsView: View {
     private var tripsHeader: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Tus trips")
+                Text(selectedTrip != nil ? "Tu trip en curso" : "Tus trips")
                     .font(.system(.largeTitle).weight(.bold))
                     .foregroundStyle(Color.brand)
                     .accessibilityAddTraits(.isHeader)
@@ -423,7 +433,8 @@ struct TripsView: View {
             Spacer(minLength: 8)
             // Solo con trips: sin ninguno, la tarjeta vacía ya trae su botón
             // (una sola acción principal por pantalla).
-            if Session.hasSession && selectedTrip != nil {
+            // "+ Nuevo trip" quitado (Keyla, 25 Nov 2026): se entra desde el perfil.
+            if false {
                 Button {
                     Haptic.medium()
                     pathB.wrappedValue.append("register")
@@ -515,7 +526,7 @@ struct TripsView: View {
     private var anonymousTripState: some View {
         emptyCard(icon: "suitcase",
                   title: "Tu bitácora de viajes",
-                  text: "Registra un destino, agrega momentos y comparte tu historia.",
+                  text: "Registra un destino, agrega momentos y comparte tu trip.",
                   button: "Empezar")
     }
 
@@ -541,7 +552,7 @@ struct TripsView: View {
         // motivo suficiente, y el .task de esta vista reaparece muchas veces
         // porque el TabView recrea la pestaña. Un pull-to-refresh sí lo es.
         let store = JourneysStore.shared
-        let fresco = (trigger == "refreshable" || trigger == "registerTrip")
+        let fresco = (trigger == "refreshable" || trigger == "registerTrip" || trigger == "notif:journeyCancelled")
             ? try? await store.refresh(trigger: "trips:\(trigger)")
             : try? await store.load(trigger: "trips:\(trigger)")
         if let fetched = fresco {
@@ -862,7 +873,7 @@ struct TripFeedCard: View {
                             if isPublishing {
                                 ProgressView().tint(Color.teal).scaleEffect(0.8)
                             } else {
-                                Text("Publicar esta historia")
+                                Text("Publicar este trip")
                                     .font(BT.footnoteBold)
                                     .foregroundStyle(Color.ink)
                             }
@@ -870,7 +881,7 @@ struct TripFeedCard: View {
                                 Image(systemName: "checkmark")
                                     .font(.system(size: 10, weight: .bold))
                                     .foregroundStyle(Color.teal)
-                                Text("Tu historia está lista")
+                                Text("Tu trip está listo")
                                     .font(BT.caption1)
                                     .foregroundStyle(Color.inkMuted)
                             }
@@ -909,11 +920,11 @@ struct TripFeedCard: View {
         } message: {
             Text("Las fotos de esta portada se quitarán del trip.")
         }
-        .confirmationDialog("¿Publicar esta historia?", isPresented: $showPublishConfirm, titleVisibility: .visible) {
+        .confirmationDialog("¿Publicar este trip?", isPresented: $showPublishConfirm, titleVisibility: .visible) {
             Button("Publicar") { publishTrip() }
             Button("Cancelar", role: .cancel) {}
         } message: {
-            Text("Tu historia quedará visible para la comunidad. Después no podrás editarla.")
+            Text("Tu trip quedará visible para la comunidad. Después no podrás editarlo.")
         }
         .alert("Tu portada está en blanco", isPresented: $showBlankPublishAlert) {
             Button("Entendido", role: .cancel) {}
@@ -1062,7 +1073,7 @@ struct TripFeedCard: View {
                     .buttonStyle(.plain)
 
                     VStack(spacing: 4) {
-                        Text("Tu historia empieza aquí")
+                        Text("Tu trip empieza aquí")
                             .font(BT.headline)
                             .foregroundStyle(.white)
                         Text("Guarda los momentos mientras vives \(destName)")

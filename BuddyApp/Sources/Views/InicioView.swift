@@ -4219,11 +4219,15 @@ struct HomePlaceCard: View {
     var tall: Bool = false
     /// Distancia también en tarjetas altas: "Cerca de ti" (Keyla, 24 Nov 2026).
     var showsDistance: Bool = false
+    /// Ancho propio para filas más compactas (perfil, Keyla 25 Nov 2026); misma forma 4:5.
+    var widthOverride: CGFloat? = nil
 
     /// Filas de categoría: foto vertical 4:5, más angosta y con esquinas más
     /// chicas (Keyla, 20 Nov 2026). Las demás filas siguen en 4:3.
-    private var portrait: Bool { tall || (!showsCategory && !large) }
-    private var width: CGFloat { large ? 264 : (portrait ? 150 : 168) }
+    /// Mismas medidas para todas las tarjetas de lugar de la app: las de
+    /// "Cerca de ti" (150, foto 4:5) (Keyla, 25 Nov 2026). Solo la grande cambia.
+    private var portrait: Bool { !large }
+    private var width: CGFloat { widthOverride ?? (large ? 264 : (portrait ? 150 : 168)) }
     private var height: CGFloat { portrait ? width * 5 / 4 : width * 3 / 4 }
     /// Mismo radio en todas las tarjetas de lugar, menos curvo (Keyla, 20 Nov 2026).
     private var corner: CGFloat { 10 }
