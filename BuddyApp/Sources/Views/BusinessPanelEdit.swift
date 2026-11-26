@@ -323,23 +323,24 @@ struct BusinessPanelAbout: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
-                if text.isEmpty {
-                    Text("Cuenta qué ofreces, qué te hace especial y qué puede vivir el visitante.")
-                        .font(BT.callout).foregroundStyle(Color.inkMuted)
-                        .padding(.horizontal, 14).padding(.vertical, 12)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $text)
+                // Crece con el texto: siempre se lee completo, sin cortarse (Keyla, 26 Nov 2026).
+                TextField("Cuenta qué ofreces, qué te hace especial y qué puede vivir el visitante.",
+                          text: $text, axis: .vertical)
+                    .lineLimit(4...)
                     .font(BT.callout).foregroundStyle(Color.ink)
-                    .scrollContentBackground(.hidden)
                     .focused($focused)
-                    .padding(.horizontal, 9).padding(.vertical, 4)
-                    .frame(minHeight: 110)
+                    .padding(.horizontal, 14).padding(.vertical, 12)
                     .onChange(of: text) { _, t in if t.count > maxAbout { text = String(t.prefix(maxAbout)) } }
             }
             .background(Color.canvas, in: RoundedRectangle(cornerRadius: 14))
+            // Al llegar al máximo: borde y contador en rojo (Keyla, 26 Nov 2026).
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.errorRed, lineWidth: text.count >= maxAbout ? 1.5 : 0))
+            if text.count >= maxAbout {
+                Text("Llegaste al máximo de \(maxAbout) caracteres.").font(BT.caption1).foregroundStyle(Color.errorRed)
+            }
             HStack {
-                Text("\(text.count) de \(maxAbout)").font(BT.caption1).foregroundStyle(Color.inkMuted)
+                Text("\(text.count) de \(maxAbout)").font(BT.caption1)
+                    .foregroundStyle(text.count >= maxAbout ? Color.errorRed : Color.inkMuted)
                 Spacer()
                 if changed {
                     Button {

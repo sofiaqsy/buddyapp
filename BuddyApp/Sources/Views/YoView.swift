@@ -2976,7 +2976,7 @@ struct RegisterBusinessView: View {
     @State private var errorText: String? = nil
     @State private var needsLogin = false
     private let categories = ["Fincas", "Tostadurías", "Cafeterías", "Restaurantes y comida local",
-                              "Hospedaje", "Productos locales", "Artesanía y cultura Yanesha",
+                              "Hospedaje", "Productos locales", "Artesanía y cultura",
                               "Guías y actividades", "Transporte con conductor"]
     private var canSave: Bool {
         name.trimmingCharacters(in: .whitespaces).count >= 3 && city.trimmingCharacters(in: .whitespaces).count >= 2 && authorized && !busy
@@ -3303,11 +3303,13 @@ struct BusinessHomeView: View {
     }
 
     @State private var pendingSpotIds: Set<String> = []
+    /// nil = aún no se sabe; false = el negocio no tiene categoría (no sale en Inicio).
+    @State private var headerHasCategory: Bool? = nil
 
     /// Estado del negocio en Inicio: sin ubicación, todas en revisión, o visible.
     private var inicioStatus: String {
         let locs = live.locations ?? []
-        if locs.isEmpty { return "No visible en Inicio" }
+        if locs.isEmpty || headerHasCategory == false { return "No visible en Inicio" }
         let ids = locs.compactMap(\.spotId)
         if !ids.isEmpty && ids.allSatisfy({ pendingSpotIds.contains($0) }) { return "En revisión" }
         return "Visible en Inicio"
@@ -3322,6 +3324,9 @@ struct BusinessHomeView: View {
             if hit.isPendingApproval { pending.insert(id) }
         }
         pendingSpotIds = pending
+        if isLinked, let cats = try? await APIClient.shared.fetchFarmCategories(farmId: live.id) {
+            headerHasCategory = cats.main != nil
+        }
     }
 
     private var resumen: some View {
@@ -4599,14 +4604,16 @@ struct BusinessProfileEditor: View {
         let spotIds = locations.compactMap(\.spotId)
         return ProfileChecklist.next(ProfileChecklist.items(about: biz?.about, contact: biz?.contact, locations: locations,
                                            isLinked: isLinked, hasProducts: hasProducts,
-                                           hasPlacePhotos: spotIds.contains { !ownerPhotos.photos($0).isEmpty || feedCovers[$0] != nil })) == nil
+                                           hasPlacePhotos: spotIds.contains { !ownerPhotos.photos($0).isEmpty || feedCovers[$0] != nil },
+                                           hasCategory: !categoriesLoaded || savedMain != nil)) == nil
     }
 
     private func checklist(_ proxy: ScrollViewProxy) -> some View {
         let spotIds = locations.compactMap(\.spotId)
         let items = ProfileChecklist.items(about: biz?.about, contact: biz?.contact, locations: locations,
                                            isLinked: isLinked, hasProducts: hasProducts,
-                                           hasPlacePhotos: spotIds.contains { !ownerPhotos.photos($0).isEmpty || feedCovers[$0] != nil })
+                                           hasPlacePhotos: spotIds.contains { !ownerPhotos.photos($0).isEmpty || feedCovers[$0] != nil },
+                                           hasCategory: !categoriesLoaded || savedMain != nil)
         let done = items.filter(\.done).count
         let next = ProfileChecklist.next(items)
         return VStack(alignment: .leading, spacing: 10) {
@@ -4619,7 +4626,8 @@ struct BusinessProfileEditor: View {
             ProgressView(value: Double(done), total: Double(items.count)).tint(Color.brand)
             if let next {
                 // Sin ubicación: el "Siguiente" es la alerta obligatoria, en rojo (Keyla, 26 Nov 2026).
-                let required = locations.isEmpty && next.target == "locations"
+                let missingCategory = next.label == "Elige tu categoría"
+                let required = (locations.isEmpty && next.target == "locations") || missingCategory
                 let tint = required ? Color.errorRed : Color.brand
                 let label = HStack(spacing: 8) {
                     if required {
@@ -4632,7 +4640,7 @@ struct BusinessProfileEditor: View {
                             Text(next.label).font(BT.footnoteBold).foregroundStyle(tint)
                         }
                         if required {
-                            Text("Sin ubicación, tu negocio no aparece en Inicio.")
+                            Text(missingCategory ? "Sin categoría, tu negocio no aparece en Inicio." : "Sin ubicación, tu negocio no aparece en Inicio.")
                                 .font(BT.footnote).foregroundStyle(tint)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -5045,22 +5053,10 @@ struct BusinessProfileEditor: View {
             if catalog.isEmpty {
                 ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12)
             } else {
-                // Combo común (como "unidad" en productos): principal + hasta 2 más.
+                // Una sola categoría (Keyla, 26 Nov 2026): elegir la principal borra las extra.
                 categoryCombo("Principal", selection: mainCategory, allowNone: false) { id in
                     mainCategory = id
-                    extraCategories.removeAll { $0 == id }
-                }
-                ForEach(0..<2, id: \.self) { i in
-                    if i == 0 || extraCategories.count >= 1 {
-                        categoryCombo("Otra (opcional)", selection: i < extraCategories.count ? extraCategories[i] : nil, allowNone: true) { id in
-                            var list = extraCategories
-                            if let id {
-                                if i < list.count { list[i] = id } else { list.append(id) }
-                            } else if i < list.count { list.remove(at: i) }
-                            var seen = Set<String>()
-                            extraCategories = list.filter { $0 != mainCategory && seen.insert($0).inserted }
-                        }
-                    }
+                    extraCategories = []
                 }
             }
             if let categoryError { Text(categoryError).font(BT.caption1).foregroundStyle(Color.errorRed) }
@@ -5112,25 +5108,27 @@ struct BusinessProfileEditor: View {
     private var aboutCard: some View {
         return subsection("Descripción", icon: "text.alignleft") {
             ZStack(alignment: .topLeading) {
-                if aboutText.isEmpty {
-                    Text("Cuenta qué ofreces, qué te hace especial y qué puede vivir el visitante.")
-                        .font(BT.callout).foregroundStyle(Color.inkMuted)
-                        .padding(.horizontal, 14).padding(.vertical, 12)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $aboutText)
+                // Crece con el texto: siempre se lee completo, sin cortarse (Keyla, 26 Nov 2026).
+                TextField("Cuenta qué ofreces, qué te hace especial y qué puede vivir el visitante.",
+                          text: $aboutText, axis: .vertical)
+                    .lineLimit(4...)
                     .font(BT.callout).foregroundStyle(Color.ink)
-                    .scrollContentBackground(.hidden)
                     .focused($aboutFocused)
-                    .padding(.horizontal, 9).padding(.vertical, 4)
-                    .frame(minHeight: 110)
+                    .padding(.horizontal, 14).padding(.vertical, 12)
                     .onChange(of: aboutText) { _, t in
                         if t.count > maxAbout { aboutText = String(t.prefix(maxAbout)) }
                     }
             }
             .background(Color.canvas, in: RoundedRectangle(cornerRadius: 14))
-            Text("\(aboutText.count) de \(maxAbout)").font(BT.caption1).foregroundStyle(Color.inkMuted)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.errorRed, lineWidth: aboutText.count >= maxAbout ? 1.5 : 0))
+            HStack {
+                if aboutText.count >= maxAbout {
+                    Text("Llegaste al máximo de \(maxAbout) caracteres.").font(BT.caption1).foregroundStyle(Color.errorRed)
+                }
+                Spacer()
+                Text("\(aboutText.count) de \(maxAbout)").font(BT.caption1)
+                    .foregroundStyle(aboutText.count >= maxAbout ? Color.errorRed : Color.inkMuted)
+            }
         }
     }
 

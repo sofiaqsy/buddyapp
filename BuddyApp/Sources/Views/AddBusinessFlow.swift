@@ -29,7 +29,7 @@ struct AddBusinessFlow: View {
     enum Field { case name, contact, city }
 
     static let categories = ["Fincas", "Tostadurías", "Cafeterías", "Restaurantes y comida local",
-                             "Hospedaje", "Productos locales", "Artesanía y cultura Yanesha",
+                             "Hospedaje", "Productos locales", "Artesanía y cultura",
                              "Guías y actividades", "Transporte con conductor"]
 
     var body: some View {

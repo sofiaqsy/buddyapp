@@ -2639,6 +2639,15 @@ struct PlaceGuideMapSheet: View {
             }
             let t0 = Date()
             loadState = await routeStore.ensureLoaded(destinationId: destId)
+            // Lugar en revisión (aún no sale en el mapa público): se agrega para que el
+            // mapa abra en él, como en Android (Keyla, 26 Nov 2026).
+            if case .guideAvailable = loadState, let fid = focusPlaceId, let la = lat, let ln = lng,
+               let uuid = UUID(uuidString: fid),
+               !routeStore.route.places.contains(where: { $0.id == uuid }) {
+                routeStore.route.places.append(Place(id: uuid, name: name, description: "", stickerSymbol: "mappin",
+                                                     stickerEmoji: "", category: .hidden, latitude: la, longitude: ln,
+                                                     radiusMeters: 50, coverUrl: OwnerPhotoStore.shared.cover(fid)))
+            }
             PerfLog.ms("abrir-lugar", since: t0)
         }
     }

@@ -347,27 +347,54 @@ struct TripDetailView: View {
 
     // MARK: – Map
 
+    private struct PinItem { let key: String; let place: Place }
+    /// Zoom actual del mapa: para saber qué pines se tapan con el elegido.
+    @State private var mapSpan: MKCoordinateSpan? = nil
+    private var pinOrder: [PinItem] {
+        let sel = selectedPlace?.id
+        // También cambia cuando llegan más lugares: MapKit pone los nuevos encima.
+        let tag = (sel?.uuidString ?? "none") + "-\(orderedPlaces.count)"
+        // MapKit dibuja encima el pin más al sur, sin forma de cambiarlo en SwiftUI:
+        // con un lugar elegido se ocultan los pines que lo taparían (Keyla, 26 Nov 2026).
+        let overlaps: (Place) -> Bool = { p in
+            guard let s = self.selectedPlace, let span = self.mapSpan else { return false }
+            let dLat = abs(p.latitude - s.latitude) / span.latitudeDelta * 874
+            let dLng = abs(p.longitude - s.longitude) / span.longitudeDelta * 402
+            return dLat < 52 && dLng < 52
+        }
+        let rest = orderedPlaces.filter { $0.id != sel && !overlaps($0) }.sorted { !$0.featured && $1.featured }
+        let chosen = orderedPlaces.filter { $0.id == sel }
+        return (rest + chosen).map { PinItem(key: "\($0.id.uuidString)|\(tag)", place: $0) }
+    }
+
+    private func placeAnnotation(_ place: Place) -> some MapContent {
+        Annotation("", coordinate: place.coordinate) {
+            RecommendationPin(place: place, isSelected: selectedPlace?.id == place.id)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                .highPriorityGesture(TapGesture().onEnded {
+                    Haptic.select()
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedPlace = selectedPlace?.id == place.id ? nil : place
+                    }
+                })
+                .accessibilityLabel(place.featured ? "\(place.name), recomendado" : place.name)
+                .accessibilityAddTraits(.isButton)
+        }
+        .annotationTitles(.hidden)
+    }
+
     private var mapView: some View {
         Map(position: $camera) {
             // Spots curados por la comunidad; featured al final → se dibujan encima
             // TODOS los lugares en el mapa, no solo el lote del rail: el rail pagina
             // de 10 en 10, pero un pin que existe y no se dibuja es justo el
             // "no veo ningún spot" que se quería arreglar.
-            ForEach(orderedPlaces.sorted { !$0.featured && $1.featured }) { place in
-                Annotation("", coordinate: place.coordinate) {
-                    RecommendationPin(place: place, isSelected: selectedPlace?.id == place.id)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                        .highPriorityGesture(TapGesture().onEnded {
-                            Haptic.select()
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                selectedPlace = selectedPlace?.id == place.id ? nil : place
-                            }
-                        })
-                        .accessibilityLabel(place.featured ? "\(place.name), recomendado" : place.name)
-                        .accessibilityAddTraits(.isButton)
-                }
-                .annotationTitles(.hidden)
+            // El lugar elegido se dibuja al final: queda al frente de los demás pines (Keyla, 26 Nov 2026).
+            // MapKit no reordena pines que ya existen: la clave incluye el elegido para
+            // que al cambiar la selección se vuelvan a poner, con el elegido al final.
+            ForEach(pinOrder, id: \.key) { item in
+                placeAnnotation(item.place)
             }
             // Punto azul de "tu ubicación": el tinte verde del mapa lo volvía un
             // círculo oscuro que parecía un pin (Keyla, 24 Nov 2026).
@@ -397,6 +424,7 @@ struct TripDetailView: View {
         // Al TERMINAR de mover o hacer zoom (no en cada frame): pedir lo que hay
         // en pantalla.
         .onMapCameraChange(frequency: .onEnd) { context in
+            mapSpan = context.region.span
             loadSpotsInBounds(region: context.region)
         }
         .onTapGesture {
@@ -2439,7 +2467,8 @@ struct PlaceGuideDetailSheet: View {
             // filas "Por confirmar". Si el lugar tiene negocio, la acción es
             // preguntarle, con el mismo estilo de fila (Keyla, 20 Nov 2026).
             // Descripción y horario que el negocio publicó en Mi negocio (Keyla, 26 Nov 2026).
-            PlacePublicInfo(spotId: place.id.uuidString.lowercased()) {
+            // El dueño solo ve el editor, no la descripción repetida (Keyla, 26 Nov 2026).
+            PlacePublicInfo(spotId: place.id.uuidString.lowercased(), showsAbout: editCtx == nil) {
                 // Al abrir la semana, el panel sube para que no quede cortada (Keyla, 26 Nov 2026).
                 if !expanded { onPanelDragEnd?(-100) }
             }
@@ -3273,13 +3302,14 @@ struct RecommendAddPhotoTile: View {
 /// Sin datos no muestra nada. Nunca muestra el WhatsApp (el servidor no lo envía).
 struct PlacePublicInfo: View {
     let spotId: String
+    var showsAbout: Bool = true
     var onExpand: () -> Void = {}
     @State private var info: APIClient.SpotInfo? = nil
     @State private var showWeek = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let about = info?.about, !about.isEmpty {
+            if showsAbout, let about = info?.about, !about.isEmpty {
                 Text(about).font(BT.body).foregroundStyle(Color.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -15,16 +15,16 @@ final class ProfileChecklistTests: XCTestCase {
 
     func test_newPending_fiveSteps_firstIsLocation() {
         let i = items()
-        XCTAssertEqual(i.count, 5)
+        XCTAssertEqual(i.count, 6)
         XCTAssertEqual(ProfileChecklist.next(i)?.label, "Agrega tu ubicación")
         XCTAssertFalse(i.contains { $0.target == "products" }, "Pendiente: Productos no cuenta")
     }
 
     func test_linked_addsProductsAfterContact() {
         let i = items(linked: true)
-        XCTAssertEqual(i.count, 6)
-        XCTAssertEqual(i[3].label, "Añade tus productos")
-        XCTAssertEqual(i[3].target, "products")
+        XCTAssertEqual(i.count, 7)
+        XCTAssertEqual(i[4].label, "Añade tus productos")
+        XCTAssertEqual(i[4].target, "products")
     }
 
     func test_emptyStrings_countAsMissing() {

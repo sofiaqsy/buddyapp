@@ -12,10 +12,13 @@ enum ProfileChecklist {
     static func items(about: String?, contact: String?, locations: [BusinessLocation],
                       isLinked: Bool, hasProducts: Bool,
                       /// Fotos del lugar en el mapa (dueño o visitas): también cuentan (Keyla, 26 Nov 2026).
-                      hasPlacePhotos: Bool = false) -> [Item] {
+                      hasPlacePhotos: Bool = false,
+                      /// Sin categoría el negocio no sale en Inicio (Keyla, 26 Nov 2026).
+                      hasCategory: Bool = true) -> [Item] {
         // La ubicación va primero: sin ella el negocio no aparece en Inicio (Keyla, 26 Nov 2026).
         var items = [
             Item(label: "Agrega tu ubicación", done: !locations.isEmpty, target: "locations"),
+            Item(label: "Elige tu categoría", done: hasCategory, target: "general"),
             Item(label: "Agrega una descripción", done: !(about ?? "").isEmpty, target: "general"),
             Item(label: "Agrega tu WhatsApp", done: !(contact ?? "").isEmpty, target: "general"),
             Item(label: "Agrega el horario de tus ubicaciones",
@@ -24,7 +27,7 @@ enum ProfileChecklist {
                  done: hasPlacePhotos || locations.contains { !($0.photoFiles ?? []).isEmpty }, target: "locations"),
         ]
         // Productos cuenta solo cuando ya se pueden añadir (negocio aprobado).
-        if isLinked { items.insert(Item(label: "Añade tus productos", done: hasProducts, target: "products"), at: 3) }
+        if isLinked { items.insert(Item(label: "Añade tus productos", done: hasProducts, target: "products"), at: 4) }
         return items
     }
 
