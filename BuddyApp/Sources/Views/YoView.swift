@@ -296,7 +296,7 @@ struct YoView: View {
             .navigationDestination(for: BusinessLocationRoute.self) { route in
                 ScrollView {
                     BusinessProfileEditor(businessId: route.businessId, isLinked: true, hasProducts: true,
-                                          locationId: route.locationId)
+                                          locationId: route.locationId, startEditingHours: route.editHours)
                         .padding(.horizontal, Spacing.edge).padding(.top, Spacing.md).padding(.bottom, 140)
                 }
                 .background(Color.canvas)
@@ -2082,7 +2082,11 @@ struct BusinessLocation: Codable, Hashable, Identifiable {
 
 struct BusinessLocationPickRoute: Hashable { let businessId: String }
 /// Ficha de una sede: su horario y sus fotos/videos.
-struct BusinessLocationRoute: Hashable { let businessId: String; let locationId: String }
+struct BusinessLocationRoute: Hashable {
+    let businessId: String; let locationId: String
+    /// Desde "Siguiente: Agrega el horario…": abre con el horario ya en edición (Keyla, 26 Nov 2026).
+    var editHours: Bool = false
+}
 
 /// Agregar una sede (Keyla, 20 Nov 2026): primero se buscan los lugares de
 /// Buddy cercanos, porque un buddy o un turista pudo crearlo antes; el negocio
@@ -2881,7 +2885,11 @@ struct BusinessHomeView: View {
     private var isLinked: Bool { live.isLinkedAccount }
     @State private var remote: [FincasProduct] = []
     @State private var remoteTotal = 0
+    /// Ya se sabe cuántos productos hay: antes, el checklist mostraría un paso falso.
+    @State private var remoteLoaded = false
     @State private var productToArchive: FincasProduct? = nil
+    /// Producto que se está quitando: su tarjeta muestra un indicador (Keyla, 26 Nov 2026).
+    @State private var archivingId: String? = nil
     @State private var remoteHasMore = false
     @State private var remoteLoading = false
     @State private var remoteError: String? = nil
@@ -2909,6 +2917,7 @@ struct BusinessHomeView: View {
                 } else {
                     BusinessProfileEditor(businessId: business.id, isLinked: isLinked,
                                           hasProducts: isLinked ? remoteTotal > 0 : !live.products.isEmpty,
+                                          checklistReady: !isLinked || remoteLoaded,
                                           onShowProducts: { withAnimation { section = 0 } })
                 }
             }
@@ -3027,13 +3036,14 @@ struct BusinessHomeView: View {
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Menu {
+                    // "Cambiar de cuenta" primero (Keyla, 26 Nov 2026).
+                    Button { onSwitchAccount() } label: {
+                        Label("Cambiar de cuenta", systemImage: "arrow.left.arrow.right")
+                    }
                     if isLinked {
                         Button { showInvite = true } label: {
                             Label("Invitar a mi equipo", systemImage: "person.badge.plus")
                         }
-                    }
-                    Button { onSwitchAccount() } label: {
-                        Label("Cambiar de cuenta", systemImage: "arrow.left.arrow.right")
                     }
                     // Una cuenta de negocio no crea ni vincula otros negocios;
                     // eso se hace desde la cuenta personal (Keyla, 20 Nov 2026).
@@ -3224,10 +3234,10 @@ struct BusinessHomeView: View {
             } else {
                 VStack(spacing: Spacing.sm) {
                     ForEach(remote) { p in
-                        NavigationLink(value: FincasProductRoute(farmId: business.id, product: p)) {
-                            remoteCard(p)
-                        }
-                        .buttonStyle(.pressable)
+                        remoteCard(p)
+                        .opacity(archivingId == p.id ? 0.5 : 1)
+                        .overlay { if archivingId == p.id { ProgressView().tint(Color.brand) } }
+                        .allowsHitTesting(archivingId != p.id)
                         .contextMenu {
                             if p.status != "archived" {
                                 Button(role: .destructive) { productToArchive = p } label: { Label("Quitar producto", systemImage: "trash") }
@@ -3253,6 +3263,8 @@ struct BusinessHomeView: View {
     }
 
     private func archive(_ p: FincasProduct) async {
+        archivingId = p.id
+        defer { archivingId = nil }
         do {
             try await FincasAuth.archiveProduct(farmId: business.id, productId: p.id)
             Haptic.success()
@@ -3268,35 +3280,87 @@ struct BusinessHomeView: View {
         let statusText: String = {
             switch p.status { case "active": return "En la tienda"; case "archived": return "Oculto"; default: return "Borrador" }
         }()
-        return HStack(alignment: .top, spacing: 12) {
-            CachedImage(urlString: photo) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                Image(systemName: "bag").font(.system(size: 18, weight: .semibold)).foregroundStyle(Color.brand)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.paleSage)
-            }
-            .frame(width: 64, height: 64)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
+        // Agrupado por producto; cada presentación con SU foto (Keyla, 26 Nov 2026).
+        // Filas separadas, precio en píldora, ocultas con ojo tachado y en gris.
+        let pres = p.presentations ?? []
+        return VStack(alignment: .leading, spacing: 8) {
+            NavigationLink(value: FincasProductRoute(farmId: business.id, product: p)) {
+            HStack(alignment: .top, spacing: 0) {
+                // Nombre (sin ">", Keyla 26 Nov 2026) (se ve tocable) y la descripción en una línea
+                // gris (Keyla, 26 Nov 2026).
+                VStack(alignment: .leading, spacing: 3) {
                     Text(p.name).font(BT.headline).foregroundStyle(Color.ink).lineLimit(2)
-                    Spacer(minLength: 4)
-                    Text(statusText).font(.system(size: 11, weight: .semibold))
+                        .multilineTextAlignment(.leading)
+                    if let d = p.description?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty {
+                        Text(d).font(BT.caption1).foregroundStyle(Color.inkMuted).lineLimit(1)
+                    }
+                    // Estado después de la descripción: el nombre usa todo el ancho (Keyla, 26 Nov 2026).
+                    Label(statusText, systemImage: p.status == "active" ? "storefront" : "eye.slash")
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(p.status == "active" ? Color.brand : Color.inkMuted)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(p.status == "active" ? Color.sageTint : Color.surfaceRaised, in: Capsule())
+                        .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                ForEach(p.presentations ?? []) { pr in
-                    HStack {
-                        Text((pr.label.isEmpty ? "Presentación" : pr.label) + (pr.visible == false ? " · oculta" : ""))
-                            .font(BT.footnote).foregroundStyle(Color.inkMuted)
-                        Spacer()
-                        if let price = pr.price {
-                            Text("S/ " + String(format: "%.2f", price)).font(BT.footnoteBold).foregroundStyle(Color.brand)
-                        }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+            ForEach(Array(pres.enumerated()), id: \.element.id) { i, pr in
+                let oculta = pr.visible == false
+                // Tocar una presentación abre el editor solo en ESA (Keyla, 26 Nov 2026).
+                NavigationLink(value: FincasProductRoute(farmId: business.id, product: p, focusPresentationId: pr.id)) {
+                HStack(spacing: 12) {
+                    CachedImage(urlString: pr.photos?.first?.url ?? pr.photoUrl ?? photo) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        Image(systemName: "bag").font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.brand)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.paleSage)
+                    }
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .opacity(oculta ? 0.5 : 1)
+                    if oculta {
+                        Image(systemName: "eye.slash").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.inkMuted)
+                            .accessibilityHidden(true)
+                    }
+                    Text((pr.label.isEmpty ? "Presentación" : pr.label) + (oculta ? " · oculta" : ""))
+                        .font(BT.footnote).foregroundStyle(oculta ? Color.inkMuted : Color.ink)
+                    Spacer()
+                    if let price = pr.price {
+                        Text("S/ " + String(format: "%.2f", price)).font(BT.footnoteBold)
+                            .foregroundStyle(oculta ? Color.inkMuted.opacity(0.6) : Color.brand)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            // Oculta: sin relleno, solo un borde tenue (Keyla, 26 Nov 2026).
+                            .background(oculta ? Color.clear : Color.sageTint, in: Capsule())
+                            .overlay { if oculta { Capsule().stroke(Color.inkMuted.opacity(0.2), lineWidth: 1) } }
+                    }
+                }
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .overlay(alignment: .bottom) {
+                    if i < pres.count - 1 {
+                        Rectangle().fill(Color.inkMuted.opacity(0.15)).frame(height: 0.5)
+                            .padding(.leading, 60).offset(y: 5)
                     }
                 }
             }
+            NavigationLink(value: FincasProductRoute(farmId: business.id, product: p, addPresentation: true)) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 13, weight: .bold))
+                    Text("Agregar presentación").font(BT.footnoteBold)
+                }
+                .foregroundStyle(Color.brand)
+                .frame(maxWidth: .infinity).frame(height: 40)
+                .background(Color.sageTint, in: Capsule())
+            }
+            .buttonStyle(.pressable)
+            .padding(.top, 4)
         }
         .padding(14)
         .background(Color.surface)
@@ -3323,6 +3387,7 @@ struct BusinessHomeView: View {
                 }
             }
             remoteTotal = page.total ?? remote.count
+            remoteLoaded = true
             remoteHasMore = (page.hasMore ?? false) && !(reset ? page.items.isEmpty : fresh.isEmpty)
             remoteError = nil
             remoteNeedsLogin = false
@@ -3638,6 +3703,9 @@ struct FincasProductRoute: Hashable {
     /// Desde el lápiz de UNA presentación en el panel: el editor muestra solo esa
     /// (Keyla, 23 Nov 2026). Nil = todas.
     var focusPresentationId: String? = nil
+    /// Desde "+ Agregar presentación" en la lista: abre con una presentación
+    /// nueva vacía y solo esa (Keyla, 26 Nov 2026).
+    var addPresentation: Bool = false
 }
 
 private func parseNumber(_ s: String) -> Double? {
@@ -3668,6 +3736,7 @@ struct FincasProductEditView: View {
     @State private var desc = ""
     @State private var status = "draft"
     @State private var pres: [PresDraft] = []
+    @State private var focusId: String? = nil
     @State private var original: [PresDraft] = []
     @State private var saving = false
     @State private var errorText: String? = nil
@@ -3681,14 +3750,21 @@ struct FincasProductEditView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
-                Text(isNew ? "Nuevo producto" : "Editar producto")
+                // Desde una presentación: título propio y sin el campo Nombre;
+                // el producto se ve como subtítulo (Keyla, 26 Nov 2026).
+                Text(focusId.map { $0.hasPrefix("new-") ? "Nueva presentación" : "Editar presentación" }
+                     ?? (isNew ? "Nuevo producto" : "Editar producto"))
                     .font(.system(.largeTitle).weight(.bold))
                     .foregroundStyle(Color.brand)
-
-                field("Nombre", text: $name, placeholder: "Ej. Café tostado")
+                if focusId != nil {
+                    Text(name).font(BT.subhead).foregroundStyle(Color.inkMuted)
+                        .padding(.top, -12)
+                } else {
+                    field("Nombre", text: $name, placeholder: "Ej. Café tostado")
+                }
                 // Desde el lápiz de una presentación: solo nombre y esa presentación
                 // (Keyla, 23 Nov 2026: descripción y estado sobran ahí).
-                if route.focusPresentationId == nil {
+                if focusId == nil {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Descripción").font(BT.footnoteBold).foregroundStyle(Color.ink)
                     TextField("Opcional", text: $desc, axis: .vertical)
@@ -3712,9 +3788,8 @@ struct FincasProductEditView: View {
                 }
                 }
 
-                if let focus = route.focusPresentationId, pres.contains(where: { $0.id == focus }) {
+                if let focus = focusId, pres.contains(where: { $0.id == focus }) {
                     // Solo la presentación que se tocó; las demás no cambian.
-                    SectionTitle(title: "Presentación", count: nil)
                     ForEach($pres) { $p in if p.id == focus { presCard($p) } }
                 } else {
                 SectionTitle(title: "Presentaciones", count: pres.count)
@@ -3790,6 +3865,12 @@ struct FincasProductEditView: View {
                           photoIds: Dictionary(($0.photos ?? []).map { ($0.url, $0.id) }, uniquingKeysWith: { a, _ in a }))
             }
             original = pres
+            focusId = route.focusPresentationId
+            if route.addPresentation {
+                let id = "new-\(UUID().uuidString)"
+                pres.append(PresDraft(id: id, size: "", unit: "g", price: "", stock: "", visible: true))
+                focusId = id
+            }
         } else {
             pres = [PresDraft(id: "new-\(UUID().uuidString)", size: "250", unit: "g", price: "", stock: "", visible: true)]
         }
@@ -3931,6 +4012,9 @@ struct FincasProductEditView: View {
         guard let productId = route.product?.id, let k = pres.firstIndex(where: { $0.id == presId }),
               let photoId = pres[k].photoIds[url] else { return }
         errorText = nil
+        // Mismo indicador que al subir: la foto tarda en quitarse con mala señal.
+        uploadingPres = presId
+        defer { uploadingPres = nil }
         do {
             try await FincasAuth.deletePresentationPhoto(farmId: route.farmId, productId: productId,
                                                          presentationId: presId, photoId: photoId)
@@ -4065,9 +4149,12 @@ struct BusinessProfileEditor: View {
     let businessId: String
     let isLinked: Bool
     let hasProducts: Bool
+    /// Falso mientras cargan los productos: el checklist espera (Keyla, 26 Nov 2026).
+    var checklistReady: Bool = true
     var onShowProducts: () -> Void = {}
     /// Con sede: la pantalla muestra solo el horario y el contenido de esa sede.
     var locationId: String? = nil
+    var startEditingHours: Bool = false
     @ObservedObject private var store = AccountStore.shared
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var videoItems: [PhotosPickerItem] = []
@@ -4077,6 +4164,7 @@ struct BusinessProfileEditor: View {
     @State private var busy = false
     @State private var errorText: String? = nil
     @State private var hoursExpanded = false
+    @State private var hoursSectionExpanded = true
     @State private var generalExpanded = true
     @State private var contentExpanded = false
     @State private var locationsExpanded = true
@@ -4143,15 +4231,13 @@ struct BusinessProfileEditor: View {
                 }
             }
             hoursCard
-            group("Contenido", icon: "photo.on.rectangle.angled",
-                  summary: contentSummary, expanded: $contentExpanded) {
-                photosCard
-                Divider().overlay(Color.hairline)
-                videosCard
-            }
+            // Sin "Contenido" (fotos y videos) en la sede (Keyla, 26 Nov 2026).
             if let errorText { Text(errorText).font(BT.footnote).foregroundStyle(Color.errorRed) }
         }
-        .onAppear { hoursExpanded = true; contentExpanded = true }
+        .onAppear {
+            hoursExpanded = true; contentExpanded = true
+            if startEditingHours && savedHours == nil && !hoursEditing { draftHours = hours; hoursEditing = true }
+        }
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         .onChange(of: videoItems) { _, items in Task { await importVideos(items) } }
     }
@@ -4159,7 +4245,8 @@ struct BusinessProfileEditor: View {
     private var businessBody: some View {
         ScrollViewReader { proxy in
         VStack(alignment: .leading, spacing: Spacing.lg) {
-            checklist(proxy)
+            // Completo: el checklist desaparece (Keyla, 26 Nov 2026).
+            if checklistReady && !checklistComplete { checklist(proxy) }
             group("Ubicaciones", icon: "safari",
                   summary: locationsSummary, expanded: $locationsExpanded) {
                 locationsContent
@@ -4177,8 +4264,38 @@ struct BusinessProfileEditor: View {
                 generalSaveBar
             }
             .id("general")
+            // Horario después de Información general (Keyla, 26 Nov 2026). Es de cada
+            // sede: cada fila abre el horario de esa sede.
+            group("Horario de atención", icon: "clock",
+                  summary: hoursSectionSummary, expanded: $hoursSectionExpanded) {
+                if locations.isEmpty {
+                    Text("Agrega una ubicación para poner su horario.").font(BT.footnote).foregroundStyle(Color.inkMuted)
+                } else {
+                    ForEach(Array(locations.enumerated()), id: \.element.id) { i, loc in
+                        if i > 0 { Divider().overlay(Color.hairline) }
+                        NavigationLink(value: BusinessLocationRoute(businessId: businessId, locationId: loc.id, editHours: loc.hours == nil)) {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if locations.count > 1 {
+                                        Text(loc.name).font(BT.footnoteBold).foregroundStyle(Color.ink)
+                                    }
+                                    Text(loc.hours.map { HoursSummary.text($0) } ?? "Sin horario")
+                                        .font(BT.footnote).foregroundStyle(loc.hours == nil ? Color.brand : Color.inkMuted)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                Spacer(minLength: 4)
+                                Text(loc.hours == nil ? "Agregar" : "Editar").font(BT.footnoteBold).foregroundStyle(Color.brand)
+                                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.inkMuted)
+                            }
+                            .frame(minHeight: 44).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .id("hours")
             if let errorText { Text(errorText).font(BT.footnote).foregroundStyle(Color.errorRed) }
-            Text("Por ahora se guarda en este teléfono. Pronto se publicará en tu página de Buddy.")
+            Text(isLinked ? "La descripción y el horario se ven en la página de tu lugar. Tu WhatsApp no se muestra." : "Por ahora se guarda en este teléfono. Pronto se publicará en tu página de Buddy.")
                 .font(BT.caption1).foregroundStyle(Color.inkMuted)
         }
         }
@@ -4186,7 +4303,7 @@ struct BusinessProfileEditor: View {
         // Los lugares reclamados se avisan al servidor: así el lugar muestra
         // los productos del negocio. Se repite sin daño (el servidor lo ignora
         // si ya es suyo).
-        .task { await syncLocationsFromServer() }
+        .task { await syncLocationsFromServer(); await syncProfileWithServer() }
         .task(id: locations.compactMap(\.spotId).joined()) {
             await findOwnPlace()
             await syncClaims()
@@ -4220,9 +4337,18 @@ struct BusinessProfileEditor: View {
 
     /// Sin fila de puntos (Keyla, 20 Nov 2026: "muchos puntitos"): barra de
     /// progreso + UN solo paso siguiente que lleva a su sección.
+    private var checklistComplete: Bool {
+        let spotIds = locations.compactMap(\.spotId)
+        return ProfileChecklist.next(ProfileChecklist.items(about: biz?.about, contact: biz?.contact, locations: locations,
+                                           isLinked: isLinked, hasProducts: hasProducts,
+                                           hasPlacePhotos: spotIds.contains { !ownerPhotos.photos($0).isEmpty || feedCovers[$0] != nil })) == nil
+    }
+
     private func checklist(_ proxy: ScrollViewProxy) -> some View {
+        let spotIds = locations.compactMap(\.spotId)
         let items = ProfileChecklist.items(about: biz?.about, contact: biz?.contact, locations: locations,
-                                           isLinked: isLinked, hasProducts: hasProducts)
+                                           isLinked: isLinked, hasProducts: hasProducts,
+                                           hasPlacePhotos: spotIds.contains { !ownerPhotos.photos($0).isEmpty || feedCovers[$0] != nil })
         let done = items.filter(\.done).count
         let next = ProfileChecklist.next(items)
         return VStack(alignment: .leading, spacing: 10) {
@@ -4234,24 +4360,38 @@ struct BusinessProfileEditor: View {
             }
             ProgressView(value: Double(done), total: Double(items.count)).tint(Color.brand)
             if let next {
-                Button {
-                    if next.target == "products" { onShowProducts() } else { go(next.target, proxy) }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text("Siguiente:").font(BT.footnote).foregroundStyle(Color.inkMuted)
-                        Text(next.label).font(BT.footnoteBold).foregroundStyle(Color.brand)
-                        Spacer(minLength: 4)
-                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.brand)
-                    }
-                    .padding(.horizontal, 14).frame(height: 44)
-                    .background(Color.sageTint, in: Capsule())
+                let label = HStack(spacing: 8) {
+                    Text("Siguiente:").font(BT.footnote).foregroundStyle(Color.inkMuted)
+                    Text(next.label).font(BT.footnoteBold).foregroundStyle(Color.brand)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.brand)
                 }
-                .buttonStyle(.plain)
-                .accessibilityHint("Ir a la sección")
+                .padding(.horizontal, 14).padding(.vertical, 8).frame(minHeight: 44)
+                .background(Color.sageTint, in: Capsule())
+                // Horario: abre la primera sede sin horario, ya editándolo (Keyla, 26 Nov 2026).
+                if next.label.contains("horario"), let sinHorario = locations.first(where: { $0.hours == nil }) {
+                    NavigationLink(value: BusinessLocationRoute(businessId: businessId, locationId: sinHorario.id, editHours: true)) { label }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Abre el horario de \(sinHorario.name)")
+                } else {
+                    Button {
+                        if next.target == "products" { onShowProducts() } else { go(next.target, proxy) }
+                    } label: { label }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Ir a la sección")
+                }
             } else {
                 Text("Tu perfil está completo.").font(BT.footnote).foregroundStyle(Color.inkMuted)
             }
         }
+    }
+
+    private var hoursSectionSummary: String {
+        if locations.isEmpty { return "Sin ubicaciones" }
+        let sin = locations.filter { $0.hours == nil }.count
+        if sin > 0 { return sin == locations.count ? "Falta el horario" : "Falta en \(sin) ubicación\(sin == 1 ? "" : "es")" }
+        if locations.count == 1, let h = locations[0].hours { return HoursSummary.text(h) }
+        return "Listo en \(locations.count) ubicaciones"
     }
 
     private var generalSummary: String {
@@ -4309,6 +4449,42 @@ struct BusinessProfileEditor: View {
     /// su propia lista y mostraban lugares distintos. Ahora manda el servidor:
     /// se agregan los lugares del negocio que falten y se quitan los que ya no son
     /// suyos. Lo propio de cada sede (horario, fotos locales) se conserva.
+    /// Perfil y horarios con el servidor (Keyla, 26 Nov 2026). Lo del servidor
+    /// gana; lo que solo estaba en este teléfono se sube una vez.
+    private func syncProfileWithServer() async {
+        guard isLinked, let server = try? await APIClient.shared.fetchFarmProfile(farmId: businessId) else { return }
+        let local = biz
+        if server.about != nil || server.contact != nil {
+            update { $0.about = server.about; $0.contact = server.contact ?? "" }
+            aboutText = server.about ?? ""; contactText = server.contact ?? ""
+        } else if (local?.about ?? "").isEmpty == false || (local?.contact ?? "").isEmpty == false {
+            await pushProfile(about: local?.about, contact: local?.contact)
+        }
+        let serverHours = server.hours ?? [:]
+        for l in locations {
+            guard let spotId = l.spotId else { continue }
+            if let h = serverHours[spotId] {
+                update { b in
+                    if let k = b.locations?.firstIndex(where: { $0.id == l.id }) { b.locations![k].hours = h }
+                }
+            } else if let h = l.hours {
+                await pushHours(spotId: spotId, hours: h)
+            }
+        }
+    }
+
+    private func pushProfile(about: String?, contact: String?) async {
+        do { try await APIClient.shared.saveFarmProfile(farmId: businessId, about: about, contact: contact) }
+        catch { errorText = "No pudimos publicar la descripción. Revisa tu conexión." }
+    }
+
+    private func pushHours(spotId: String, hours: [DayHours]) async {
+        do {
+            try await APIClient.shared.saveSpotHours(spotId: spotId, farmId: businessId, hours: hours)
+            refreshInicioAfterOwnerChange("horario")
+        } catch { errorText = "No pudimos publicar el horario. Revisa tu conexión." }
+    }
+
     private func syncLocationsFromServer() async {
         guard isLinked, let server = try? await APIClient.shared.fetchFarmSpots(farmId: businessId) else { return }
         UserDefaults.standard.set(true, forKey: ownPlaceKey)
@@ -4704,6 +4880,8 @@ struct BusinessProfileEditor: View {
                     let contact = contactText.trimmingCharacters(in: .whitespaces)
                     update { $0.about = about.isEmpty ? nil : about; $0.contact = contact }
                     Task { await saveCategories() }
+                    // Al servidor: la página del lugar muestra la descripción (Keyla, 26 Nov 2026).
+                    if isLinked { Task { await pushProfile(about: about.isEmpty ? nil : about, contact: contact.isEmpty ? nil : contact) } }
                     aboutText = about; contactText = contact
                     aboutFocused = false
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -4850,6 +5028,9 @@ struct BusinessProfileEditor: View {
                     errorText = nil
                     let saved = draftHours
                     updateMedia { h, _, _ in h = saved }
+                    if isLinked, let spotId = loc?.spotId {
+                        Task { await pushHours(spotId: spotId, hours: saved) }
+                    }
                     Haptic.success()
                     withAnimation { hoursEditing = false }
                 } label: {

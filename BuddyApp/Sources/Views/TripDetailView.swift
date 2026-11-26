@@ -1366,6 +1366,7 @@ struct PlaceGuideDetailSheet: View {
     }
     @State private var products: [FincasProduct] = []
     @State private var productToRemove: FincasProduct? = nil
+    @State private var archivingProductId: String? = nil
     @State private var productRemoveError: String? = nil
     @State private var productsState: ProductsState = .idle
     private enum ProductsState { case idle, loading, loaded, notLinked, failed }
@@ -1947,6 +1948,8 @@ struct PlaceGuideDetailSheet: View {
             }
         }
         .frame(width: cardSide, alignment: .leading)
+        .opacity(archivingProductId == p.id ? 0.5 : 1)
+        .overlay { if archivingProductId == p.id { ProgressView().tint(Color.brand) } }
         .contextMenu {
             if editCtx != nil {
                 Button(role: .destructive) { productToRemove = p } label: { Label("Quitar producto", systemImage: "trash") }
@@ -1956,6 +1959,8 @@ struct PlaceGuideDetailSheet: View {
 
     private func archiveFromPanel(_ p: FincasProduct) async {
         guard let ctx = editCtx else { return }
+        archivingProductId = p.id
+        defer { archivingProductId = nil }
         do {
             try await FincasAuth.archiveProduct(farmId: ctx.businessId, productId: p.id)
             products.removeAll { $0.id == p.id }
@@ -2430,6 +2435,11 @@ struct PlaceGuideDetailSheet: View {
             // Aún no hay horario, precios ni contacto guardados: no se muestran
             // filas "Por confirmar". Si el lugar tiene negocio, la acción es
             // preguntarle, con el mismo estilo de fila (Keyla, 20 Nov 2026).
+            // Descripción y horario que el negocio publicó en Mi negocio (Keyla, 26 Nov 2026).
+            PlacePublicInfo(spotId: place.id.uuidString.lowercased()) {
+                // Al abrir la semana, el panel sube para que no quede cortada (Keyla, 26 Nov 2026).
+                if !expanded { onPanelDragEnd?(-100) }
+            }
             if let ctx = editCtx {
                 BusinessPanelAbout(ctx: ctx)
                 CoverageEditor(ctx: ctx).padding(.top, 8)
@@ -3254,5 +3264,99 @@ struct RecommendAddPhotoTile: View {
             }
         }
         .accessibilityLabel("Añadir foto")
+    }
+}
+
+
+/// Descripción y horario públicos de un lugar con negocio (Mi negocio los publica).
+/// Sin datos no muestra nada. Nunca muestra el WhatsApp (el servidor no lo envía).
+struct PlacePublicInfo: View {
+    let spotId: String
+    var onExpand: () -> Void = {}
+    @State private var info: APIClient.SpotInfo? = nil
+    @State private var showWeek = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let about = info?.about, !about.isEmpty {
+                Text(about).font(BT.body).foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let hours = info?.hours, hours.count == 7 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { showWeek.toggle() }
+                    if showWeek { onExpand() }
+                } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "clock").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.brand)
+                            .frame(width: 30, height: 30)
+                            .background(Color.paleSage, in: RoundedRectangle(cornerRadius: 9))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Self.nowText(hours)).font(BT.footnoteBold)
+                                .foregroundStyle(Self.isOpenNow(hours) ? Color.brand : Color.ink)
+                            Text(HoursSummary.text(hours)).font(BT.caption1).foregroundStyle(Color.inkMuted)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.inkMuted).rotationEffect(.degrees(showWeek ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Horario. \(Self.nowText(hours)). \(HoursSummary.text(hours))")
+                if showWeek {
+                    VStack(spacing: 6) {
+                        ForEach(hours.sorted { $0.day < $1.day }) { d in
+                            HStack {
+                                Text(DayHours.names[d.day]).font(BT.footnote)
+                                    .fontWeight(d.day == Self.today ? .semibold : .regular)
+                                Spacer()
+                                Text(d.open ? "\(HoursSummary.time(d.from)) – \(HoursSummary.time(d.to))" : "Cerrado")
+                                    .font(BT.footnote).foregroundStyle(d.open ? Color.ink : Color.inkMuted)
+                            }
+                        }
+                    }
+                    .padding(.leading, 40)
+                }
+            }
+        }
+        .task(id: spotId) {
+            // Caché (Keyla, 26 Nov 2026): lo ya visto aparece al instante, sin esperar
+            // a la red; se refresca en silencio y solo cambia si el negocio lo editó.
+            if let cached = Self.cache[spotId] { info = cached }
+            if let fresh = try? await APIClient.shared.fetchSpotInfo(spotId: spotId) {
+                Self.cache[spotId] = fresh
+                if fresh != info { info = fresh }
+            }
+        }
+    }
+
+    @MainActor private static var cache: [String: APIClient.SpotInfo] = [:]
+
+    /// 0 = lunes … 6 = domingo, hora de Perú (el negocio está en Villa Rica).
+    static var today: Int { (calendar.component(.weekday, from: Date()) + 5) % 7 }
+    private static var calendar: Calendar {
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/Lima") ?? .current; return c
+    }
+    private static var nowMinutes: Int {
+        let c = calendar.dateComponents([.hour, .minute], from: Date()); return (c.hour ?? 0) * 60 + (c.minute ?? 0)
+    }
+    static func isOpenNow(_ hours: [DayHours]) -> Bool {
+        guard let d = hours.first(where: { $0.day == today }), d.open else { return false }
+        return nowMinutes >= d.from && nowMinutes < d.to
+    }
+    static func nowText(_ hours: [DayHours]) -> String {
+        if let d = hours.first(where: { $0.day == today }), d.open {
+            if nowMinutes < d.from { return "Cerrado ahora · abre \(HoursSummary.time(d.from))" }
+            if nowMinutes < d.to { return "Abierto ahora · cierra \(HoursSummary.time(d.to))" }
+        }
+        for i in 1...7 {
+            let day = (today + i) % 7
+            if let d = hours.first(where: { $0.day == day }), d.open {
+                return "Cerrado ahora · abre \(i == 1 ? "mañana" : DayHours.names[day].lowercased()) \(HoursSummary.time(d.from))"
+            }
+        }
+        return "Cerrado"
     }
 }

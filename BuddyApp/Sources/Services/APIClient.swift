@@ -1680,6 +1680,33 @@ extension APIClient {
                                       body: ["main": main, "secondary": secondary])
     }
 
+    // MARK: Perfil del negocio y horario por sede (servidor, 26 Nov 2026)
+
+    struct FarmProfile: Decodable { let about: String?; let contact: String?; let hours: [String: [DayHours]]? }
+    /// Público: lo que muestra la pestaña Información. Nunca trae el WhatsApp.
+    struct SpotInfo: Decodable, Equatable { let about: String?; let hours: [DayHours]? }
+
+    func fetchFarmProfile(farmId: String) async throws -> FarmProfile {
+        try await request(path: "/integrations/fincas/farms/\(farmId)/profile")
+    }
+
+    func saveFarmProfile(farmId: String, about: String?, contact: String?) async throws {
+        struct Ok: Decodable { let about: String? }
+        let _: Ok = try await request(path: "/integrations/fincas/farms/\(farmId)/profile", method: "PUT",
+                                      body: ["about": about ?? NSNull(), "contact": contact ?? NSNull()])
+    }
+
+    func saveSpotHours(spotId: String, farmId: String, hours: [DayHours]) async throws {
+        struct Ok: Decodable { let hours: [DayHours] }
+        let body: [String: Any] = ["farmId": farmId,
+                                   "hours": hours.map { ["day": $0.day, "open": $0.open, "from": $0.from, "to": $0.to] }]
+        let _: Ok = try await request(path: "/integrations/fincas/spots/\(spotId)/hours", method: "PUT", body: body)
+    }
+
+    func fetchSpotInfo(spotId: String) async throws -> SpotInfo {
+        try await request(path: "/integrations/fincas/spots/\(spotId)/info")
+    }
+
     // MARK: Negocio sin local físico
 
     struct AreaSpot: Decodable { let id: String; let name: String; let lat: Double; let lng: Double; let destinationId: String? }
