@@ -25,6 +25,8 @@ struct YoView: View {
     @State private var pendingShareJourney: APIJourney? = nil
     /// Recomendación recién creada que se abre en el editor para ponerle fotos.
     @State private var editingShareJourney: APIJourney? = nil
+    @State private var pendingDraft: RecommendDraft? = nil
+    @State private var editingDraft: RecommendDraft? = nil
     @State private var tripsNextCursor: String? = nil
     @State private var tripsHasMore: Bool = false
     @State private var isLoadingMoreTrips: Bool = false
@@ -38,7 +40,7 @@ struct YoView: View {
     @State private var editingBio = false
     @State private var bioText = ""
     @State private var isSavingBio = false
-    @State private var avatarItem: PhotosPickerItem? = nil
+    @State private var avatarCapture = false
     @State private var isUploadingAvatar = false
     @State private var showLogoutConfirm = false
     @State private var showDeleteConfirm = false
@@ -348,11 +350,13 @@ struct YoView: View {
                     navPath.append(RecommendPlaceRoute(card: card))
                     return
                 }
+                if let d = pendingDraft { pendingDraft = nil; editingDraft = d; return }
                 guard let nuevo = pendingShareJourney else { return }
                 pendingShareJourney = nil
                 editingShareJourney = nuevo
             }) {
-                CompartirLugarSheet(onOpenPlace: { card in pendingRecommendPlace = card }) { journey in
+                CompartirLugarSheet(onOpenPlace: { card in pendingRecommendPlace = card },
+                                    onDraft: { d in pendingDraft = d }) { journey in
                     dlog("🌍 [YoView] compartido creado journey=\(journey.id)")
                     pendingShareJourney = journey
                 }
@@ -364,6 +368,8 @@ struct YoView: View {
             // Solo fotos, sin editor (Keyla, 25 Nov 2026).
             RecomendarFotosView(journey: journey)
         }
+        // Del mapa: el lugar y la recomendación se crean al publicar (Keyla, 26 Nov 2026).
+        .fullScreenCover(item: $editingDraft) { d in RecomendarFotosView(draft: d) }
         // El lugar ya se creó (CompartirLugarSheet ya cerró su propio spinner
         // al llamar onCreated), pero el editor todavía no se presenta: eso
         // pasa recién en el onDismiss de arriba, después de que la animación
@@ -400,7 +406,7 @@ struct YoView: View {
     private var profileHeader: some View {
         HStack(alignment: .center, spacing: Spacing.lg) {
             // Avatar — tapeable para cambiar foto
-            PhotosPicker(selection: $avatarItem, matching: .images) {
+            Button { avatarCapture = true } label: {
                 ZStack(alignment: .bottomTrailing) {
                     Circle()
                         .fill(Color.paleSage)
@@ -433,9 +439,10 @@ struct YoView: View {
             }
             .accessibilityLabel("Cambiar foto de perfil")
             .accessibilityHint("Abre el selector de fotos")
-            .onChange(of: avatarItem) { _, item in
-                guard let item else { return }
-                Task { await uploadAvatar(item: item) }
+            .buttonStyle(.plain)
+            // Cámara al instante, con la galería en la misma pantalla (Keyla, 26 Nov 2026).
+            .photoCapture(isPresented: $avatarCapture) { datas in
+                if let d = datas.first { Task { await uploadAvatar(data: d) } }
             }
 
             // Identidad — el nombre lidera, luego la narrativa
@@ -1112,13 +1119,8 @@ struct YoView: View {
         }
     }
 
-    private func uploadAvatar(item: PhotosPickerItem) async {
+    private func uploadAvatar(data: Data) async {
         dlog("🖼️ [uploadAvatar] iniciando…")
-
-        guard let data = try? await item.loadTransferable(type: Data.self) else {
-            print("🖼️ [uploadAvatar] ❌ loadTransferable falló — formato no soportado")
-            return
-        }
         dlog("🖼️ [uploadAvatar] imagen original: \(data.count / 1024) KB")
 
         guard let uiImg = UIImage(data: data),
@@ -2317,7 +2319,7 @@ struct BusinessLocationPicker: View {
     // tarjeta vacía de Ubicaciones. Al subirla se ve la portada real.
 
     @State private var coverCtx: BusinessEditContext?
-    @State private var coverItem: PhotosPickerItem?
+    @State private var coverCapture = false
     @ObservedObject private var ownerPhotos = OwnerPhotoStore.shared
 
     private var coverStep: some View {
@@ -2333,7 +2335,7 @@ struct BusinessLocationPicker: View {
                 Text("FOTO DE PORTADA")
                     .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
                     .padding(.top, Spacing.lg)
-                PhotosPicker(selection: $coverItem, matching: .images) {
+                Button { coverCapture = true } label: {
                     HomePlaceCard(card: card, large: true)
                         .id(cover ?? "none")
                         .opacity(cover == nil ? 0.5 : 1)
@@ -2366,17 +2368,13 @@ struct BusinessLocationPicker: View {
             .padding(.horizontal, Spacing.edge)
         }
         .background(Color.canvas)
-        .onChange(of: coverItem) { _, item in
-            guard let item, let ctx else { return }
+        .photoCapture(isPresented: $coverCapture) { datas in
+            guard let jpg = datas.first, let ctx else { return }
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data),
-                   let jpg = img.limitedToMaxDimension(1600).jpegData(compressionQuality: 0.82) {
-                    let old = ownerPhotos.photos(ctx.spotId)
-                    await ownerPhotos.add(ctx, images: [jpg])
-                    // Cambiar la elegida: la nueva pasa a ser la portada.
-                    if !old.isEmpty, let new = ownerPhotos.photos(ctx.spotId).last { await ownerPhotos.makeCover(ctx, new) }
-                }
-                coverItem = nil
+                let old = ownerPhotos.photos(ctx.spotId)
+                await ownerPhotos.add(ctx, images: [jpg])
+                // Cambiar la elegida: la nueva pasa a ser la portada.
+                if !old.isEmpty, let new = ownerPhotos.photos(ctx.spotId).last { await ownerPhotos.makeCover(ctx, new) }
             }
         }
     }
@@ -5201,9 +5199,10 @@ enum HoursSummary {
 /// Botón "Agregar foto" con su propio estado del selector.
 struct PresPhotoPicker: View {
     let onPicked: (Data) -> Void
-    @State private var item: PhotosPickerItem? = nil
+    @State private var showCapture = false
     var body: some View {
-        PhotosPicker(selection: $item, matching: .images) {
+        // Cámara al instante, con la galería en la misma pantalla (Keyla, 26 Nov 2026).
+        Button { showCapture = true } label: {
             VStack(spacing: 4) {
                 Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
                 Text("Foto").font(BT.caption1)
@@ -5212,13 +5211,7 @@ struct PresPhotoPicker: View {
             .frame(width: 96, height: 96)
             .background(Color.sageTint, in: RoundedRectangle(cornerRadius: 12))
         }
-        .onChange(of: item) { _, new in
-            guard let new else { return }
-            Task {
-                if let data = try? await new.loadTransferable(type: Data.self) { onPicked(data) }
-                item = nil
-            }
-        }
+        .photoCapture(isPresented: $showCapture) { datas in if let d = datas.first { onPicked(d) } }
         .accessibilityLabel("Agregar foto")
     }
 }
@@ -5512,9 +5505,11 @@ struct JoinBusinessView: View {
 /// (Keyla, 25 Nov 2026: el editor confundía). Reusa la tarjeta "Añadir foto"
 /// del dueño en Mi negocio (DashedAddTile + selector de fotos).
 struct RecomendarFotosView: View {
-    let journey: APIJourney
+    /// Journey ya creado (flujo antiguo) o un borrador que se crea al publicar.
+    var journey: APIJourney? = nil
+    var draft: RecommendDraft? = nil
     @Environment(\.dismiss) private var dismiss
-    @State private var items: [PhotosPickerItem] = []
+    @State private var showCapture = false
     @State private var photos: [UIImage] = []
     @State private var loading = false
     private let maxPhotos = 10
@@ -5524,7 +5519,7 @@ struct RecomendarFotosView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.md) {
-                    Text(journey.spot?.name ?? journey.title ?? "Tu recomendación")
+                    Text(draft?.title ?? journey?.spot?.name ?? journey?.title ?? "Tu recomendación")
                         .font(BT.title2).foregroundStyle(Color.ink)
                     Text("Agrega fotos de este lugar para recomendarlo.")
                         .font(BT.callout).foregroundStyle(Color.inkMuted)
@@ -5545,7 +5540,7 @@ struct RecomendarFotosView: View {
                                 }
                         }
                         if photos.count < maxPhotos {
-                            PhotosPicker(selection: $items, maxSelectionCount: maxPhotos - photos.count, matching: .images) {
+                            Button { showCapture = true } label: {
                                 DashedAddTile(title: "Añadir foto", loading: loading)
                             }
                             .buttonStyle(.plain)
@@ -5585,36 +5580,36 @@ struct RecomendarFotosView: View {
                 }
             }
         }
-        .onChange(of: items) { _, new in
-            guard !new.isEmpty else { return }
-            loading = true
-            Task {
-                var added: [UIImage] = []
-                for item in new {
-                    if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
-                        added.append(img)
-                    }
-                }
-                await MainActor.run {
-                    photos.append(contentsOf: added.prefix(maxPhotos - photos.count))
-                    items = []
-                    loading = false
-                }
-            }
+        .photoCapture(isPresented: $showCapture, maxCount: max(1, maxPhotos - photos.count)) { datas in
+            let added = datas.compactMap { UIImage(data: $0) }
+            photos.append(contentsOf: added.prefix(maxPhotos - photos.count))
         }
     }
 
     /// Guarda cada foto como página y publica en segundo plano: el aviso de
     /// subida (UploadStatusBanner) muestra el avance y permite reintentar.
     private func publish() {
-        let jId = journey.id
-        let pages = photos.compactMap { MemoirPersistence.shared.photoPage($0, journeyId: jId) }
-        guard !pages.isEmpty else { return }
-        MemoirPersistence.shared.save(pages, journeyId: jId)
-        let tripId = journey.tripId
+        let imgs = photos
+        guard !imgs.isEmpty else { return }
+        let existing = journey; let d = draft
         dismiss()
         Task {
-            try? await APIClient.shared.publishJourney(journeyId: jId, tripId: tripId, pages: pages)
+            // Recién aquí se crean el lugar (si es nuevo) y la recomendación.
+            var j = existing
+            if j == nil, let d {
+                var spotId = d.spotId
+                if spotId == nil, let name = d.newName {
+                    spotId = try? await APIClient.shared.proposeSpot(name: name, lat: d.lat, lng: d.lng, categoryId: d.categoryId).id
+                }
+                guard let spotId else { return }
+                j = try? await APIClient.shared.createJourney(spotId: spotId, attachToTrip: false)
+            }
+            guard let j else { return }
+            let jId = j.id
+            let pages = imgs.compactMap { MemoirPersistence.shared.photoPage($0, journeyId: jId) }
+            guard !pages.isEmpty else { return }
+            MemoirPersistence.shared.save(pages, journeyId: jId)
+            try? await APIClient.shared.publishJourney(journeyId: jId, tripId: j.tripId, pages: pages)
             await MainActor.run {
                 Haptic.success()
                 NotificationCenter.default.post(name: .journeyPublished, object: jId)

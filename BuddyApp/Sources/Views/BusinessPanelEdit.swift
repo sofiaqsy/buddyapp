@@ -224,28 +224,19 @@ final class OwnerPhotoStore: ObservableObject {
 struct BusinessAddPhotoTile: View {
     let ctx: BusinessEditContext
     @ObservedObject private var store = OwnerPhotoStore.shared
-    @State private var items: [PhotosPickerItem] = []
+    @State private var showCapture = false
     private let maxPhotos = 10
 
     var body: some View {
         let count = store.photos(ctx.spotId).count
-        PhotosPicker(selection: $items, maxSelectionCount: max(1, maxPhotos - count), matching: .images) {
+        // Cámara al instante, con la galería en la misma pantalla (Keyla, 26 Nov 2026).
+        Button { showCapture = true } label: {
             DashedAddTile(title: "Añadir foto", loading: store.uploading.contains(ctx.spotId))
         }
         .buttonStyle(.plain)
         .disabled(store.uploading.contains(ctx.spotId) || count >= maxPhotos)
-        .onChange(of: items) { _, picked in
-            guard !picked.isEmpty else { return }
-            Task {
-                var datas: [Data] = []
-                for item in picked {
-                    if let data = try? await item.loadTransferable(type: Data.self),
-                       let img = UIImage(data: data),
-                       let jpg = img.limitedToMaxDimension(1600).jpegData(compressionQuality: 0.82) { datas.append(jpg) }
-                }
-                items = []
-                await store.add(ctx, images: datas)
-            }
+        .photoCapture(isPresented: $showCapture, maxCount: max(1, maxPhotos - count)) { datas in
+            Task { await store.add(ctx, images: datas) }
         }
         .task { await store.load(ctx.spotId) }
     }
@@ -533,7 +524,7 @@ struct NewProductFlow: View {
     enum Step: Int { case photo = 1, name, presentation }
     @Environment(\.dismiss) private var dismiss
     @State private var step: Step = .photo
-    @State private var photoItem: PhotosPickerItem?
+    @State private var showCapture = false
     @State private var photo: UIImage?
     @State private var name = ""
     @State private var desc = ""
@@ -588,13 +579,8 @@ struct NewProductFlow: View {
         // Un solo botón de volver (abajo, junto al principal) y el deslizar a la derecha.
         .navigationBarBackButtonHidden(true)
         .animation(.easeInOut(duration: 0.2), value: step)
-        .onChange(of: photoItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
-                    photo = img
-                }
-            }
+        .photoCapture(isPresented: $showCapture) { datas in
+            if let d = datas.first, let img = UIImage(data: d) { photo = img }
         }
     }
 
@@ -629,7 +615,7 @@ struct NewProductFlow: View {
     // MARK: Paso 1: la foto (la misma tarjeta del producto, apagada con un "+")
 
     private var photoStep: some View {
-        PhotosPicker(selection: $photoItem, matching: .images) {
+        Button { showCapture = true } label: {
             ZStack {
                 if let photo {
                     Image(uiImage: photo).resizable().scaledToFill()

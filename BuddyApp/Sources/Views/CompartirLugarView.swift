@@ -57,6 +57,20 @@ struct CompartirLugarCard: View {
 
 // MARK: - Sheet: "¿Dónde estás ahora?"
 
+/// Lo elegido en "Buscar en el mapa" para recomendar (Keyla, 26 Nov 2026): nada se
+/// crea en el servidor hasta "Publicar" con fotos.
+struct RecommendDraft: Identifiable {
+    let id = UUID()
+    let title: String
+    /// Un lugar que ya existe.
+    var spotId: String? = nil
+    /// Un lugar nuevo: se propone al publicar.
+    var newName: String? = nil
+    var categoryId: String? = nil
+    var lat: Double = 0
+    var lng: Double = 0
+}
+
 struct CompartirLugarSheet: View {
     /// Se llama cuando el journey ya existe en el backend (creado o reutilizado)
     /// — el llamador decide qué hacer (típicamente: abrir el editor Memoir).
@@ -64,8 +78,13 @@ struct CompartirLugarSheet: View {
     /// Tocar un lugar cercano abre su mapa para añadir fotos (Keyla, 25 Nov 2026).
     var onOpenPlace: ((APIPlaceCard) -> Void)? = nil
 
-    init(onOpenPlace: ((APIPlaceCard) -> Void)? = nil, onCreated: @escaping (APIJourney) -> Void) {
+    /// Con esto, el mapa devuelve un borrador en vez de crear el lugar y el journey.
+    var onDraft: ((RecommendDraft) -> Void)? = nil
+
+    init(onOpenPlace: ((APIPlaceCard) -> Void)? = nil, onDraft: ((RecommendDraft) -> Void)? = nil,
+         onCreated: @escaping (APIJourney) -> Void) {
         self.onOpenPlace = onOpenPlace
+        self.onDraft = onDraft
         self.onCreated = onCreated
     }
 
@@ -393,9 +412,15 @@ struct CompartirLugarSheet: View {
                 Haptic.medium()
                 errorMessage = nil
                 dlog("📍 [CompartirLugarSheet] lugar del mapa elegido \(spot.id.prefix(8)) \"\(spot.name)\"")
+                if let onDraft { dismiss(); onDraft(RecommendDraft(title: spot.name, spotId: spot.id)); return }
                 submit(spotId: spot.id)
             },
             onPropose: { name, categoryId, lat, lng in
+                if let onDraft {
+                    dismiss()
+                    onDraft(RecommendDraft(title: name, newName: name, categoryId: categoryId, lat: lat, lng: lng))
+                    return
+                }
                 submitProposal(name: name, categoryId: categoryId, coords: (lat, lng), origin: "mapa")
             }
         )

@@ -369,7 +369,8 @@ struct TripCanvasEditorView: View {
                 .overlay {
                     // Lienzo vacío: invitación directa, tap abre la galería
                     if vm.items.isEmpty && !vm.isProcessing {
-                        Button { showPhotoPicker = true } label: {
+                        // Cámara al instante, con la galería en la misma pantalla (Keyla, 26 Nov 2026).
+                        Button { showCamera = true } label: {
                             VStack(spacing: 12) {
                                 Image(systemName: "photo.on.rectangle.angled")
                                     .font(.system(size: 34, weight: .light))
@@ -457,8 +458,8 @@ struct TripCanvasEditorView: View {
                 isImportingPhotos = false
             }
         }
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraPickerView { image in vm.addPhoto(image, in: pageSize) }.ignoresSafeArea()
+        .photoCapture(isPresented: $showCamera, maxCount: 10) { datas in
+            for d in datas { if let img = UIImage(data: d) { vm.addPhoto(img, in: pageSize) } }
         }
         .fullScreenCover(isPresented: $showFreeCrop) {
             if let sel = vm.selectedItem, !sel.isSticker {

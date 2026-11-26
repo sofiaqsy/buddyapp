@@ -3714,12 +3714,9 @@ struct BuddyChatView: View {
                     .presentationDragIndicator(.visible)
                     .presentationBackground(Color.canvas)
             case .camera:
-                CameraPickerView { image in
-                    if let data = image.jpegData(compressionQuality: 0.82) {
-                        Task { await sendImage(data: data) }
-                    }
+                PhotoCaptureView { datas in
+                    if let data = datas.first { Task { await sendImage(data: data) } }
                 }
-                .ignoresSafeArea()
             case .placePicker:
                 PlacePickerSheet(destinationId: resolvedDestinationId) { name, lat, lng in
                     activeSheet = nil

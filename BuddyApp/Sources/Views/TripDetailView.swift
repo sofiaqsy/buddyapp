@@ -3227,24 +3227,22 @@ struct RecommendAddPhotoTile: View {
     let spotId: String
     var side: CGFloat = 115
     var height: CGFloat = 115
-    @State private var items: [PhotosPickerItem] = []
+    @State private var showCapture = false
     @State private var working = false
 
     var body: some View {
-        PhotosPicker(selection: $items, maxSelectionCount: 10, matching: .images) {
+        // Cámara al instante, con la galería en la misma pantalla (Keyla, 26 Nov 2026).
+        Button { showCapture = true } label: {
             DashedAddTile(title: "Añadir foto", loading: working, side: side)
                 .frame(width: side, height: height)
         }
         .buttonStyle(.plain)
         .disabled(working)
-        .onChange(of: items) { _, new in
-            guard !new.isEmpty else { return }
+        .photoCapture(isPresented: $showCapture, maxCount: 10) { datas in
+            guard !datas.isEmpty else { return }
             working = true
             Task {
-                var images: [UIImage] = []
-                for item in new {
-                    if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) { images.append(img) }
-                }
+                let images: [UIImage] = datas.compactMap { UIImage(data: $0) }
                 do {
                     let journey = try await APIClient.shared.createJourney(
                         destinationId: nil, placeId: nil, spotId: spotId, lat: nil, lng: nil, attachToTrip: false)
@@ -3252,14 +3250,14 @@ struct RecommendAddPhotoTile: View {
                     var all = MemoirPersistence.shared.load(journeyId: journey.id)
                     all.append(contentsOf: pages)
                     MemoirPersistence.shared.save(all, journeyId: journey.id)
-                    await MainActor.run { items = []; working = false }
+                    await MainActor.run { working = false }
                     try? await APIClient.shared.publishJourney(journeyId: journey.id, tripId: journey.tripId, pages: pages)
                     await MainActor.run {
                         Haptic.success()
                         NotificationCenter.default.post(name: .journeyPublished, object: journey.id)
                     }
                 } catch {
-                    await MainActor.run { items = []; working = false }
+                    await MainActor.run { working = false }
                 }
             }
         }
