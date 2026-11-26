@@ -1603,7 +1603,10 @@ struct PlaceGuideDetailSheet: View {
             // Arrastre propio para cerrar (Keyla, 24 Nov 2026): el del sistema
             // solo responde si el visor nació de una miniatura, y al abrirse
             // solo (producto tocado en Inicio) no se podía cerrar deslizando.
+            // Un solo cierre: la foto vuelve con zoom a su tarjeta. Antes se desvanecía
+            // y además el zoom la traía de vuelta grande (Keyla, 26 Nov 2026: "feels weird").
             PlacePhotoViewer(photos: set.photos, inicial: set.start, systemDismiss: false,
+                             zoomsBack: PhotoZoom.systemAvailable,
                              onShowing: { i in
                                  guard set.photos.indices.contains(i) else { return }
                                  if let id = entryFor(photo: set.photos[i]) { productShownId = id }
