@@ -314,7 +314,10 @@ struct YoView: View {
                 BusinessLocationPicker(businessId: route.businessId)
             }
             .navigationDestination(for: FincasProductRoute.self) { route in
-                if route.product == nil { NewProductFlow(farmId: route.farmId) } else { FincasProductEditView(route: route) }
+                if route.product == nil { NewProductFlow(farmId: route.farmId) }
+                // "Nueva presentación": los mismos 2 pasos (Keyla, 26 Nov 2026).
+                else if route.addPresentation, let p = route.product { NewProductFlow(farmId: route.farmId, existing: p) }
+                else { FincasProductEditView(route: route) }
             }
             .navigationDestination(for: LinkBusinessRoute.self) { _ in
                 LinkBusinessView { navPath = NavigationPath() }
@@ -3134,13 +3137,18 @@ struct BusinessHomeView: View {
                     Text("Productos").tag(0)
                 }
                 .pickerStyle(.segmented)
-                if section == 0 {
-                    if isLinked { remoteProducts } else { productsLocked }
-                } else {
+                // Las dos secciones quedan vivas; solo se oculta la otra. Así cambiar
+                // entre Mi negocio y Productos no vuelve a cargar (Keyla, 26 Nov 2026).
+                ZStack(alignment: .top) {
+                    Group {
+                        if isLinked { remoteProducts } else { productsLocked }
+                    }
+                    .keptAlive(visible: section == 0)
                     BusinessProfileEditor(businessId: business.id, isLinked: isLinked,
                                           hasProducts: isLinked ? remoteTotal > 0 : !live.products.isEmpty,
                                           checklistReady: !isLinked || remoteLoaded,
                                           onShowProducts: { withAnimation { section = 0 } })
+                        .keptAlive(visible: section == 1)
                 }
             }
             .padding(.horizontal, Spacing.edge)
@@ -3452,7 +3460,7 @@ struct BusinessHomeView: View {
             NavigationLink(value: FincasProductRoute(farmId: business.id, product: nil)) {
                 HStack(spacing: 8) {
                     Image(systemName: "plus").font(.system(size: 14, weight: .bold))
-                    Text("Añadir producto").font(BT.footnoteBold)
+                    Text("Nuevo producto").font(BT.footnoteBold)
                 }
                 .foregroundStyle(Color.inkInverse)
                 .frame(maxWidth: .infinity).frame(height: 48)
@@ -3603,16 +3611,21 @@ struct BusinessHomeView: View {
                     }
                 }
             }
-            NavigationLink(value: FincasProductRoute(farmId: business.id, product: p, addPresentation: true)) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 13, weight: .bold))
-                    Text("Agregar presentación").font(BT.footnoteBold)
+            // Botón más angosto y un "?" que explica qué es una presentación (Keyla, 26 Nov 2026).
+            HStack(spacing: 4) {
+                NavigationLink(value: FincasProductRoute(farmId: business.id, product: p, addPresentation: true)) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus").font(.system(size: 13, weight: .bold))
+                        Text("Nueva presentación").font(BT.footnoteBold)
+                    }
+                    .foregroundStyle(Color.brand)
+                    .padding(.horizontal, 18).frame(height: 40)
+                    .background(Color.sageTint, in: Capsule())
                 }
-                .foregroundStyle(Color.brand)
-                .frame(maxWidth: .infinity).frame(height: 40)
-                .background(Color.sageTint, in: Capsule())
+                .buttonStyle(.pressable)
+                PresentationHelpButton()
             }
-            .buttonStyle(.pressable)
+            .frame(maxWidth: .infinity)
             .padding(.top, 4)
         }
         .padding(14)
@@ -4052,7 +4065,7 @@ struct FincasProductEditView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "plus").font(.system(size: 14, weight: .bold))
-                        Text("Agregar presentación").font(BT.footnoteBold)
+                        Text("Nueva presentación").font(BT.footnoteBold)
                     }
                     .foregroundStyle(Color.brand)
                     .frame(maxWidth: .infinity).frame(height: 48)
@@ -5905,4 +5918,18 @@ struct RecommendPlaceRoute: Hashable { let card: APIPlaceCard }
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+
+extension View {
+    /// Oculta la vista sin destruirla (no ocupa espacio ni recibe toques), para
+    /// que al volver a mostrarla no se cargue de nuevo.
+    func keptAlive(visible: Bool) -> some View {
+        self
+            .frame(maxHeight: visible ? nil : 0, alignment: .top)
+            .clipped()
+            .opacity(visible ? 1 : 0)
+            .allowsHitTesting(visible)
+            .accessibilityHidden(!visible)
+    }
 }

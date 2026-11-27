@@ -1,6 +1,8 @@
 import SwiftUI
 import PhotosUI
 import AVFoundation
+import ImageIO
+import UniformTypeIdentifiers
 
 /// "Agregar foto" en toda la app (Keyla, 26 Nov 2026): la cámara se abre sola y,
 /// en la misma pantalla, un botón para elegir de la galería. Devuelve JPEG
@@ -13,6 +15,7 @@ struct PhotoCaptureView: View {
     @State private var galleryItems: [PhotosPickerItem] = []
     @State private var loadingGallery = false
     @State private var showGallery = false
+    @State private var galleryError = false
 
     var body: some View {
         ZStack {
@@ -93,6 +96,10 @@ struct PhotoCaptureView: View {
         .onChange(of: camera.state) { _, st in
             if st == .unavailable || st == .denied { showGallery = true }
         }
+        .alert("No pudimos abrir esa foto", isPresented: $galleryError) {
+            Button("Elegir otra") { showGallery = true }
+            Button("Cerrar", role: .cancel) {}
+        } message: { Text("Puede estar guardada en iCloud y no se pudo descargar. Revisa tu conexión y prueba otra vez, o elige otra foto.") }
         .statusBarHidden()
         .task { await camera.start() }
         .onDisappear { camera.stop() }
@@ -106,18 +113,36 @@ struct PhotoCaptureView: View {
             Task {
                 var out: [Data] = []
                 for item in items {
-                    if let d = try? await item.loadTransferable(type: Data.self), let j = PhotoCaptureView.jpeg(d) { out.append(j) }
+                    if let j = await PhotoCaptureView.loadJPEG(item) { out.append(j) }
                 }
                 loadingGallery = false
+                // Vaciar la selección: si una foto falla, volver a elegirla sí cuenta (Keyla, 26 Nov 2026).
+                galleryItems = []
                 if !out.isEmpty { onPick(out); dismiss() }
+                else { galleryError = true }
             }
         }
     }
 
+    /// Carga una foto de la galería: primero como datos y, si no se puede leer
+    /// (algunas fotos HEIC, Live Photos o de iCloud), como archivo de imagen.
+    static func loadJPEG(_ item: PhotosPickerItem) async -> Data? {
+        if let d = try? await item.loadTransferable(type: Data.self), let j = jpeg(d) { return j }
+        if let f = try? await item.loadTransferable(type: PickedImageFile.self),
+           let d = try? Data(contentsOf: f.url), let j = jpeg(d) { return j }
+        return nil
+    }
+
     /// JPEG de máx. 1600 px a 0.8.
     static func jpeg(_ data: Data) -> Data? {
-        guard let img = UIImage(data: data) else { return nil }
-        return jpeg(img)
+        if let img = UIImage(data: data) { return jpeg(img) }
+        // Respaldo con ImageIO (lee más formatos y ya reduce a 1600 px).
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1600] as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.8)
     }
     static func jpeg(_ img: UIImage) -> Data? {
         let maxSide: CGFloat = 1600
@@ -125,6 +150,19 @@ struct PhotoCaptureView: View {
         let size = CGSize(width: img.size.width * s, height: img.size.height * s)
         let r = UIGraphicsImageRenderer(size: size).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
         return r.jpegData(compressionQuality: 0.8)
+    }
+}
+
+/// La foto elegida como archivo (respaldo cuando no llega como datos).
+struct PickedImageFile: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .image) { received in
+            let dst = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "-" + received.file.lastPathComponent)
+            try? FileManager.default.removeItem(at: dst)
+            try FileManager.default.copyItem(at: received.file, to: dst)
+            return PickedImageFile(url: dst)
+        }
     }
 }
 

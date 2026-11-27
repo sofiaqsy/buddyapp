@@ -3199,22 +3199,43 @@ struct ProductCardFace: View {
     }
 
     var body: some View {
+        ProductCardLayout(
+            image: { CachedImage(urlString: cover) { img in img.resizable().scaledToFill() }
+                placeholder: { Image(systemName: "bag").foregroundStyle(Color.brand) } },
+            name: product.name,
+            price: (pres?.price ?? (product.presentations ?? []).filter({ $0.visible != false }).compactMap(\.price).min()).map { PlaceGuideDetailSheet.soles($0) },
+            label: pres?.label,
+            side: side)
+    }
+}
+
+/// El dibujo de la tarjeta de producto, compartido por Inicio, el panel y la
+/// vista previa de "Nuevo producto" (Keyla, 26 Nov 2026).
+struct ProductCardLayout<Img: View>: View {
+    @ViewBuilder let image: () -> Img
+    let name: String
+    let price: String?
+    let label: String?
+    var side: CGFloat = 114
+    /// Oculta el texto sin cambiar el alto (paso 1 de "Nuevo producto").
+    var textHidden = false
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            CachedImage(urlString: cover) { img in img.resizable().scaledToFill() }
-                placeholder: { Image(systemName: "bag").foregroundStyle(Color.brand) }
+            image()
                 .frame(width: side, height: side)
                 .background(Color.paleSage)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-            Text(product.name).font(BT.caption1).foregroundStyle(Color.ink).lineLimit(1)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                if let price = pres?.price ?? (product.presentations ?? []).filter({ $0.visible != false }).compactMap(\.price).min() {
-                    Text(PlaceGuideDetailSheet.soles(price)).font(BT.footnoteBold).foregroundStyle(Color.brand)
+            Group {
+                Text(name).font(BT.caption1).foregroundStyle(Color.ink).lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if let price { Text(price).font(BT.footnoteBold).foregroundStyle(Color.brand) }
+                    if let label, !label.isEmpty { Text(label).font(BT.caption1).foregroundStyle(Color.inkMuted) }
                 }
-                if let label = pres?.label, !label.isEmpty {
-                    Text(label).font(BT.caption1).foregroundStyle(Color.inkMuted)
-                }
+                .lineLimit(1).minimumScaleFactor(0.8)
             }
-            .lineLimit(1).minimumScaleFactor(0.8)
+            .opacity(textHidden ? 0 : 1)
+            .accessibilityHidden(textHidden)
         }
         .frame(width: side, alignment: .leading)
         .accessibilityElement(children: .combine)

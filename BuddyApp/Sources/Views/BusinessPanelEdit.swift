@@ -519,14 +519,16 @@ private struct FlowChips: View {
 
 // MARK: - Nuevo producto en pasos
 
-/// Nuevo producto en 3 pasos (Keyla, 23 Nov 2026): 1 Foto, 2 Nombre,
-/// 3 Presentación. Mismo estilo que "Agrega tu negocio": una pregunta por
+/// Nuevo producto en 2 pasos (Keyla, 26 Nov 2026): 1 Foto (4:5, como en
+/// Inicio), 2 Nombre y precio. Mismo estilo que "Agrega tu negocio": una pregunta por
 /// pantalla, contador arriba, botón grande abajo. Al crear: producto en la
 /// tienda, su presentación y la foto en esa presentación.
 struct NewProductFlow: View {
     let farmId: String
+    /// Producto ya creado: el flujo agrega solo una presentación (sin nombre).
+    var existing: FincasProduct? = nil
 
-    enum Step: Int { case photo = 1, name, presentation }
+    enum Step: Int { case photo = 1, details }
     @Environment(\.dismiss) private var dismiss
     @State private var step: Step = .photo
     @State private var showCapture = false
@@ -536,6 +538,7 @@ struct NewProductFlow: View {
     @State private var size = "250"
     @State private var unit = "g"
     @State private var price = ""
+    @State private var showExamples = false
     @State private var busy = false
     @State private var errorText: String?
     // Llaves fijas: reintentar "Crear" no duplica nada.
@@ -554,24 +557,34 @@ struct NewProductFlow: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.md) {
                     switch step {
-                    case .photo: photoStep
-                    case .name: nameStep
-                    case .presentation: presentationStep
+                    case .photo: EmptyView()
+                    // La vista previa arriba: siempre completa y visible mientras se escribe (Keyla, 26 Nov 2026).
+                    case .details:
+                        Text(title).font(.system(.title2).weight(.bold)).foregroundStyle(Color.brand)
+                            .accessibilityAddTraits(.isHeader)
+                        if existing == nil { nameStep }
+                        presentationStep
                     }
                     if let errorText { Text(errorText).font(BT.footnote).foregroundStyle(Color.errorRed) }
                 }
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, Spacing.md)
-                .padding(.bottom, 24)
+                // Espacio para que la vista previa no quede bajo los botones (Keyla, 26 Nov 2026).
+                .padding(.bottom, 140)
             }
             .scrollDismissesKeyboard(.interactively)
             // Regla 30: volver y seguir, abajo, donde está el pulgar (sobre la barra de pestañas).
             .safeAreaInset(edge: .bottom, spacing: 0) {
+              VStack(spacing: 20) {
+                // La foto abajo, al alcance del pulgar (Keyla, 26 Nov 2026).
+                // La tarjeta en el mismo lugar en los dos pasos (Keyla, 26 Nov 2026); se oculta mientras se escribe.
+                if step == .photo || focus == nil { previewCard }
                 HStack(spacing: 12) {
                     // En el paso 1 el mismo botón cierra el flujo sin guardar (Keyla, 23 Nov 2026).
                     CircleBackButton { goBack() }
                     footer
                 }
+              }
                 .padding(.horizontal, Spacing.edge)
                 .padding(.top, 8)
                 .padding(.bottom, 96)
@@ -579,7 +592,7 @@ struct NewProductFlow: View {
             }
         }
         .background(Color.canvas)
-        .navigationTitle("Nuevo producto")
+        .navigationTitle(existing == nil ? "Nuevo producto" : "Nueva presentación")
         .navigationBarTitleDisplayMode(.inline)
         // Un solo botón de volver (abajo, junto al principal) y el deslizar a la derecha.
         .navigationBarBackButtonHidden(true)
@@ -594,14 +607,17 @@ struct NewProductFlow: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                ForEach(1...3, id: \.self) { i in
+                ForEach(1...2, id: \.self) { i in
                     Capsule().fill(i <= step.rawValue ? Color.brand : Color.hairline).frame(height: 4)
                 }
             }
             .accessibilityHidden(true)
-            Text("Paso \(step.rawValue) de 3").font(BT.caption1).foregroundStyle(Color.inkMuted)
-            Text(title).font(.system(.title2).weight(.bold)).foregroundStyle(Color.brand)
-                .accessibilityAddTraits(.isHeader)
+            Text("Paso \(step.rawValue) de 2").font(BT.caption1).foregroundStyle(Color.inkMuted)
+            // Paso 2: el título va encima de los campos, debajo de la vista previa (Keyla, 26 Nov 2026).
+            if step == .photo {
+                Text(title).font(.system(.title2).weight(.bold)).foregroundStyle(Color.brand)
+                    .accessibilityAddTraits(.isHeader)
+            }
         }
         .padding(.horizontal, Spacing.edge)
         .padding(.top, 8)
@@ -611,9 +627,8 @@ struct NewProductFlow: View {
 
     private var title: String {
         switch step {
-        case .photo: return "Foto del producto"
-        case .name: return "¿Cómo se llama?"
-        case .presentation: return "Tamaño y precio"
+        case .photo: return existing == nil ? "Foto del producto" : "Foto de la presentación"
+        case .details: return existing == nil ? "Nombre y precio" : "Tamaño y precio"
         }
     }
 
@@ -631,8 +646,8 @@ struct NewProductFlow: View {
                         .frame(width: 52, height: 52).background(Color.brand, in: Circle())
                 }
             }
-            .frame(width: 220, height: 220)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .frame(width: 114, height: 114)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
@@ -649,25 +664,43 @@ struct NewProductFlow: View {
                 .padding(.horizontal, 16).frame(height: 50)
                 .background(Color.surface, in: Capsule())
                 .cardShadow()
-            TextField("Descripción (opcional)", text: $desc, axis: .vertical)
-                .lineLimit(2...4)
-                .font(BT.callout)
-                .padding(14)
-                .background(Color.surface, in: RoundedRectangle(cornerRadius: Radius.lg))
-                .cardShadow()
+            // Sin descripción al crear (Keyla, 26 Nov 2026); se puede agregar luego al editar.
         }
-        .onAppear { focus = .name }
     }
 
     // MARK: Paso 3: la presentación (tamaño, unidad, precio)
 
     @ViewBuilder
     private var presentationStep: some View {
-        HStack(spacing: 8) {
-            TextField("Tamaño", text: $size).keyboardType(.decimalPad)
+        // Etiquetas claras arriba de cada campo (Keyla, 26 Nov 2026): "Tamaño" solo no se entendía.
+        // Los ejemplos van detrás de un "?" (Keyla, 26 Nov 2026).
+        HStack(spacing: 6) {
+            Text("¿Cuánto trae y cuánto cuesta?").font(BT.footnoteBold).foregroundStyle(Color.ink)
+            Button { showExamples = true } label: {
+                Image(systemName: "questionmark.circle").font(.system(size: 17, weight: .semibold)).foregroundStyle(Color.brand)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .accessibilityLabel("Ver ejemplos")
+            .popover(isPresented: $showExamples, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Ejemplos").font(BT.footnoteBold).foregroundStyle(Color.ink)
+                    Text("Café: 250 g a S/ 20").font(BT.footnote).foregroundStyle(Color.ink)
+                    Text("Llavero: 1 unidad a S/ 10").font(BT.footnote).foregroundStyle(Color.ink)
+                    Text("Miel: 500 ml a S/ 25").font(BT.footnote).foregroundStyle(Color.ink)
+                }
+                .padding(16)
+                .presentationCompactAdaptation(.popover)
+            }
+        }
+        .padding(.top, 4)
+        HStack(alignment: .bottom, spacing: 8) {
+            fieldLabel("Cantidad") {
+            TextField("250", text: $size).keyboardType(.decimalPad)
                 .focused($focus, equals: .size)
                 .font(BT.callout).padding(.horizontal, 12).frame(height: 44)
                 .background(Color.surface, in: Capsule())
+            }
+            fieldLabel("Medida") {
             Menu {
                 ForEach(units, id: \.self) { u in Button(u) { unit = u } }
             } label: {
@@ -678,48 +711,59 @@ struct NewProductFlow: View {
                 .font(BT.callout).padding(.horizontal, 12).frame(height: 44)
                 .background(Color.surface, in: Capsule())
             }
-            TextField("S/ precio", text: $price).keyboardType(.decimalPad)
-                .focused($focus, equals: .price)
-                .font(BT.callout).padding(.horizontal, 12).frame(height: 44)
-                .background(Color.surface, in: Capsule())
+            }
+            fieldLabel("Precio") {
+            // La moneda dentro del campo (Keyla, 26 Nov 2026).
+            HStack(spacing: 4) {
+                Text("S/").font(BT.callout).foregroundStyle(Color.inkMuted)
+                TextField("20.00", text: $price).keyboardType(.decimalPad)
+                    .focused($focus, equals: .price)
+                    .font(BT.callout)
+            }
+            .padding(.horizontal, 12).frame(height: 44)
+            .background(Color.surface, in: Capsule())
+            .onTapGesture { focus = .price }
+            }
         }
-        .onAppear { focus = .price }
-        previewCard
+    }
+
+    private func fieldLabel<C: View>(_ t: String, @ViewBuilder _ c: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(t).font(BT.caption1).foregroundStyle(Color.inkMuted).padding(.leading, 12)
+            c()
+        }
     }
 
     // Regla 31: antes de crear se ve como lo verá el visitante; tocar una parte vuelve a su paso.
     private var previewCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .center, spacing: 8) {
             Text("ASÍ LO VERÁN")
                 .font(BT.eyebrow).tracking(2).foregroundStyle(Color.inkMuted)
-                .padding(.top, Spacing.lg)
-            HStack(alignment: .top, spacing: 12) {
-                Button { focus = nil; step = .photo } label: {
-                    Group {
-                        if let photo { Image(uiImage: photo).resizable().scaledToFill() } else { Color.paleSage }
-                    }
-                    .frame(width: 115, height: 115)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Cambiar foto")
-                VStack(alignment: .leading, spacing: 6) {
-                    Button { focus = nil; step = .name } label: {
-                        HStack(spacing: 6) {
-                            Text(name.trimmingCharacters(in: .whitespaces)).font(BT.headline).foregroundStyle(Color.ink)
-                                .multilineTextAlignment(.leading)
-                            Image(systemName: "pencil").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.brand)
+                // Paso 1: solo la foto, en el mismo lugar (Keyla, 26 Nov 2026).
+                .opacity(step == .photo ? 0 : 1)
+            // La misma tarjeta de producto de Inicio (Keyla, 26 Nov 2026). Tocar la foto vuelve al paso 1.
+            Button {
+                focus = nil
+                if step == .photo { showCapture = true } else { step = .photo }
+            } label: {
+                ProductCardLayout(
+                    image: {
+                        if let photo { Image(uiImage: photo).resizable().scaledToFill() }
+                        else {
+                            Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.white)
+                                .frame(width: 44, height: 44).background(Color.brand, in: Circle())
                         }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Cambiar nombre")
-                    if let p = number(price) {
-                        Text(String(format: "S/ %.2f", p)).font(BT.footnoteBold).foregroundStyle(Color.brand)
-                    }
-                    Text("\(size) \(unit)").font(BT.footnote).foregroundStyle(Color.inkMuted)
-                }
+                    },
+                    name: existing?.name ?? (name.trimmingCharacters(in: .whitespaces).isEmpty ? "Nombre del producto" : name.trimmingCharacters(in: .whitespaces)),
+                    price: number(price).map { PlaceGuideDetailSheet.soles($0) },
+                    label: size.isEmpty ? nil : "\(size) \(unit)",
+                    side: 148, // 30 % más grande que en Inicio (Keyla, 26 Nov 2026)
+                    textHidden: step == .photo)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(photo == nil ? "Elegir foto" : "Cambiar foto")
         }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: Botón de abajo
@@ -727,8 +771,7 @@ struct NewProductFlow: View {
     private var canGoOn: Bool {
         switch step {
         case .photo: return photo != nil
-        case .name: return !name.trimmingCharacters(in: .whitespaces).isEmpty
-        case .presentation: return number(size).map { $0 > 0 } == true && number(price).map { $0 >= 0 } == true
+        case .details: return (existing != nil || !name.trimmingCharacters(in: .whitespaces).isEmpty) && number(size).map { $0 > 0 } == true && number(price).map { $0 >= 0 } == true
         }
     }
 
@@ -736,14 +779,13 @@ struct NewProductFlow: View {
         Button {
             focus = nil
             switch step {
-            case .photo: step = .name
-            case .name: step = .presentation
-            case .presentation: Task { await create() }
+            case .photo: step = .details
+            case .details: Task { await create() }
             }
         } label: {
             HStack(spacing: 8) {
                 if busy { ProgressView().tint(Color.inkInverse) }
-                Text(step == .presentation ? "Crear producto" : "Siguiente").font(BT.footnoteBold)
+                Text(step == .details ? (existing == nil ? "Crear producto" : "Crear presentación") : "Siguiente").font(BT.footnoteBold)
             }
             .frame(maxWidth: .infinity).frame(height: 52)
             .background(canGoOn ? Color.brand : Color.inkMuted.opacity(0.2), in: Capsule())
@@ -757,8 +799,7 @@ struct NewProductFlow: View {
         focus = nil
         switch step {
         case .photo: dismiss()
-        case .name: step = .photo
-        case .presentation: step = .name
+        case .details: step = .photo
         }
     }
 
@@ -775,7 +816,7 @@ struct NewProductFlow: View {
         defer { busy = false }
         do {
             let productId: String
-            if let id = createdProductId { productId = id } else {
+            if let id = existing?.id ?? createdProductId { productId = id } else {
                 productId = try await FincasAuth.createProduct(farmId: farmId, name: name.trimmingCharacters(in: .whitespaces),
                                                                description: desc, key: productKey)
                 createdProductId = productId
@@ -802,6 +843,31 @@ struct NewProductFlow: View {
             dismiss()
         } catch {
             errorText = error.localizedDescription
+        }
+    }
+}
+
+
+/// "?" junto a "Nueva presentación": qué es y un ejemplo (Keyla, 26 Nov 2026).
+struct PresentationHelpButton: View {
+    @State private var open = false
+    var body: some View {
+        Button { open = true } label: {
+            Image(systemName: "questionmark.circle").font(.system(size: 18, weight: .semibold)).foregroundStyle(Color.brand)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .accessibilityLabel("¿Qué es una presentación?")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("¿Qué es una presentación?").font(BT.footnoteBold).foregroundStyle(Color.ink)
+                Text("Es otra forma de vender el mismo producto: otro tamaño o empaque, con su precio y su foto.")
+                    .font(BT.footnote).foregroundStyle(Color.ink).fixedSize(horizontal: false, vertical: true)
+                Text("Ej. Café en bolsa de 250 g a S/ 20 y en bolsa de 1 kg a S/ 60.")
+                    .font(BT.footnote).foregroundStyle(Color.inkMuted).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(width: 280)
+            .presentationCompactAdaptation(.popover)
         }
     }
 }
